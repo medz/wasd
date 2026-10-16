@@ -747,6 +747,28 @@ void _collectDefinedValueResourceUses(
         );
       }
       return;
+    case WasmComponentDefinedValueTypeKind.map:
+      _collectResourceUses(
+        definedValue.keyType,
+        definitions,
+        bindingsByTypeIndex,
+        canonicalIndex: canonicalIndex,
+        canonicalKind: canonicalKind,
+        path: '$path.key',
+        uses: uses,
+        visiting: visiting,
+      );
+      _collectResourceUses(
+        definedValue.valueType,
+        definitions,
+        bindingsByTypeIndex,
+        canonicalIndex: canonicalIndex,
+        canonicalKind: canonicalKind,
+        path: '$path.value',
+        uses: uses,
+        visiting: visiting,
+      );
+      return;
     case WasmComponentDefinedValueTypeKind.list:
     case WasmComponentDefinedValueTypeKind.fixedList:
     case WasmComponentDefinedValueTypeKind.option:

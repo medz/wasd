@@ -5,6 +5,436 @@ import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/features.dart';
 
 void main() {
+  group('component map types', () {
+    // Component Model 0220da84209397d9067c19cac83dae969aa85a7b,
+    // design/mvp/Binary.md: map = 0x63 key:<valtype> value:<valtype>.
+    test('decodes map types from the official binary opcode', () {
+      final component = WasmComponent.decode(
+        _componentWithSingleTypeDefinitionBytes([0x63, 0x79, 0x73]),
+      );
+
+      expect(component.typeDefinitions.single.definedValue!.kind.name, 'map');
+      expect(component.validate(), isEmpty);
+    });
+
+    test('rejects static empty maps with runtime-only value types', () {
+      for (final valueType in [
+        [0x69, 0],
+        [0x68, 0],
+        [0x66, 0],
+        [0x65, 0],
+        [0x64],
+      ]) {
+        final types = [
+          [0x3f, 0x7f, 0],
+          valueType,
+          [0x63, 0x79, 1],
+          [0x40, 1, 1, 0x78, 2, 1, 0],
+        ];
+        // The signature and empty encoding are valid independently. Static
+        // value definitions reject runtime-only constructors in their type.
+        expect(
+          WasmComponent.decode(_mapTypesComponentBytes(types)).validate(),
+          isEmpty,
+        );
+        final component = _componentBytes([
+          _mapTypeSection(types),
+          _componentSection(0x0a, [1, 0, 1, 0x66, 1, 3]),
+          _componentSection(0x0c, [1, 2, 1, 0]),
+          _componentSection(0x09, [0, 1, 0, 0]),
+        ]);
+        expect(
+          WasmComponent.decode(
+            component,
+          ).validate().map((error) => error.message),
+          contains(contains('static value type')),
+          reason: 'map payload type $valueType',
+        );
+      }
+    });
+
+    test('resolves an aliased function parameter in its defining scope', () {
+      final component = WasmComponent.decode(
+        Uint8List.fromList([
+          for (var i = 0; i < _wrongScopeMapStartHex.length; i += 2)
+            int.parse(_wrongScopeMapStartHex.substring(i, i + 2), radix: 16),
+        ]),
+      );
+      expect(
+        component.validate().map((error) => error.message),
+        contains(contains('start argument type')),
+      );
+    });
+
+    test('rejects runtime-only map types hidden in an inactive option', () {
+      final component = _componentBytes([
+        _mapTypeSection([
+          [0x63, 0x79, 0x64],
+          [0x6b, 0],
+          [0x40, 1, 1, 0x78, 1, 1, 0],
+        ]),
+        _componentSection(0x0a, [1, 0, 1, 0x66, 1, 2]),
+        _componentSection(0x0c, [1, 1, 1, 0]),
+        _componentSection(0x09, [0, 1, 0, 0]),
+      ]);
+      expect(
+        WasmComponent.decode(
+          component,
+        ).validate().map((error) => error.message),
+        contains(contains('static value type')),
+      );
+    });
+
+    test('accepts matching maps in different defining scopes', () {
+      final component = _mapInstanceStartComponentBytes([
+        [0x63, 0x79, 0x79],
+        _mapFunctionAndValueInstanceType(),
+      ], rootValueType: 0);
+      expect(WasmComponent.decode(component).validate(), isEmpty);
+    });
+
+    test('retains the defining scope of an aliased composite value', () {
+      final component = _mapInstanceStartComponentBytes([
+        [0x79],
+        _mapFunctionAndValueInstanceType(),
+      ]);
+      expect(WasmComponent.decode(component).validate(), isEmpty);
+    });
+
+    test('keeps resources distinct across imported instance scopes', () {
+      final instance = _mapFunctionAndValueInstanceType(withResource: true);
+      expect(
+        WasmComponent.decode(
+          _mapInstanceStartComponentBytes([instance]),
+        ).validate(),
+        isEmpty,
+      );
+      final different = WasmComponent.decode(
+        _mapInstanceStartComponentBytes([instance], valueInstance: 1),
+      ).validate();
+      expect(different, hasLength(1));
+      expect(different.single.message, contains('start argument type'));
+    });
+
+    test('accepts every permitted primitive map key and primitive aliases', () {
+      for (final key in [
+        0x7f,
+        0x7e,
+        0x7d,
+        0x7c,
+        0x7b,
+        0x7a,
+        0x79,
+        0x78,
+        0x77,
+        0x74,
+        0x73,
+      ]) {
+        expect(
+          WasmComponent.decode(
+            _componentWithSingleTypeDefinitionBytes([0x63, key, 0x79]),
+          ).validate(),
+          isEmpty,
+          reason: 'key 0x${key.toRadixString(16)}',
+        );
+        expect(
+          WasmComponent.decode(
+            _componentWithTypeDefinitionsBytes([
+              key,
+              0x63,
+              0x00,
+              0x79,
+            ], count: 2),
+          ).validate(),
+          isEmpty,
+        );
+      }
+    });
+
+    test('rejects floating point and composite map keys', () {
+      for (final key in [0x76, 0x75, 0x64]) {
+        final errors = WasmComponent.decode(
+          _componentWithSingleTypeDefinitionBytes([0x63, key, 0x79]),
+        ).validate();
+        expect(
+          errors.map((error) => error.message),
+          contains(contains('map key')),
+        );
+      }
+      final errors = WasmComponent.decode(
+        _componentWithTypeDefinitionsBytes([
+          0x70,
+          0x79,
+          0x63,
+          0x00,
+          0x79,
+        ], count: 2),
+      ).validate();
+      expect(
+        errors.map((error) => error.message),
+        contains(contains('map key')),
+      );
+    });
+
+    test('rejects unknown forward recursive and non-value map references', () {
+      for (final types in [
+        [0x63, 0x01, 0x79],
+        [0x63, 0x79, 0x01],
+        [0x63, 0x79, 0x00],
+      ]) {
+        final errors = WasmComponent.decode(
+          _componentWithSingleTypeDefinitionBytes(types),
+        ).validate();
+        expect(
+          errors.map((error) => error.message),
+          contains(contains('value type index')),
+        );
+      }
+      final errors = WasmComponent.decode(
+        _componentWithTypeDefinitionsBytes([
+          0x40,
+          0x00,
+          0x01,
+          0x00,
+          0x63,
+          0x79,
+          0x00,
+        ], count: 2),
+      ).validate();
+      expect(
+        errors.map((error) => error.message),
+        contains(contains('does not refer to a value type')),
+      );
+    });
+
+    test('decodes ordered map pairs without dropping duplicate keys', () {
+      final component = WasmComponent.decode(
+        _mapValueComponentBytes([0x63, 0x7d, 0x7d], [3, 7, 1, 7, 2, 8, 3]),
+      );
+      final map = component.valueDefinitions.single.value;
+      expect(map.kind.name, 'map');
+      expect(
+        map.items.map((pair) => pair.kind),
+        everyElement(WasmComponentValueDataKind.tuple),
+      );
+      expect(
+        map.items.map(
+          (pair) => pair.items.map((item) => item.integer).toList(),
+        ),
+        [
+          [7, 1],
+          [7, 2],
+          [8, 3],
+        ],
+      );
+      expect(map.rawBytes, [3, 7, 1, 7, 2, 8, 3]);
+      expect(map.items.first.rawBytes, [7, 1]);
+    });
+
+    test('decodes empty maps and rejects truncated entries', () {
+      final empty = WasmComponent.decode(
+        _mapValueComponentBytes([0x63, 0x7d, 0x73], [0]),
+      ).valueDefinitions.single.value;
+      expect(empty.kind.name, 'map');
+      expect(empty.items, isEmpty);
+      expect(
+        () => WasmComponent.decode(
+          _mapValueComponentBytes([0x63, 0x7d, 0x73], [1, 7]),
+        ),
+        throwsFormatException,
+      );
+    });
+
+    test(
+      'compares maps structurally while keeping list tuple types distinct',
+      () {
+        final same = _mapStartComponentBytes(
+          [
+            [0x63, 0x79, 0x73],
+            [0x63, 0x79, 0x73],
+          ],
+          0,
+          1,
+        );
+        expect(WasmComponent.decode(same).validate(), isEmpty);
+
+        for (final other in [
+          [0x63, 0x7b, 0x73],
+          [0x63, 0x79, 0x79],
+        ]) {
+          final different = _mapStartComponentBytes(
+            [
+              [0x63, 0x79, 0x73],
+              other,
+            ],
+            0,
+            1,
+          );
+          expect(
+            WasmComponent.decode(
+              different,
+            ).validate().map((error) => error.message),
+            contains(contains('start argument type')),
+          );
+        }
+        final listTuple = WasmComponent.decode(
+          _mapStartComponentBytes(
+            [
+              [0x63, 0x79, 0x73],
+              [0x6f, 0x02, 0x79, 0x73],
+              [0x70, 0x01],
+            ],
+            0,
+            2,
+          ),
+        ).validate();
+        expect(listTuple, hasLength(1));
+        expect(listTuple.single.message, contains('start argument type'));
+      },
+    );
+
+    test('compares nested maps through primitive and composite aliases', () {
+      expect(
+        WasmComponent.decode(
+          _mapStartComponentBytes(
+            [
+              [0x79],
+              [0x63, 0x00, 0x73],
+              [0x63, 0x79, 0x73],
+              [0x70, 0x01],
+              [0x70, 0x02],
+            ],
+            3,
+            4,
+          ),
+        ).validate(),
+        isEmpty,
+      );
+    });
+
+    test('finds borrowed map values in results and async payloads', () {
+      for (final outer in [
+        [0x40, 0x00, 0x00, 0x02],
+        [0x66, 0x01, 0x02],
+        [0x65, 0x01, 0x02],
+      ]) {
+        final errors = WasmComponent.decode(
+          _mapTypesComponentBytes([
+            [0x3f, 0x7f, 0x00],
+            [0x68, 0x00],
+            [0x63, 0x79, 0x01],
+            outer,
+          ]),
+        ).validate();
+        expect(
+          errors.map((error) => error.message),
+          contains(contains('cannot contain borrow')),
+        );
+      }
+    });
+
+    test('finds nested async map values without claiming async execution', () {
+      for (final inner in [0x66, 0x65]) {
+        final declared = [
+          [inner, 0x01, 0x79],
+          [0x63, 0x79, 0x00],
+        ];
+        expect(
+          WasmComponent.decode(_mapTypesComponentBytes(declared)).validate(),
+          isEmpty,
+        );
+        for (final outer in [0x66, 0x65]) {
+          final errors = WasmComponent.decode(
+            _mapTypesComponentBytes([
+              ...declared,
+              [outer, 0x01, 0x01],
+            ]),
+          ).validate();
+          expect(
+            errors.map((error) => error.message),
+            contains(contains('nested async')),
+          );
+        }
+      }
+    });
+
+    test('requires memory for maps even with scalar keys and values', () {
+      final component = _componentBytes([
+        _mapTypeSection([
+          [0x63, 0x79, 0x79],
+          [0x40, 0x01, 0x01, 0x78, 0x00, 0x01, 0x00],
+        ]),
+        _componentSection(0x0a, [1, 0, 1, 0x66, 1, 1]),
+        _componentSection(0x08, [1, 1, 0, 0, 0]),
+      ]);
+      expect(
+        WasmComponent.decode(
+          component,
+        ).validate().map((error) => error.message),
+        contains(contains('requires a memory option')),
+      );
+    });
+
+    test('finds resources behind maps in outer aliases', () {
+      final nested = _componentBytes([
+        _componentSection(0x06, [1, 0x03, 0x02, 1, 2]),
+      ]);
+      final component = _componentBytes([
+        _mapTypeSection([
+          [0x3f, 0x7f, 0],
+          [0x69, 0],
+          [0x63, 0x79, 1],
+        ]),
+        _componentSection(0x04, nested),
+      ]);
+      expect(
+        WasmComponent.decode(
+          component,
+        ).validate().map((error) => error.message),
+        contains(contains('resource')),
+      );
+    });
+
+    test('preserves resource identity during map type matching', () {
+      for (final resource in [0, 1]) {
+        final errors = WasmComponent.decode(
+          _mapStartComponentBytes(
+            [
+              [0x3f, 0x7f, 0],
+              [0x3f, 0x7f, 0],
+              [0x69, 0],
+              [0x69, resource],
+              [0x63, 0x79, 2],
+              [0x63, 0x79, 3],
+            ],
+            4,
+            5,
+          ),
+        ).validate();
+        if (resource == 0) {
+          expect(errors, isEmpty);
+        } else {
+          expect(errors, hasLength(1));
+          expect(errors.single.message, contains('start argument type'));
+        }
+      }
+    });
+
+    test('preserves invalid map value references for validation', () {
+      final component = WasmComponent.decode(
+        _mapValueComponentBytes([0x63, 0x7d, 0x01], [1, 7]),
+      );
+      expect(
+        component.valueDefinitions.single.value.kind,
+        WasmComponentValueDataKind.raw,
+      );
+      expect(
+        component.validate().map((error) => error.message),
+        contains(contains('Unknown Wasm component value type index')),
+      );
+    });
+  });
+
   group('WasmComponent.decode', () {
     test('decodes an empty component', () {
       final component = WasmComponent.decode(_emptyComponentBytes());
@@ -2081,6 +2511,100 @@ Uint8List _emptyComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
   0x01,
   0x00,
+]);
+
+Uint8List _mapValueComponentBytes(List<int> type, List<int> value) =>
+    _componentBytes([
+      _componentSection(0x07, [1, ...type]),
+      _componentSection(0x0c, [1, 0, ..._varUint32(value.length), ...value]),
+    ]);
+
+const _wrongScopeMapStartHex =
+    '0061736d0d00010007170379794203016379790140010178000100040001660101'
+    '0a0c0200016905020001760201010606010100000166090400010000';
+
+List<int> _mapFunctionAndValueInstanceType({bool withResource = false}) {
+  final declarations = <List<int>>[
+    if (withResource) ...[
+      [4, 0, 1, 0x72, 3, 1], // export r: fresh abstract resource at local 0.
+      [1, 0x69, 0],
+    ],
+    [1, 0x63, 0x79, withResource ? 1 : 0x79],
+    [1, 0x40, 1, 1, 0x78, withResource ? 2 : 0, 1, 0],
+    [4, 0, 1, 0x66, 1, withResource ? 3 : 1],
+    [4, 0, 1, 0x76, 2, 1, withResource ? 2 : 0],
+  ];
+  return [
+    0x42,
+    declarations.length,
+    for (final declaration in declarations) ...declaration,
+  ];
+}
+
+Uint8List _mapInstanceStartComponentBytes(
+  List<List<int>> types, {
+  int? rootValueType,
+  int valueInstance = 0,
+}) {
+  final instanceCount = valueInstance + 1;
+  return _componentBytes([
+    _mapTypeSection(types),
+    _componentSection(0x0a, [
+      instanceCount + (rootValueType == null ? 0 : 1),
+      for (var i = 0; i < instanceCount; i++) ...[
+        0,
+        1,
+        0x69 + i,
+        5,
+        types.length - 1,
+      ],
+      if (rootValueType != null) ...[0, 1, 0x76, 2, 1, rootValueType],
+    ]),
+    _componentSection(0x06, [
+      rootValueType == null ? 2 : 1,
+      1,
+      0,
+      0,
+      1,
+      0x66,
+      if (rootValueType == null) ...[2, 0, valueInstance, 1, 0x76],
+    ]),
+    _componentSection(0x09, [0, 1, 0, 0]),
+  ]);
+}
+
+List<int> _mapTypeSection(List<List<int>> types) => _componentSection(0x07, [
+  ..._varUint32(types.length),
+  for (final type in types) ...type,
+]);
+
+Uint8List _mapTypesComponentBytes(List<List<int>> types) =>
+    _componentBytes([_mapTypeSection(types)]);
+
+Uint8List _mapStartComponentBytes(
+  List<List<int>> types,
+  int expected,
+  int actual,
+) => _componentBytes([
+  _mapTypeSection([
+    ...types,
+    [0x40, 1, 1, 0x78, expected, 1, 0],
+  ]),
+  _componentSection(0x0a, [
+    2,
+    0,
+    1,
+    0x66,
+    1,
+    types.length,
+    0,
+    1,
+    0x76,
+    2,
+    1,
+    actual,
+  ]),
+  _componentSection(0x09, [0, 1, 0, 0]),
 ]);
 
 Uint8List _minimalFunctionComponentWithImports(List<List<int>> imports) {

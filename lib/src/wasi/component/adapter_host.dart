@@ -1721,10 +1721,11 @@ void _validateFlatDirectValue(
       );
       return;
     case WASIComponentCanonicalAdapterFlatValueKind.list:
+    case WASIComponentCanonicalAdapterFlatValueKind.map:
       final codec = layout.memoryCodec;
       if (_flatLayoutContainsAsyncHandle(layout)) {
         if (value is! WasmComponentValueData ||
-            value.kind != WasmComponentValueDataKind.list) {
+            value.kind != _flatValueDataKind(layout.kind)) {
           break;
         }
         final items = value.itemValues;
@@ -1820,7 +1821,8 @@ void _validateFlatDirectValue(
       ),
       WASIComponentCanonicalAdapterFlatValueKind.enumeration =>
         _loadFlatEnumeration(layout, path, flatArgs, offset),
-      WASIComponentCanonicalAdapterFlatValueKind.list => _loadFlatList(
+      WASIComponentCanonicalAdapterFlatValueKind.list ||
+      WASIComponentCanonicalAdapterFlatValueKind.map => _loadFlatList(
         layout,
         path,
         flatArgs,
@@ -2366,6 +2368,7 @@ bool _flatLayoutContainsAsyncHandle(
         (field) => _flatLayoutContainsAsyncHandle(field.value),
       );
     case WASIComponentCanonicalAdapterFlatValueKind.list:
+    case WASIComponentCanonicalAdapterFlatValueKind.map:
     case WASIComponentCanonicalAdapterFlatValueKind.option:
       return _flatLayoutContainsAsyncHandle(layout.element!);
     case WASIComponentCanonicalAdapterFlatValueKind.result:
@@ -2408,6 +2411,7 @@ Object? _lowerCanonicalBorrowHandles(
     case WASIComponentCanonicalAdapterFlatValueKind.tuple:
     case WASIComponentCanonicalAdapterFlatValueKind.fixedList:
     case WASIComponentCanonicalAdapterFlatValueKind.list:
+    case WASIComponentCanonicalAdapterFlatValueKind.map:
       return _lowerCanonicalBorrowComposite(layout, path, value, lowerBorrow);
     case WASIComponentCanonicalAdapterFlatValueKind.option:
     case WASIComponentCanonicalAdapterFlatValueKind.result:
@@ -2445,7 +2449,8 @@ Object? _lowerCanonicalBorrowComposite(
     );
   }
   final fieldLayouts =
-      layout.kind == WASIComponentCanonicalAdapterFlatValueKind.list
+      (layout.kind == WASIComponentCanonicalAdapterFlatValueKind.list ||
+          layout.kind == WASIComponentCanonicalAdapterFlatValueKind.map)
       ? List<WASIComponentCanonicalAdapterFlatValuePlan>.filled(
           sourceItems.length,
           layout.element!,
@@ -2463,7 +2468,8 @@ Object? _lowerCanonicalBorrowComposite(
     for (var index = 0; index < sourceItems.length; index++)
       _lowerCanonicalBorrowHandles(
         fieldLayouts[index],
-        layout.kind == WASIComponentCanonicalAdapterFlatValueKind.list
+        (layout.kind == WASIComponentCanonicalAdapterFlatValueKind.list ||
+                layout.kind == WASIComponentCanonicalAdapterFlatValueKind.map)
             ? '$path[$index]'
             : '$path.${layout.fields[index].label}',
         sourceItems[index],
@@ -2544,6 +2550,7 @@ Object? _liftAsyncHandlesFromMemory(
     case WASIComponentCanonicalAdapterFlatValueKind.tuple:
     case WASIComponentCanonicalAdapterFlatValueKind.fixedList:
     case WASIComponentCanonicalAdapterFlatValueKind.list:
+    case WASIComponentCanonicalAdapterFlatValueKind.map:
       return _liftAsyncCompositeFromMemory(layout, path, value, asyncHost);
     case WASIComponentCanonicalAdapterFlatValueKind.option:
     case WASIComponentCanonicalAdapterFlatValueKind.result:
@@ -2573,7 +2580,8 @@ Object? _liftAsyncCompositeFromMemory(
   }
   final sourceItems = value.items;
   final fieldLayouts =
-      layout.kind == WASIComponentCanonicalAdapterFlatValueKind.list
+      (layout.kind == WASIComponentCanonicalAdapterFlatValueKind.list ||
+          layout.kind == WASIComponentCanonicalAdapterFlatValueKind.map)
       ? List<WASIComponentCanonicalAdapterFlatValuePlan>.filled(
           sourceItems.length,
           layout.element!,
@@ -2656,6 +2664,7 @@ Object? _lowerAsyncHandlesForMemory(
     case WASIComponentCanonicalAdapterFlatValueKind.tuple:
     case WASIComponentCanonicalAdapterFlatValueKind.fixedList:
     case WASIComponentCanonicalAdapterFlatValueKind.list:
+    case WASIComponentCanonicalAdapterFlatValueKind.map:
       return _lowerAsyncCompositeForMemory(layout, path, value, asyncHost);
     case WASIComponentCanonicalAdapterFlatValueKind.option:
     case WASIComponentCanonicalAdapterFlatValueKind.result:
@@ -2694,7 +2703,8 @@ WasmComponentValueData _lowerAsyncCompositeForMemory(
     );
   }
   final fieldLayouts =
-      layout.kind == WASIComponentCanonicalAdapterFlatValueKind.list
+      (layout.kind == WASIComponentCanonicalAdapterFlatValueKind.list ||
+          layout.kind == WASIComponentCanonicalAdapterFlatValueKind.map)
       ? List<WASIComponentCanonicalAdapterFlatValuePlan>.filled(
           sourceItems.length,
           layout.element!,
@@ -3010,7 +3020,8 @@ List<Object?> _storeFlatLayout(
       WASIComponentCanonicalAdapterFlatValueKind.enumeration => <Object?>[
         _flatEnumerationToIndex(layout, path, value),
       ],
-      WASIComponentCanonicalAdapterFlatValueKind.list => _storeFlatList(
+      WASIComponentCanonicalAdapterFlatValueKind.list ||
+      WASIComponentCanonicalAdapterFlatValueKind.map => _storeFlatList(
         layout,
         path,
         value,
@@ -3250,6 +3261,7 @@ WasmComponentValueDataKind _flatCompositeValueDataKind(
     WASIComponentCanonicalAdapterFlatValueKind.flags ||
     WASIComponentCanonicalAdapterFlatValueKind.enumeration ||
     WASIComponentCanonicalAdapterFlatValueKind.list ||
+    WASIComponentCanonicalAdapterFlatValueKind.map ||
     WASIComponentCanonicalAdapterFlatValueKind.option ||
     WASIComponentCanonicalAdapterFlatValueKind.result ||
     WASIComponentCanonicalAdapterFlatValueKind.variant ||
@@ -3278,6 +3290,8 @@ WasmComponentValueDataKind _flatValueDataKind(
       WasmComponentValueDataKind.enumeration,
     WASIComponentCanonicalAdapterFlatValueKind.list =>
       WasmComponentValueDataKind.list,
+    WASIComponentCanonicalAdapterFlatValueKind.map =>
+      WasmComponentValueDataKind.map,
     WASIComponentCanonicalAdapterFlatValueKind.option =>
       WasmComponentValueDataKind.option,
     WASIComponentCanonicalAdapterFlatValueKind.result =>

@@ -232,7 +232,7 @@ final class WASIComponentCanonicalValueMemoryCodec {
       values.length * _layout.byteLength,
       _layout.alignment,
     );
-    final data = ByteData.view(memory.buffer);
+    var data = ByteData.view(memory.buffer);
     for (var i = 0; i < values.length; i++) {
       _layout.store(
         memory,
@@ -242,10 +242,13 @@ final class WASIComponentCanonicalValueMemoryCodec {
         realloc,
         stringEncoding,
       );
+      if (_layout.requiresRealloc && i + 1 < values.length) {
+        data = ByteData.view(memory.buffer);
+      }
     }
   }
 
-  /// Loads a dynamic list value from a flat Canonical ABI `(ptr, len)` pair.
+  /// Loads a list or despecialized map from a flat `(ptr, len)` pair.
   WasmComponentValueData loadFlatList(
     wasm.Memory memory,
     int pointer,
@@ -268,7 +271,7 @@ final class WASIComponentCanonicalValueMemoryCodec {
     );
   }
 
-  /// Stores a dynamic list value and returns its flat `(ptr, len)` pair.
+  /// Stores a list or despecialized map and returns its `(ptr, len)` pair.
   ({int pointer, int length}) storeFlatList(
     wasm.Memory memory,
     Object? value, {
@@ -280,9 +283,10 @@ final class WASIComponentCanonicalValueMemoryCodec {
     if (layout is! _ListLayout) {
       throw StateError('WASI component canonical value expected list layout.');
     }
-    if (value is! WasmComponentValueData ||
-        value.kind != WasmComponentValueDataKind.list) {
-      throw StateError('WASI component canonical value expected list data.');
+    if (value is! WasmComponentValueData || value.kind != layout.kind) {
+      throw StateError(
+        'WASI component canonical value expected ${layout.kind.name} data.',
+      );
     }
     validate('list', value);
     return layout.storeFlat(
@@ -421,6 +425,40 @@ final class _LayoutResolver {
         }
         final elementLayout = _resolveValueType(elementType, scope);
         return elementLayout == null ? null : _ListLayout(elementLayout);
+      case WasmComponentDefinedValueTypeKind.map:
+        final keyType = type.keyType;
+        final valueType = type.valueType;
+        if (keyType == null || valueType == null) {
+          return null;
+        }
+        final keyLayout = _resolveValueType(keyType, scope);
+        final valueLayout = _resolveValueType(valueType, scope);
+        final keyIndex = keyType.typeIndex;
+        final keyPrimitive =
+            keyType.primitive ??
+            (scope?.definitionAt(keyIndex) ??
+                    (keyIndex != null &&
+                            keyIndex >= 0 &&
+                            keyIndex < definitions.length
+                        ? definitions[keyIndex]
+                        : null))
+                ?.definedValue
+                ?.primitive;
+        if (keyLayout == null ||
+            valueLayout == null ||
+            keyPrimitive == null ||
+            keyPrimitive == WasmComponentPrimitiveValueType.f32 ||
+            keyPrimitive == WasmComponentPrimitiveValueType.f64 ||
+            keyPrimitive == WasmComponentPrimitiveValueType.errorContext) {
+          return null;
+        }
+        return _ListLayout(
+          _RecordLayout(WasmComponentValueDataKind.tuple, [
+            _FieldLayout('0', keyLayout),
+            _FieldLayout('1', valueLayout),
+          ]),
+          kind: WasmComponentValueDataKind.map,
+        );
       case WasmComponentDefinedValueTypeKind.flags:
         return _FlagsLayout(type.labels);
       case WasmComponentDefinedValueTypeKind.variant:
@@ -772,6 +810,10 @@ final class _RecordLayout extends _CanonicalValueLayout {
   final int alignment;
 
   @override
+  bool get requiresRealloc =>
+      fields.any((field) => field.layout.requiresRealloc);
+
+  @override
   Object load(
     wasm.Memory memory,
     ByteData data,
@@ -837,7 +879,8 @@ final class _RecordLayout extends _CanonicalValueLayout {
     WASIComponentCanonicalRealloc? realloc,
     WASIComponentCanonicalStringEncoding stringEncoding,
   ) {
-    if (value.kind != kind || value.items.length != fields.length) {
+    final items = value.itemValues;
+    if (value.kind != kind || items.length != fields.length) {
       throw StateError(
         'WASI component canonical value expected ${kind.name} with '
         '${fields.length} items.',
@@ -847,14 +890,17 @@ final class _RecordLayout extends _CanonicalValueLayout {
     for (var i = 0; i < fields.length; i++) {
       final field = fields[i];
       cursor = _alignTo(cursor, field.layout.alignment);
-      field.layout.storeData(
+      field.layout.store(
         memory,
         data,
         cursor,
-        value.items[i],
+        items[i],
         realloc,
         stringEncoding,
       );
+      if (field.layout.requiresRealloc && i + 1 < fields.length) {
+        data = ByteData.view(memory.buffer);
+      }
       cursor += field.layout.byteLength;
     }
   }
@@ -863,9 +909,12 @@ final class _RecordLayout extends _CanonicalValueLayout {
   void validate(String name, Object? value) {
     if (value is WasmComponentValueData &&
         value.kind == kind &&
-        value.items.length == fields.length) {
+        value.itemValues.length == fields.length) {
       for (var i = 0; i < fields.length; i++) {
-        fields[i].layout.validate('$name.${fields[i].label}', value.items[i]);
+        fields[i].layout.validate(
+          '$name.${fields[i].label}',
+          value.itemValues[i],
+        );
       }
       return;
     }
@@ -969,6 +1018,9 @@ final class _FixedListLayout extends _CanonicalValueLayout {
         realloc,
         stringEncoding,
       );
+      if (elementLayout.requiresRealloc && i + 1 < length) {
+        data = ByteData.view(memory.buffer);
+      }
     }
   }
 
@@ -989,9 +1041,13 @@ final class _FixedListLayout extends _CanonicalValueLayout {
 }
 
 final class _ListLayout extends _CanonicalValueLayout {
-  const _ListLayout(this.elementLayout);
+  const _ListLayout(
+    this.elementLayout, {
+    this.kind = WasmComponentValueDataKind.list,
+  });
 
   final _CanonicalValueLayout elementLayout;
+  final WasmComponentValueDataKind kind;
 
   @override
   int get byteLength => 8;
@@ -1065,7 +1121,7 @@ final class _ListLayout extends _CanonicalValueLayout {
       growable: false,
     );
     return WasmComponentValueData(
-      kind: WasmComponentValueDataKind.list,
+      kind: kind,
       rawBytes: rawBytes ?? Uint8List(0),
       items: List<WasmComponentValueData>.unmodifiable(items),
     );
@@ -1080,9 +1136,10 @@ final class _ListLayout extends _CanonicalValueLayout {
     WASIComponentCanonicalRealloc? realloc,
     WASIComponentCanonicalStringEncoding stringEncoding,
   ) {
-    if (value is! WasmComponentValueData ||
-        value.kind != WasmComponentValueDataKind.list) {
-      throw StateError('WASI component canonical value expected list data.');
+    if (value is! WasmComponentValueData || value.kind != kind) {
+      throw StateError(
+        'WASI component canonical value expected ${kind.name} data.',
+      );
     }
     storeData(memory, data, pointer, value, realloc, stringEncoding);
   }
@@ -1096,8 +1153,10 @@ final class _ListLayout extends _CanonicalValueLayout {
     WASIComponentCanonicalRealloc? realloc,
     WASIComponentCanonicalStringEncoding stringEncoding,
   ) {
-    if (value.kind != WasmComponentValueDataKind.list) {
-      throw StateError('WASI component canonical value expected list data.');
+    if (value.kind != kind) {
+      throw StateError(
+        'WASI component canonical value expected ${kind.name} data.',
+      );
     }
     final payloadPointer = _storeListPayload(
       memory,
@@ -1106,8 +1165,9 @@ final class _ListLayout extends _CanonicalValueLayout {
       realloc,
       stringEncoding,
     );
+    data = ByteData.view(memory.buffer);
     data.setUint32(pointer, payloadPointer, Endian.little);
-    data.setUint32(pointer + 4, value.items.length, Endian.little);
+    data.setUint32(pointer + 4, value.itemValues.length, Endian.little);
   }
 
   ({int pointer, int length}) storeFlat(
@@ -1117,26 +1177,27 @@ final class _ListLayout extends _CanonicalValueLayout {
     WASIComponentCanonicalRealloc? realloc,
     WASIComponentCanonicalStringEncoding stringEncoding,
   ) {
-    if (value.kind != WasmComponentValueDataKind.list) {
-      throw StateError('WASI component canonical value expected list data.');
+    if (value.kind != kind) {
+      throw StateError(
+        'WASI component canonical value expected ${kind.name} data.',
+      );
     }
     return (
       pointer: _storeListPayload(memory, data, value, realloc, stringEncoding),
-      length: value.items.length,
+      length: value.itemValues.length,
     );
   }
 
   @override
   void validate(String name, Object? value) {
-    if (value is WasmComponentValueData &&
-        value.kind == WasmComponentValueDataKind.list) {
-      for (var i = 0; i < value.items.length; i++) {
-        elementLayout.validate('$name[$i]', value.items[i]);
+    if (value is WasmComponentValueData && value.kind == kind) {
+      for (var i = 0; i < value.itemValues.length; i++) {
+        elementLayout.validate('$name[$i]', value.itemValues[i]);
       }
       return;
     }
     throw StateError(
-      'WASI component canonical value $name expected list data.',
+      'WASI component canonical value $name expected ${kind.name} data.',
     );
   }
 
@@ -1147,11 +1208,12 @@ final class _ListLayout extends _CanonicalValueLayout {
     WASIComponentCanonicalRealloc? realloc,
     WASIComponentCanonicalStringEncoding stringEncoding,
   ) {
-    _checkU32(value.items.length, 'list length');
+    final items = value.itemValues;
+    _checkU32(items.length, 'list length');
     final canonicalRealloc = _requireRealloc(realloc, 'list');
     final payloadByteLength = _listPayloadByteLength(
       elementLayout,
-      value.items.length,
+      items.length,
     );
     final payloadPointer = canonicalRealloc(
       0,
@@ -1159,21 +1221,25 @@ final class _ListLayout extends _CanonicalValueLayout {
       elementLayout.alignment,
       payloadByteLength,
     );
+    data = ByteData.view(memory.buffer);
     _checkDataRange(
       data,
       payloadPointer,
       payloadByteLength,
       elementLayout.alignment,
     );
-    for (var i = 0; i < value.items.length; i++) {
-      elementLayout.storeData(
+    for (var i = 0; i < items.length; i++) {
+      elementLayout.store(
         memory,
         data,
         payloadPointer + i * elementLayout.byteLength,
-        value.items[i],
+        items[i],
         canonicalRealloc,
         stringEncoding,
       );
+      if (elementLayout.requiresRealloc && i + 1 < items.length) {
+        data = ByteData.view(memory.buffer);
+      }
     }
     return payloadPointer;
   }
@@ -1312,6 +1378,10 @@ final class _VariantLayout extends _CanonicalValueLayout {
   final int _discriminantByteLength;
   final int _maxCaseAlignment;
   final int _maxCaseByteLength;
+
+  @override
+  bool get requiresRealloc =>
+      cases.any((case_) => case_.layout?.requiresRealloc ?? false);
 
   @override
   int get alignment => _max(_discriminantByteLength, _maxCaseAlignment);

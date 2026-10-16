@@ -675,6 +675,8 @@ bool _asyncBindingDefinedValuesEquivalent(
     visiting,
   );
   if (!valueTypesEquivalent(left.elementType, right.elementType) ||
+      !valueTypesEquivalent(left.keyType, right.keyType) ||
+      !valueTypesEquivalent(left.valueType, right.valueType) ||
       !valueTypesEquivalent(left.okType, right.okType) ||
       !valueTypesEquivalent(left.errorType, right.errorType)) {
     return false;

@@ -57,6 +57,12 @@ public API, its feature selection, or other runtimes. The historical Component
 Model async gate retains its recorded `wasm-tools` `1.254.0` validator; the
 newer Core converter rejects the frozen draft's removed `cancellable` option.
 
+The unreleased Component `map` type and synchronous Canonical ABI adapter slice
+uses source `0220da84209397d9067c19cac83dae969aa85a7b`. Its binary validation,
+memory conversion, bound callbacks and WIT binding regressions are described in
+[Component map adapters](component_maps.md). This bounded gate is separate from
+general Component assertion execution and the historical async gate above.
+
 ## Implementation and evidence matrix
 
 | Area | Implementation in 0.5.0 | Evidence and remaining work |

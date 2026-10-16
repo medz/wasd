@@ -10,6 +10,555 @@ import 'support/component_fixtures.dart' as component_fixtures;
 
 void main() {
   group('WASIComponentCanonicalValueMemoryCodec', () {
+    test('stores a map after its payload allocation grows memory', () {
+      final codec = _primitiveMapCodec(
+        WasmComponentPrimitiveValueType.u32,
+        WasmComponentPrimitiveValueType.u32,
+      );
+      final value = _runtimeComposite(WasmComponentValueDataKind.map, [
+        _runtimeComposite(WasmComponentValueDataKind.tuple, [7, 42]),
+      ]);
+      for (final flat in [true, false]) {
+        final memory = Memory(const MemoryDescriptor(initial: 1, maximum: 2));
+        int realloc(int oldPointer, int oldSize, int alignment, int newSize) {
+          expect((oldPointer, oldSize, alignment, newSize), (0, 0, 4, 8));
+          expect(memory.grow(1), 1);
+          return 65536;
+        }
+
+        final WasmComponentValueData loaded;
+        if (flat) {
+          final stored = codec.storeFlatList(memory, value, realloc: realloc);
+          expect(stored, (pointer: 65536, length: 1));
+          loaded = codec.loadFlatList(memory, stored.pointer, stored.length);
+        } else {
+          codec.store(memory, 32, value, realloc: realloc);
+          final data = ByteData.view(memory.buffer);
+          expect(data.getUint32(32, Endian.little), 65536);
+          expect(data.getUint32(36, Endian.little), 1);
+          loaded = codec.load(memory, 32) as WasmComponentValueData;
+        }
+        expect(memory.buffer.lengthInBytes, 131072);
+        expect(loaded.items.single.items.map((item) => item.integer), [7, 42]);
+      }
+    });
+
+    test('keeps later map tuple fields after nested realloc grows memory', () {
+      final codec = _primitiveMapCodec(
+        WasmComponentPrimitiveValueType.string,
+        WasmComponentPrimitiveValueType.u32,
+      );
+      final memory = Memory(const MemoryDescriptor(initial: 1, maximum: 3));
+      var calls = 0;
+      final stored = codec.storeFlatList(
+        memory,
+        _runtimeComposite(WasmComponentValueDataKind.map, [
+          for (final number in [42, 43])
+            _runtimeComposite(WasmComponentValueDataKind.tuple, [
+              'key',
+              number,
+            ]),
+        ]),
+        realloc: (_, _, _, _) {
+          if (calls++ == 0) return 128;
+          return memory.grow(1) * 65536;
+        },
+      );
+      final loaded = codec.loadFlatList(memory, stored.pointer, stored.length);
+      expect(memory.buffer.lengthInBytes, 196608);
+      expect(loaded.items.map((item) => item.items[0].string), ['key', 'key']);
+      expect(loaded.items.map((item) => item.items[1].integer), [42, 43]);
+    });
+
+    test(
+      'keeps map tuple fields when realloc refreshes memory without growth',
+      () {
+        final codec = _primitiveMapCodec(
+          WasmComponentPrimitiveValueType.string,
+          WasmComponentPrimitiveValueType.u32,
+        );
+        final memory = Memory(const MemoryDescriptor(initial: 1, maximum: 2));
+        var calls = 0;
+        final stored = codec.storeFlatList(
+          memory,
+          _runtimeComposite(WasmComponentValueDataKind.map, [
+            _runtimeComposite(WasmComponentValueDataKind.tuple, ['key', 42]),
+          ]),
+          realloc: (_, _, _, _) {
+            if (calls++ == 0) return 128;
+            expect(memory.grow(0), 1);
+            return 256;
+          },
+        );
+        final loaded = codec.loadFlatList(
+          memory,
+          stored.pointer,
+          stored.length,
+        );
+        expect(loaded.items.single.items[0].string, 'key');
+        expect(loaded.items.single.items[1].integer, 42);
+        expect(memory.buffer.lengthInBytes, 65536);
+      },
+    );
+
+    test('keeps map entries and header after nested realloc grows memory', () {
+      final codec = _u32StringMapCodec();
+      final memory = Memory(const MemoryDescriptor(initial: 1, maximum: 3));
+      var calls = 0;
+      codec.store(
+        memory,
+        32,
+        _mapValue([(7, 'first'), (9, 'second')]),
+        realloc: (_, _, _, _) {
+          if (calls++ == 0) return 128;
+          return memory.grow(1) * 65536;
+        },
+      );
+      final data = ByteData.view(memory.buffer);
+      expect(data.getUint32(32, Endian.little), 128);
+      expect(data.getUint32(36, Endian.little), 2);
+      expect(_mapEntries(codec.load(memory, 32) as WasmComponentValueData), [
+        (7, 'first'),
+        (9, 'second'),
+      ]);
+    });
+
+    test('keeps record fields after nested realloc grows memory', () {
+      final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+        const WasmComponentValueType.typeIndex(0),
+        const [
+          WasmComponentTypeDefinition(
+            kind: WasmComponentTypeKind.definedValue,
+            definedValue: WasmComponentDefinedValueType(
+              kind: WasmComponentDefinedValueTypeKind.record,
+              fields: [
+                WasmComponentLabeledValueType(
+                  label: 'text',
+                  type: WasmComponentValueType.primitive(
+                    WasmComponentPrimitiveValueType.string,
+                  ),
+                ),
+                WasmComponentLabeledValueType(
+                  label: 'number',
+                  type: WasmComponentValueType.primitive(
+                    WasmComponentPrimitiveValueType.u32,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      )!;
+      final memory = Memory(const MemoryDescriptor(initial: 1, maximum: 2));
+      codec.store(
+        memory,
+        32,
+        _runtimeComposite(WasmComponentValueDataKind.record, ['grown', 42]),
+        realloc: (_, _, _, _) => memory.grow(1) * 65536,
+      );
+      final loaded = codec.load(memory, 32) as WasmComponentValueData;
+      expect(loaded.items[0].string, 'grown');
+      expect(loaded.items[1].integer, 42);
+    });
+
+    for (final mode in ['list', 'fixed-list', 'batch']) {
+      test('keeps $mode values after nested realloc grows memory', () {
+        const definitions = [
+          WasmComponentTypeDefinition(
+            kind: WasmComponentTypeKind.definedValue,
+            definedValue: WasmComponentDefinedValueType(
+              kind: WasmComponentDefinedValueTypeKind.variant,
+              cases: [
+                WasmComponentVariantCase(
+                  label: 'text',
+                  type: WasmComponentValueType.primitive(
+                    WasmComponentPrimitiveValueType.string,
+                  ),
+                ),
+                WasmComponentVariantCase(
+                  label: 'number',
+                  type: WasmComponentValueType.primitive(
+                    WasmComponentPrimitiveValueType.u32,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          WasmComponentTypeDefinition(
+            kind: WasmComponentTypeKind.definedValue,
+            definedValue: WasmComponentDefinedValueType(
+              kind: WasmComponentDefinedValueTypeKind.list,
+              elementType: WasmComponentValueType.typeIndex(0),
+            ),
+          ),
+          WasmComponentTypeDefinition(
+            kind: WasmComponentTypeKind.definedValue,
+            definedValue: WasmComponentDefinedValueType(
+              kind: WasmComponentDefinedValueTypeKind.fixedList,
+              fixedLength: 2,
+              elementType: WasmComponentValueType.typeIndex(0),
+            ),
+          ),
+        ];
+        final values = [
+          WasmComponentValueData(
+            kind: WasmComponentValueDataKind.variant,
+            rawBytes: Uint8List(0),
+            index: 0,
+            associatedValue: WasmComponentValueData(
+              kind: WasmComponentValueDataKind.string,
+              rawBytes: Uint8List(0),
+              string: 'grown',
+            ),
+          ),
+          WasmComponentValueData(
+            kind: WasmComponentValueDataKind.variant,
+            rawBytes: Uint8List(0),
+            index: 1,
+            associatedValue: WasmComponentValueData(
+              kind: WasmComponentValueDataKind.integer,
+              rawBytes: Uint8List(0),
+              integer: 42,
+            ),
+          ),
+        ];
+        final index = mode == 'list'
+            ? 1
+            : mode == 'fixed-list'
+            ? 2
+            : 0;
+        final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+          WasmComponentValueType.typeIndex(index),
+          definitions,
+        )!;
+        final memory = Memory(const MemoryDescriptor(initial: 1, maximum: 2));
+        var calls = 0;
+        int realloc(int oldPointer, int oldSize, int alignment, int newSize) {
+          if (mode == 'list' && calls++ == 0) return 128;
+          return memory.grow(1) * 65536;
+        }
+
+        final List<WasmComponentValueData> loaded;
+        if (mode == 'batch') {
+          codec.storeMany(memory, 32, values, realloc: realloc);
+          loaded = codec.loadManyAs<WasmComponentValueData>(
+            memory,
+            32,
+            2,
+            'values',
+          );
+        } else if (mode == 'list') {
+          final stored = codec.storeFlatList(
+            memory,
+            WasmComponentValueData(
+              kind: WasmComponentValueDataKind.list,
+              rawBytes: Uint8List(0),
+              items: values,
+            ),
+            realloc: realloc,
+          );
+          loaded = codec
+              .loadFlatList(memory, stored.pointer, stored.length)
+              .items;
+        } else {
+          codec.store(
+            memory,
+            32,
+            WasmComponentValueData(
+              kind: WasmComponentValueDataKind.fixedList,
+              rawBytes: Uint8List(0),
+              items: values,
+            ),
+            realloc: realloc,
+          );
+          loaded = (codec.load(memory, 32) as WasmComponentValueData).items;
+        }
+        expect(loaded.map((value) => value.index), [0, 1], reason: mode);
+        expect(loaded[0].associatedValue!.string, 'grown', reason: mode);
+        expect(loaded[1].associatedValue!.integer, 42, reason: mode);
+      });
+    }
+
+    test('resolves the canonical layout of a decoded map type', () {
+      final component = WasmComponent.decode(
+        Uint8List.fromList([
+          0x00,
+          0x61,
+          0x73,
+          0x6d,
+          0x0d,
+          0x00,
+          0x01,
+          0x00,
+          0x07,
+          0x04,
+          0x01,
+          0x63,
+          0x79,
+          0x73,
+        ]),
+      );
+      expect(component.validate(), isEmpty);
+      final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+        const WasmComponentValueType.typeIndex(0),
+        component.componentTypeIndexDefinitions,
+      );
+      expect(codec, isNotNull);
+      expect(codec!.byteLength, 8);
+      expect(codec.alignment, 4);
+      expect(codec.requiresRealloc, isTrue);
+    });
+
+    test('round trips ordered map entries with duplicate keys and strings', () {
+      final codec = _u32StringMapCodec();
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      var cursor = 256;
+      final allocations = <(int, int)>[];
+      int realloc(int oldPointer, int oldSize, int alignment, int newSize) {
+        allocations.add((alignment, newSize));
+        cursor = (cursor + alignment - 1) & -alignment;
+        final pointer = cursor;
+        cursor += newSize;
+        return pointer;
+      }
+
+      final value = _mapValue([(7, 'first'), (7, 'second'), (9, 'hé')]);
+      codec.store(memory, 32, value, realloc: realloc);
+      final loaded = codec.load(memory, 32) as WasmComponentValueData;
+      expect(loaded.kind, WasmComponentValueDataKind.map);
+      expect(_mapEntries(loaded), [(7, 'first'), (7, 'second'), (9, 'hé')]);
+      expect(allocations.first, (4, 36));
+      expect(data.getUint32(256, Endian.little), 7);
+      expect(data.getUint32(268, Endian.little), 7);
+      expect(data.getUint32(280, Endian.little), 9);
+
+      final flat = codec.storeFlatList(memory, loaded, realloc: realloc);
+      expect(flat.length, 3);
+      expect(
+        _mapEntries(codec.loadFlatList(memory, flat.pointer, flat.length)),
+        _mapEntries(value),
+      );
+      codec.store(memory, 48, _mapValue([]), realloc: realloc);
+      expect((codec.load(memory, 48) as WasmComponentValueData).items, isEmpty);
+      expect(
+        codec.loadFlatList(memory, 0xffffffff, 0).kind,
+        WasmComponentValueDataKind.map,
+      );
+    });
+
+    test('round trips maps nested in records and lists', () {
+      final definitions = <WasmComponentTypeDefinition>[
+        ..._u32StringMapDefinitions(),
+        const WasmComponentTypeDefinition(
+          kind: WasmComponentTypeKind.definedValue,
+          definedValue: WasmComponentDefinedValueType(
+            kind: WasmComponentDefinedValueTypeKind.list,
+            elementType: WasmComponentValueType.typeIndex(0),
+          ),
+        ),
+        const WasmComponentTypeDefinition(
+          kind: WasmComponentTypeKind.definedValue,
+          definedValue: WasmComponentDefinedValueType(
+            kind: WasmComponentDefinedValueTypeKind.record,
+            fields: [
+              WasmComponentLabeledValueType(
+                label: 'entries',
+                type: WasmComponentValueType.typeIndex(1),
+              ),
+            ],
+          ),
+        ),
+      ];
+      final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+        const WasmComponentValueType.typeIndex(2),
+        definitions,
+      )!;
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      var cursor = 256;
+      codec.store(
+        memory,
+        32,
+        WasmComponentValueData(
+          kind: WasmComponentValueDataKind.record,
+          rawBytes: Uint8List(0),
+          items: [
+            WasmComponentValueData(
+              kind: WasmComponentValueDataKind.list,
+              rawBytes: Uint8List(0),
+              items: [
+                _mapValue([(1, 'a')]),
+                _mapValue([]),
+                _mapValue([(2, 'b')]),
+              ],
+            ),
+          ],
+        ),
+        realloc: (_, _, alignment, newSize) {
+          cursor = (cursor + alignment - 1) & -alignment;
+          final pointer = cursor;
+          cursor += newSize;
+          return pointer;
+        },
+      );
+      expect(codec.requiresRealloc, isTrue);
+      final record = codec.load(memory, 32) as WasmComponentValueData;
+      expect(record.items.single.items.map(_mapEntries), [
+        [(1, 'a')],
+        <(int, String)>[],
+        [(2, 'b')],
+      ]);
+      final optionCodec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+        const WasmComponentValueType.typeIndex(3),
+        [
+          ...definitions,
+          const WasmComponentTypeDefinition(
+            kind: WasmComponentTypeKind.definedValue,
+            definedValue: WasmComponentDefinedValueType(
+              kind: WasmComponentDefinedValueTypeKind.option,
+              elementType: WasmComponentValueType.typeIndex(0),
+            ),
+          ),
+        ],
+      )!;
+      expect(optionCodec.requiresRealloc, isTrue);
+    });
+
+    test(
+      'stores runtime map tuples while preserving duplicate string keys',
+      () {
+        final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+          const WasmComponentValueType.typeIndex(0),
+          const [
+            WasmComponentTypeDefinition(
+              kind: WasmComponentTypeKind.definedValue,
+              definedValue: WasmComponentDefinedValueType(
+                kind: WasmComponentDefinedValueTypeKind.map,
+                keyType: WasmComponentValueType.primitive(
+                  WasmComponentPrimitiveValueType.string,
+                ),
+                valueType: WasmComponentValueType.primitive(
+                  WasmComponentPrimitiveValueType.u32,
+                ),
+              ),
+            ),
+          ],
+        )!;
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        var cursor = 128;
+        final value = WasmComponentValueData(
+          kind: WasmComponentValueDataKind.map,
+          rawBytes: Uint8List(0),
+          runtimeItems: [
+            for (final number in [1, 2])
+              WasmComponentValueData(
+                kind: WasmComponentValueDataKind.tuple,
+                rawBytes: Uint8List(0),
+                runtimeItems: ['same', number],
+              ),
+          ],
+        );
+        codec.validate('entries', value);
+        final flat = codec.storeFlatList(
+          memory,
+          value,
+          realloc: (_, _, alignment, newSize) {
+            cursor = (cursor + alignment - 1) & -alignment;
+            final pointer = cursor;
+            cursor += newSize;
+            return pointer;
+          },
+        );
+        final loaded = codec.loadFlatList(memory, flat.pointer, flat.length);
+        expect(loaded.items.map((item) => item.items[0].string), [
+          'same',
+          'same',
+        ]);
+        expect(loaded.items.map((item) => item.items[1].integer), [1, 2]);
+      },
+    );
+
+    test('rejects malformed map entries and out of bounds payloads', () {
+      final codec = _u32StringMapCodec();
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      expect(() => codec.validate('entries', {1: 'x'}), throwsStateError);
+      expect(
+        () => codec.validate(
+          'entries',
+          WasmComponentValueData(
+            kind: WasmComponentValueDataKind.list,
+            rawBytes: Uint8List(0),
+            items: _mapValue([(1, 'x')]).items,
+          ),
+        ),
+        throwsStateError,
+      );
+      expect(
+        () => codec.validate('entries', _mapValue([(-1, 'x')])),
+        throwsStateError,
+      );
+      expect(
+        () => codec.validate(
+          'entries',
+          WasmComponentValueData(
+            kind: WasmComponentValueDataKind.map,
+            rawBytes: Uint8List(0),
+            items: [
+              _mapValue([(1, 'x')]).items.single.items.first,
+            ],
+          ),
+        ),
+        throwsStateError,
+      );
+      expect(() => codec.loadFlatList(memory, 65532, 1), throwsRangeError);
+      expect(() => codec.loadFlatList(memory, 65, 1), throwsStateError);
+      expect(
+        () => codec.loadFlatList(memory, 64, 0xffffffff),
+        throwsRangeError,
+      );
+    });
+
+    test('does not treat u32 handle memory layouts as legal map keys', () {
+      for (final kind in [
+        WasmComponentDefinedValueTypeKind.own,
+        WasmComponentDefinedValueTypeKind.borrow,
+        WasmComponentDefinedValueTypeKind.stream,
+        WasmComponentDefinedValueTypeKind.future,
+      ]) {
+        final definitions = <WasmComponentTypeDefinition>[
+          const WasmComponentTypeDefinition(
+            kind: WasmComponentTypeKind.resource,
+            resource: WasmComponentResourceType.abstract(),
+          ),
+          WasmComponentTypeDefinition(
+            kind: WasmComponentTypeKind.definedValue,
+            definedValue: WasmComponentDefinedValueType(
+              kind: kind,
+              typeIndex: 0,
+            ),
+          ),
+          const WasmComponentTypeDefinition(
+            kind: WasmComponentTypeKind.definedValue,
+            definedValue: WasmComponentDefinedValueType(
+              kind: WasmComponentDefinedValueTypeKind.map,
+              keyType: WasmComponentValueType.typeIndex(1),
+              valueType: WasmComponentValueType.primitive(
+                WasmComponentPrimitiveValueType.u32,
+              ),
+            ),
+          ),
+        ];
+        expect(
+          WASIComponentCanonicalValueMemoryCodec.fromAdapterValueType(
+            const WasmComponentValueType.typeIndex(2),
+            definitions,
+          ),
+          isNull,
+          reason: '${kind.name} is a handle rather than a primitive map key',
+        );
+      }
+    });
+
     test('loads and stores record fields with canonical padding', () {
       final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
         const WasmComponentValueType.typeIndex(0),
@@ -649,3 +1198,85 @@ void main() {
     });
   });
 }
+
+List<WasmComponentTypeDefinition> _u32StringMapDefinitions() =>
+    WasmComponent.decode(
+      Uint8List.fromList([
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x0d,
+        0x00,
+        0x01,
+        0x00,
+        0x07,
+        0x04,
+        0x01,
+        0x63,
+        0x79,
+        0x73,
+      ]),
+    ).componentTypeIndexDefinitions;
+
+WASIComponentCanonicalValueMemoryCodec _u32StringMapCodec() =>
+    WASIComponentCanonicalValueMemoryCodec.fromValueType(
+      const WasmComponentValueType.typeIndex(0),
+      _u32StringMapDefinitions(),
+    )!;
+
+WasmComponentValueData _mapValue(List<(int, String)> entries) =>
+    WasmComponentValueData(
+      kind: WasmComponentValueDataKind.map,
+      rawBytes: Uint8List(0),
+      items: [
+        for (final entry in entries)
+          WasmComponentValueData(
+            kind: WasmComponentValueDataKind.tuple,
+            rawBytes: Uint8List(0),
+            items: [
+              WasmComponentValueData(
+                kind: WasmComponentValueDataKind.integer,
+                rawBytes: Uint8List(0),
+                integer: entry.$1,
+              ),
+              WasmComponentValueData(
+                kind: WasmComponentValueDataKind.string,
+                rawBytes: Uint8List(0),
+                string: entry.$2,
+              ),
+            ],
+          ),
+      ],
+    );
+
+List<(int, String)> _mapEntries(WasmComponentValueData value) => [
+  for (final entry in value.items)
+    (entry.items[0].integer! as int, entry.items[1].string!),
+];
+
+WASIComponentCanonicalValueMemoryCodec _primitiveMapCodec(
+  WasmComponentPrimitiveValueType key,
+  WasmComponentPrimitiveValueType value,
+) => WASIComponentCanonicalValueMemoryCodec.fromValueType(
+  const WasmComponentValueType.typeIndex(0),
+  [
+    WasmComponentTypeDefinition(
+      kind: WasmComponentTypeKind.definedValue,
+      definedValue: WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.map,
+        keyType: WasmComponentValueType.primitive(key),
+        valueType: WasmComponentValueType.primitive(value),
+      ),
+    ),
+  ],
+)!;
+
+WasmComponentValueData _runtimeComposite(
+  WasmComponentValueDataKind kind,
+  List<Object?> values,
+) => WasmComponentValueData(
+  kind: kind,
+  rawBytes: Uint8List(0),
+  runtimeItems: values,
+);
