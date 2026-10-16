@@ -2,7 +2,8 @@
 
 This implementation and acceptance plan retains the historical `0.5.0`
 (`528b2b828f979d08ba1798f7e8e955e892ab052d`) baseline checked on 2026-10-01.
-Acceptance evidence below applies to `0.6.0-dev.2`.
+Published acceptance evidence below applies to `0.6.0-dev.2`; paragraphs marked
+unreleased describe subsequent development work.
 A target in this document is not a support claim. Release support must be backed
 by WASD execution, validation, and host tests at the exact release commit.
 
@@ -76,6 +77,17 @@ through separate labels and callbacks; `include ... with` preserves renamed
 labels and resource identities. These checks do not establish general
 Component composition, executable direct world functions or complete WASI
 `0.3.1` adoption.
+
+The unreleased WASI `0.3.1` contract/linking slice uses source
+`59e48bfe3fae9bf2480eb15abd8f55999eb3b395` and retains exact `0.3.0` support.
+It resolves six stable packages and eight worlds, reuses existing host
+implementations through exact versioned callback keys, and runs custom
+`0.3.1` command/service inputs with real host calls and resource cleanup.
+The source delta and normalized contract digests are recorded separately in
+`tool/wasi_preview3_contract.lock.json`. The fixed official `45/45` native
+Linux/macOS gate still uses `0.3.0` guests; it is compatibility evidence for
+that version, not an official `0.3.1` suite. General Component/async assertion
+execution and full package/world/platform acceptance remain open.
 
 The first unreleased WASD Component execution gate runs the complete official
 `test/values/strings.wast` at source

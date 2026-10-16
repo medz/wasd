@@ -1743,21 +1743,16 @@ final class WASIComponentNativeRuntime {
   }
 
   _ComponentFunction _findPreview3CommandRun() {
-    for (final entry in _exportedInstances.entries) {
-      if (_isPreview3RunExport(entry.key)) {
-        final run = entry.value.functions['run'];
-        if (run != null) {
-          return run;
-        }
-      }
-    }
-    for (final entry in _exportedFunctions.entries) {
-      if (_isPreview3RunExport(entry.key)) {
-        return entry.value;
+    for (final name in const ['wasi:cli/run@0.3.1', 'wasi:cli/run@0.3.0']) {
+      final run =
+          _exportedInstances[name]?.functions['run'] ??
+          _exportedFunctions[name];
+      if (run != null) {
+        return run;
       }
     }
     throw const WASIPreview2ComponentExecutionException(
-      'Component does not export wasi:cli/run@0.3.0.',
+      'Component does not export wasi:cli/run@0.3.0 or @0.3.1.',
     );
   }
 
@@ -1781,29 +1776,25 @@ final class WASIComponentNativeRuntime {
   }
 
   _ComponentFunction _findPreview3HttpHandler() {
-    for (final entry in _exportedInstances.entries) {
-      if (entry.key == 'wasi:http/handler@0.3.0') {
-        final handle = entry.value.functions['handle'];
-        if (handle != null) {
-          return handle;
-        }
-      }
-    }
-    for (final entry in _exportedFunctions.entries) {
-      if (entry.key == 'wasi:http/handler@0.3.0') {
-        return entry.value;
+    for (final name in const [
+      'wasi:http/handler@0.3.1',
+      'wasi:http/handler@0.3.0',
+    ]) {
+      final handle =
+          _exportedInstances[name]?.functions['handle'] ??
+          _exportedFunctions[name];
+      if (handle != null) {
+        return handle;
       }
     }
     throw const WASIPreview2ComponentExecutionException(
-      'Component does not export wasi:http/handler@0.3.0.',
+      'Component does not export wasi:http/handler@0.3.0 or @0.3.1.',
     );
   }
 
   bool _isPreview2RunExport(String name) {
     return RegExp(r'^wasi:cli/run@0\.2\.\d+$').hasMatch(name);
   }
-
-  bool _isPreview3RunExport(String name) => name == 'wasi:cli/run@0.3.0';
 
   bool _isPreview2IncomingHandlerExport(String name) {
     return RegExp(r'^wasi:http/incoming-handler@0\.2\.\d+$').hasMatch(name);
@@ -2134,12 +2125,34 @@ String _witCallbackKey(String interfaceName, String functionName) {
 }
 
 String _standardResourceTypeName(String interfaceName, String resourceName) {
+  if (interfaceName.endsWith('@0.3.1')) {
+    final alias = _preview3ResourceTypeAliases['$interfaceName.$resourceName'];
+    if (alias != null) {
+      return alias;
+    }
+  }
   final versionedInterface = interfaceName.replaceFirst(
     RegExp(r'@0\.2\.\d+$'),
     '@0.2.0',
   );
   return '$versionedInterface.$resourceName';
 }
+
+const _preview3ResourceTypeAliases = <String, String>{
+  'wasi:cli/terminal-input@0.3.1.terminal-input':
+      'wasi:cli/terminal-input@0.3.0.terminal-input',
+  'wasi:cli/terminal-output@0.3.1.terminal-output':
+      'wasi:cli/terminal-output@0.3.0.terminal-output',
+  'wasi:filesystem/types@0.3.1.descriptor':
+      'wasi:filesystem/types@0.3.0.descriptor',
+  'wasi:sockets/types@0.3.1.tcp-socket': 'wasi:sockets/types@0.3.0.tcp-socket',
+  'wasi:sockets/types@0.3.1.udp-socket': 'wasi:sockets/types@0.3.0.udp-socket',
+  'wasi:http/types@0.3.1.fields': 'wasi:http/types@0.3.0.fields',
+  'wasi:http/types@0.3.1.request': 'wasi:http/types@0.3.0.request',
+  'wasi:http/types@0.3.1.request-options':
+      'wasi:http/types@0.3.0.request-options',
+  'wasi:http/types@0.3.1.response': 'wasi:http/types@0.3.0.response',
+};
 
 String _formatErrors(String header, Iterable<Object> errors) {
   final buffer = StringBuffer(header);

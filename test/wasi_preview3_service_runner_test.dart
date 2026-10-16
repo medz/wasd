@@ -3,10 +3,216 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:wasd/src/wasi/preview2/component_runner.dart' as native_runtime;
 import 'package:wasd/wasi.dart';
 import 'package:wasd/wasm.dart';
 
 void main() {
+  group('WASI 0.3.1 HTTP service linking', () {
+    test(
+      'returns guest-created responses and cleans repeated requests',
+      () async {
+        final component = await _compileComponentWat(
+          '031_resource_service',
+          _versionedServiceWat(),
+        );
+        final host = WASIPreview3ComponentHost();
+        final runner = WASIPreview3ServiceRunner(host);
+        final baseline = host.componentHost.table.activeCount;
+        var dropped = 0;
+        for (var invocation = 0; invocation < 3; invocation++) {
+          final result = await runner.handle(
+            component,
+            WASIPreview3HttpRequest.noTrailers(
+              headers: WASIPreview3HttpFields(
+                entries: [
+                  WASIPreview3HttpFieldEntry('x-031', [invocation]),
+                ],
+              ),
+              onDrop: () => dropped++,
+            ),
+          );
+          expect(result.isOk, isTrue);
+          expect(result.value!.statusCode, 204);
+          expect(result.value!.headers.values('x-031'), [
+            [invocation],
+          ]);
+          expect(dropped, invocation + 1);
+          await result.value!.completeTransmission(
+            const WASIPreview3HttpResult<void>.ok(null),
+          );
+          await Future<void>.delayed(Duration.zero);
+          expect(host.componentHost.table.activeCount, baseline);
+        }
+      },
+    );
+
+    test('returns guest errors and drops 031 fields and requests', () async {
+      final component = await _compileComponentWat(
+        '031_resource_service_error',
+        _versionedServiceWat(error: true),
+      );
+      final host = WASIPreview3ComponentHost();
+      final runner = WASIPreview3ServiceRunner(host);
+      final baseline = host.componentHost.table.activeCount;
+      var dropped = 0;
+      for (var invocation = 0; invocation < 3; invocation++) {
+        final result = await runner.handle(
+          component,
+          WASIPreview3HttpRequest.noTrailers(
+            headers: WASIPreview3HttpFields(),
+            onDrop: () => dropped++,
+          ),
+        );
+        expect(result.isOk, isFalse);
+        expect(result.errorCode, 'internal-error');
+        expect(dropped, invocation + 1);
+        expect(host.componentHost.table.activeCount, baseline);
+      }
+    });
+
+    for (final directNew in [false, true]) {
+      for (final directOld in [false, true]) {
+        test(
+          'prefers 031 across service export forms $directNew/$directOld',
+          () async {
+            final modern =
+                '(export "wasi:http/handler@0.3.1" '
+                '${directNew ? r'(func $handle)' : r'(instance $handler)'})';
+            final legacy =
+                '(export "wasi:http/handler@0.3.0" '
+                '${directOld ? r'(func $handle-error)' : r'(instance $error-handler)'})';
+            for (final exports in [
+              [legacy, modern],
+              [modern, legacy],
+            ]) {
+              final component = await _compileComponentWat(
+                '031_service_precedence_${directNew}_$directOld',
+                _versionedServiceWat(exports: exports),
+              );
+              final host = WASIPreview3ComponentHost();
+              final result = await WASIPreview3ServiceRunner(host).handle(
+                component,
+                WASIPreview3HttpRequest.noTrailers(
+                  headers: WASIPreview3HttpFields(),
+                ),
+              );
+              expect(result.isOk, isTrue);
+              expect(result.value!.statusCode, 204);
+              await result.value!.completeTransmission(
+                const WASIPreview3HttpResult<void>.ok(null),
+              );
+              await Future<void>.delayed(Duration.zero);
+              expect(host.componentHost.table.activeCount, 0);
+            }
+          },
+        );
+      }
+    }
+
+    test('rejects unknown handler versions and prereleases', () async {
+      for (final version in ['0.3.2', '0.3.10', '0.3.1-rc.1', '0.30.1']) {
+        final component = await _compileComponentWat(
+          '031_unknown_service_$version',
+          _versionedServiceWat().replaceFirst(
+            '(export "wasi:http/handler@0.3.1"',
+            '(export "wasi:http/handler@$version"',
+          ),
+        );
+        final host = WASIPreview3ComponentHost();
+        await expectLater(
+          WASIPreview3ServiceRunner(host).handle(
+            component,
+            WASIPreview3HttpRequest.noTrailers(
+              headers: WASIPreview3HttpFields(),
+            ),
+          ),
+          throwsA(
+            isA<WASIPreview3ComponentExecutionException>().having(
+              (error) => error.message,
+              'message',
+              contains('does not export wasi:http/handler@0.3.0 or @0.3.1'),
+            ),
+          ),
+        );
+        expect(host.componentHost.table.activeCount, 0);
+      }
+    });
+
+    test('keeps plain resource instance names nominally separate', () async {
+      final component = await _compileComponentWat(
+        '031_plain_resource_names',
+        _resourceDropWat('one', 'request'),
+      );
+      final host = WASIComponentHost();
+      var firstDrops = 0;
+      var secondDrops = 0;
+      final first = host.table.defineType<Object>(
+        'one.request',
+        onDrop: (_) => firstDrops++,
+      );
+      final second = host.table.defineType<Object>(
+        'two.request',
+        onDrop: (_) => secondDrops++,
+      );
+      final firstHandle = host.table.insert(first, Object());
+      final secondHandle = host.table.insert(second, Object());
+      final runtime = native_runtime.WASIComponentNativeRuntime.component(
+        component: component,
+        host: host,
+      );
+      await expectLater(
+        runtime.invokeExport('drop', [secondHandle]),
+        throwsStateError,
+      );
+      expect(firstDrops, 0);
+      expect(secondDrops, 0);
+      await runtime.invokeExport('drop', [firstHandle]);
+      expect(firstDrops, 1);
+      expect(secondDrops, 0);
+      host.table.drop(second, secondHandle);
+      expect(secondDrops, 1);
+      expect(host.table.activeCount, 0);
+    });
+
+    test(
+      'does not alias unknown qualified resource names or versions',
+      () async {
+        for (final (interface, resource, legacy) in [
+          (
+            'custom:pkg/types@0.3.1',
+            'request',
+            'custom:pkg/types@0.3.0.request',
+          ),
+          (
+            'wasi:http/types@0.3.1',
+            'custom-request',
+            'wasi:http/types@0.3.0.custom-request',
+          ),
+          ('wasi:http/types@0.3.2', 'request', 'wasi:http/types@0.3.0.request'),
+        ]) {
+          final component = await _compileComponentWat(
+            '031_unknown_resource',
+            _resourceDropWat(interface, resource),
+          );
+          final host = WASIComponentHost();
+          final type = host.table.defineType<Object>(legacy);
+          final handle = host.table.insert(type, Object());
+          final runtime = native_runtime.WASIComponentNativeRuntime.component(
+            component: component,
+            host: host,
+          );
+          await expectLater(
+            runtime.invokeExport('drop', [handle]),
+            throwsStateError,
+          );
+          expect(host.table.activeCount, 1);
+          host.table.drop(type, handle);
+        }
+      },
+    );
+  });
+
   group('WASI Preview3 HTTP service runner', () {
     test('returns component errors and cleans each repeated request', () async {
       final component = await _compileComponentWat(
@@ -242,6 +448,33 @@ void main() {
     );
   });
 }
+
+String _versionedServiceWat({bool error = false, List<String>? exports}) {
+  var source = File(
+    'test/fixtures/wasi_preview3/wasi_http_0_3_1_resource_service.wat',
+  ).readAsStringSync();
+  if (exports != null || error) {
+    source = source.replaceFirst(
+      r'(export "wasi:http/handler@0.3.1" (instance $handler))',
+      exports?.join('\n  ') ??
+          r'(export "wasi:http/handler@0.3.1" (instance $error-handler))',
+    );
+  }
+  return source;
+}
+
+String _resourceDropWat(String interface, String resource) =>
+    r'''
+(component
+  (type $types (instance (export "RESOURCE" (type (sub resource)))))
+  (import "INTERFACE" (instance $types-instance (type $types)))
+  (alias export $types-instance "RESOURCE" (type $resource))
+  (core func $drop (canon resource.drop $resource))
+  (func $drop-function (param "handle" u32) (canon lift (core func $drop)))
+  (export "drop" (func $drop-function)))
+'''
+        .replaceAll('INTERFACE', interface)
+        .replaceAll('RESOURCE', resource);
 
 final class _ResponseRequestHost extends WASIPreview3HttpHost {
   _ResponseRequestHost(WASIComponentResourceTable table) : super(table: table);

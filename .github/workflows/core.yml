@@ -80,6 +80,11 @@ jobs:
       - run: dart test -p chrome test/component_test.dart
       - run: dart test -p node test/wasi_component_wit_test.dart test/wasi_component_wit_adapter_runtime_test.dart
       - run: dart test -p chrome test/wasi_component_wit_test.dart test/wasi_component_wit_adapter_runtime_test.dart
+      - run: >-
+          dart test -p node -p chrome
+          test/wasi_component_versioned_host_test.dart
+          test/wasi_preview3_standard_wit_test.dart
+          --name 'Preview3 (0[.]3[.][01] (executes|binds)|callback aliases|WIT plans reject)|resolves and caches both supported Preview3|keeps unsupported Preview3 version keys'
 
   native:
     runs-on: ${{ matrix.os }}

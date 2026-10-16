@@ -5,6 +5,89 @@ import 'package:wasd/wasi.dart';
 import 'package:wasd/wasm.dart';
 
 void main() {
+  group('WASI 0.3.1 command linking', () {
+    for (final version in ['0.3.0', '0.3.1']) {
+      test(
+        'calls the $version scalar host and returns asynchronously',
+        () async {
+          final component = await _compileComponentWat(
+            '031_scalar_command_$version',
+            _versionedCommandWat(version: version),
+          );
+          final result = await WASIPreview3CommandRunner(
+            WASIPreview3ComponentHost(),
+          ).run(component);
+          expect(result.exitCode, 0);
+        },
+      );
+    }
+
+    test('calls the 031 scalar host before its explicit guest exit', () async {
+      final component = await _compileComponentWat(
+        '031_scalar_command_exit',
+        _versionedCommandWat(exitCode: 7),
+      );
+      final result = await WASIPreview3CommandRunner(
+        WASIPreview3ComponentHost(),
+      ).run(component);
+      expect(result.exitCode, 7);
+    });
+
+    for (final directNew in [false, true]) {
+      for (final directOld in [false, true]) {
+        test(
+          'prefers 031 across command export forms $directNew/$directOld',
+          () async {
+            final modern =
+                '(export "wasi:cli/run@0.3.1" '
+                '${directNew ? r'(func $run)' : r'(instance $run-instance)'})';
+            final legacy =
+                '(export "wasi:cli/run@0.3.0" '
+                '${directOld ? r'(func $legacy-run)' : r'(instance $legacy-instance)'})';
+            for (final exports in [
+              [legacy, modern],
+              [modern, legacy],
+            ]) {
+              final component = await _compileComponentWat(
+                '031_command_precedence_${directNew}_$directOld',
+                _versionedCommandWat(exports: exports),
+              );
+              final result = await WASIPreview3CommandRunner(
+                WASIPreview3ComponentHost(),
+              ).run(component);
+              // The 030 entrypoint returns error; the 031 one checks a real host
+              // scalar and returns ok. Insertion order must not select the error.
+              expect(result.exitCode, 0);
+            }
+          },
+        );
+      }
+    }
+
+    test('rejects unknown command versions and prereleases', () async {
+      for (final version in ['0.3.2', '0.3.10', '0.3.1-rc.1', '0.30.1']) {
+        final source = _versionedCommandWat().replaceFirst(
+          '(export "wasi:cli/run@0.3.1"',
+          '(export "wasi:cli/run@$version"',
+        );
+        final component = await _compileComponentWat(
+          '031_unknown_$version',
+          source,
+        );
+        await expectLater(
+          WASIPreview3CommandRunner(WASIPreview3ComponentHost()).run(component),
+          throwsA(
+            isA<WASIPreview3ComponentExecutionException>().having(
+              (error) => error.message,
+              'message',
+              contains('does not export wasi:cli/run@0.3.0 or @0.3.1'),
+            ),
+          ),
+        );
+      }
+    });
+  });
+
   group('WASI Preview3 task.return runner ABI', () {
     test(
       'resolves nested types in an imported instance export scope',
@@ -59,6 +142,29 @@ void main() {
       expect(result.exitCode, 0);
     });
   });
+}
+
+String _versionedCommandWat({
+  String version = '0.3.1',
+  int? exitCode,
+  List<String>? exports,
+}) {
+  var source = File(
+    'test/fixtures/wasi_preview3/wasi_cli_0_3_1_scalar_command.wat',
+  ).readAsStringSync().replaceAll('@0.3.1', '@$version');
+  if (exitCode != null) {
+    source = source.replaceFirst(
+      ';; EXIT',
+      'i32.const $exitCode\n      call \$exit\n      unreachable',
+    );
+  }
+  if (exports != null) {
+    source = source.replaceFirst(
+      '(export "wasi:cli/run@$version" (instance \$run-instance))',
+      exports.join('\n  '),
+    );
+  }
+  return source;
 }
 
 Future<WasmComponent> _compileComponentWat(String name, String source) async {

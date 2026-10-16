@@ -86,44 +86,77 @@ WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
       memberName: parsed.memberName,
     );
   }
-  if (parsed.packageName == 'wasi:random' && parsed.version == '0.3.0') {
+  if (parsed.packageName == 'wasi:random' &&
+      _isPreview3PatchVersion(parsed.version)) {
     return WASIComponentWitResolvedTarget(
-      document: _wasiRandom030Document,
+      document: _preview3Document(
+        _wasiRandom030Source,
+        'wasi:random',
+        parsed.version!,
+      ),
       memberName: parsed.memberName,
     );
   }
-  if (parsed.packageName == 'wasi:clocks' && parsed.version == '0.3.0') {
+  if (parsed.packageName == 'wasi:clocks' &&
+      _isPreview3PatchVersion(parsed.version)) {
     return WASIComponentWitResolvedTarget(
-      document: _wasiClocks030Document,
+      document: _preview3Document(
+        _wasiClocks030Source,
+        'wasi:clocks',
+        parsed.version!,
+      ),
       memberName: parsed.memberName,
     );
   }
-  if (parsed.packageName == 'wasi:cli' && parsed.version == '0.3.0') {
+  if (parsed.packageName == 'wasi:cli' &&
+      _isPreview3PatchVersion(parsed.version)) {
     return WASIComponentWitResolvedTarget(
-      document: _wasiCli030Document,
+      document: _preview3Document(
+        _wasiCli030Source,
+        'wasi:cli',
+        parsed.version!,
+      ),
       memberName: parsed.memberName,
     );
   }
-  if (parsed.packageName == 'wasi:filesystem' && parsed.version == '0.3.0') {
+  if (parsed.packageName == 'wasi:filesystem' &&
+      _isPreview3PatchVersion(parsed.version)) {
     return WASIComponentWitResolvedTarget(
-      document: _wasiFilesystem030Document,
+      document: _preview3Document(
+        _wasiFilesystem030Source,
+        'wasi:filesystem',
+        parsed.version!,
+      ),
       memberName: parsed.memberName,
     );
   }
-  if (parsed.packageName == 'wasi:sockets' && parsed.version == '0.3.0') {
+  if (parsed.packageName == 'wasi:sockets' &&
+      _isPreview3PatchVersion(parsed.version)) {
     return WASIComponentWitResolvedTarget(
-      document: _wasiSockets030Document,
+      document: _preview3Document(
+        _wasiSockets030Source,
+        'wasi:sockets',
+        parsed.version!,
+      ),
       memberName: parsed.memberName,
     );
   }
-  if (parsed.packageName == 'wasi:http' && parsed.version == '0.3.0') {
+  if (parsed.packageName == 'wasi:http' &&
+      _isPreview3PatchVersion(parsed.version)) {
     return WASIComponentWitResolvedTarget(
-      document: _wasiHttp030Document,
+      document: _preview3Document(
+        _wasiHttp030Source,
+        'wasi:http',
+        parsed.version!,
+      ),
       memberName: parsed.memberName,
     );
   }
   return null;
 }
+
+bool _isPreview3PatchVersion(String? version) =>
+    version == '0.3.0' || version == '0.3.1';
 
 bool _isPreview2PatchVersion(String? version) {
   if (version == null) {
