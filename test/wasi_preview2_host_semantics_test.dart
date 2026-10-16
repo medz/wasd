@@ -998,6 +998,16 @@ world test {
           socket,
         ]);
         expect(ready(), isFalse);
+        expect(
+          _resultError(
+            imports['wasi:sockets/tcp@0.2.0.tcp-socket.finish-listen']!(
+                  <Object?>[socket],
+                )!
+                as WasmComponentValueData,
+          ),
+          'would-block',
+        );
+        expect(ready(), isFalse);
         listen.complete(
           WASIPreview2SocketResult<WASIPreview2TcpListener>.ok(listener),
         );
@@ -1017,6 +1027,114 @@ world test {
         expect(ready(), isTrue);
       },
     );
+
+    test('TCP finish-listen failure closes the socket', () async {
+      final backend = _ClosableSocketsBackend(
+        tcpListenFuture: Future.value(
+          const WASIPreview2SocketResult<WASIPreview2TcpListener>.error(
+            'address-in-use',
+          ),
+        ),
+      );
+      final sockets = WASIPreview2SocketsHost(backend: backend);
+      final imports = sockets.imports;
+      final network =
+          imports['wasi:sockets/instance-network@0.2.0.instance-network']!(
+                const <Object?>[],
+              )!
+              as int;
+      final socket = _resultHandle(
+        imports['wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket']!(
+              <Object?>[_enum('ipv4', 0)],
+            )!
+            as WasmComponentValueData,
+      );
+      final pollable =
+          imports['wasi:sockets/tcp@0.2.0.tcp-socket.subscribe']!(<Object?>[
+                socket,
+              ])!
+              as int;
+      imports['wasi:sockets/tcp@0.2.0.tcp-socket.start-bind']!(<Object?>[
+        socket,
+        network,
+        _ipv4SocketAddress(port: 8080),
+      ]);
+      imports['wasi:sockets/tcp@0.2.0.tcp-socket.finish-bind']!(<Object?>[
+        socket,
+      ]);
+      imports['wasi:sockets/tcp@0.2.0.tcp-socket.start-listen']!(<Object?>[
+        socket,
+      ]);
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        _resultError(
+          imports['wasi:sockets/tcp@0.2.0.tcp-socket.finish-listen']!(<Object?>[
+                socket,
+              ])!
+              as WasmComponentValueData,
+        ),
+        'address-in-use',
+      );
+      expect(
+        _resultError(
+          imports['wasi:sockets/tcp@0.2.0.tcp-socket.start-listen']!(<Object?>[
+                socket,
+              ])!
+              as WasmComponentValueData,
+        ),
+        'invalid-state',
+      );
+      expect(backend.tcpListenCount, 1);
+      expect(
+        _resultError(
+          imports['wasi:sockets/tcp@0.2.0.tcp-socket.start-connect']!(<Object?>[
+                socket,
+                network,
+                _ipv4SocketAddress(port: 9000),
+              ])!
+              as WasmComponentValueData,
+        ),
+        'invalid-state',
+      );
+      expect(backend.tcpConnectCount, 0);
+      expect(
+        _resultError(
+          imports['wasi:sockets/tcp@0.2.0.tcp-socket.finish-listen']!(<Object?>[
+                socket,
+              ])!
+              as WasmComponentValueData,
+        ),
+        'not-in-progress',
+      );
+      expect(
+        _resultError(
+          imports['wasi:sockets/tcp@0.2.0.tcp-socket.accept']!(<Object?>[
+                socket,
+              ])!
+              as WasmComponentValueData,
+        ),
+        'invalid-state',
+      );
+      expect(
+        sockets.pollHost.imports['wasi:io/poll@0.2.0.pollable.ready']!(
+          <Object?>[pollable],
+        ),
+        isTrue,
+      );
+      expect(sockets.table.activeCount, 3);
+      expect(
+        () => sockets.table.dropNamed(
+          'wasi:sockets/tcp@0.2.0.tcp-socket',
+          socket,
+        ),
+        throwsStateError,
+      );
+      sockets.table.dropNamed('wasi:io/poll@0.2.0.pollable', pollable);
+      sockets.table.dropNamed('wasi:sockets/tcp@0.2.0.tcp-socket', socket);
+      sockets.table.dropNamed('wasi:sockets/network@0.2.0.network', network);
+      expect(sockets.table.activeCount, 0);
+      expect(backend.tcpShutdowns, isEmpty);
+    });
 
     test(
       'UDP subscribe stays live across bind and I/O state changes',
@@ -1843,6 +1961,7 @@ final class _ClosableSocketsBackend implements WASIPreview2SocketsBackend {
   final Future<WASIPreview2SocketResult<WASIPreview2UdpBinding>>? udpBindFuture;
   final List<String> tcpShutdowns = <String>[];
   int tcpConnectCount = 0;
+  int tcpListenCount = 0;
   int udpCloseCount = 0;
 
   @override
@@ -1891,6 +2010,7 @@ final class _ClosableSocketsBackend implements WASIPreview2SocketsBackend {
     required WASIPreview2IpSocketAddress localAddress,
     required BigInt backlog,
   }) {
+    tcpListenCount++;
     final future = tcpListenFuture;
     return future == null
         ? WASIPreview2SocketOperation<WASIPreview2TcpListener>.completed(
