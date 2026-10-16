@@ -12,10 +12,14 @@ class Module implements wasm.Module {
   Module(ByteBuffer bytes, {Set<wasm.CoreFeature> features = const {}})
     : _bytes = bytes,
       features = native_features.WasmFeatureSet(
+        exceptionHandling: features.contains(
+          wasm.CoreFeature.exceptionHandling,
+        ),
         additionalEnabled: Set.unmodifiable(
           features.map(
             (feature) => switch (feature) {
               wasm.CoreFeature.multiMemory => 'multi-memory',
+              wasm.CoreFeature.exceptionHandling => 'exception-handling',
             },
           ),
         ),
@@ -29,6 +33,7 @@ class Module implements wasm.Module {
   final native_features.WasmFeatureSet features;
   static const supportedFeatures = <wasm.CoreFeature>{
     wasm.CoreFeature.multiMemory,
+    wasm.CoreFeature.exceptionHandling,
   };
   late final native_ir.WasmModule decoded;
   late final List<native_predecode.PredecodedFunction> predecodedFunctions;
@@ -43,6 +48,15 @@ class Module implements wasm.Module {
         bytes.asUint8List(),
         features: features,
       );
+      if (!features.exceptionHandling &&
+          (module.tags.isNotEmpty ||
+              module.imports.any(
+                (import) => import.kind == native_ir.WasmImportKind.tag,
+              ))) {
+        throw UnsupportedError(
+          'Exception handling is not enabled for tag declarations.',
+        );
+      }
       final predecodedFunctions = <native_predecode.PredecodedFunction>[];
       native_validator.WasmValidator.validateModule(
         module,

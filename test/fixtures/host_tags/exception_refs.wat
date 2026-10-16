@@ -1,0 +1,17 @@
+;; .toolchains/bin/wasm-tools parse test/fixtures/host_tags/exception_refs.wat -o test/fixtures/host_tags/exception_refs.wasm
+(module
+  (import "host" "tick" (func $tick))
+  (import "host" "tag" (tag $tag (param i32)))
+  (func (export "capture") (param i32) (result exnref)
+    (local $error exnref)
+    (block $caught (result i32 exnref)
+      (try_table (catch_ref $tag $caught)
+        call $tick local.get 0 throw $tag)
+      unreachable)
+    local.set $error drop local.get $error)
+  (func (export "rethrow") (param exnref) (result i32)
+    (block $caught (result i32)
+      (try_table (catch $tag $caught)
+        call $tick local.get 0 throw_ref)
+      unreachable))
+)

@@ -172,6 +172,9 @@ class ModuleExportDescriptor {
 enum CoreFeature {
   /// Multiple linear memories, including indexed memory instructions and data.
   multiMemory,
+
+  /// Exception tags and exception-handling instructions.
+  exceptionHandling,
 }
 
 /// Minimal module interface.
@@ -186,7 +189,8 @@ abstract interface class Module {
 
   /// Immutable set of explicit options supported by the selected backend.
   ///
-  /// The Dart VM supports [CoreFeature.multiMemory]. The JavaScript adapter
+  /// The Dart VM supports [CoreFeature.multiMemory] and
+  /// [CoreFeature.exceptionHandling]. The JavaScript adapter
   /// currently supports no explicit options; its default compilation still
   /// follows the platform WebAssembly engine. This query does not enumerate
   /// features that a backend may accept by default.

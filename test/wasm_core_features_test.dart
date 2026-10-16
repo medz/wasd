@@ -4,6 +4,7 @@ import 'package:test/test.dart';
 import 'package:wasd/wasm.dart';
 
 import 'support/core_multi_memory_fixtures.dart';
+import 'support/host_tag_fixtures.dart';
 import 'support/runtime_environment.dart';
 import 'support/wasm_fixtures.dart';
 
@@ -11,7 +12,9 @@ void main() {
   test('supported explicit options are immutable and backend specific', () {
     expect(
       Module.supportedFeatures,
-      hasDartIoRuntime ? {CoreFeature.multiMemory} : isEmpty,
+      hasDartIoRuntime
+          ? {CoreFeature.multiMemory, CoreFeature.exceptionHandling}
+          : isEmpty,
     );
     expect(
       () => Module.supportedFeatures.add(CoreFeature.multiMemory),
@@ -42,20 +45,72 @@ void main() {
     );
   }, skip: !hasDartIoRuntime);
 
-  test('JS rejects an unsupported explicit option before compilation', () {
-    expect(
-      () => Module(Uint8List(0).buffer, features: {CoreFeature.multiMemory}),
-      throwsA(
-        isA<CompileError>().having(
-          (e) => e.message,
-          'message',
-          contains('multiMemory'),
+  for (final feature in CoreFeature.values) {
+    test('JS rejects explicit $feature before compilation', () {
+      expect(
+        () => Module(Uint8List(0).buffer, features: {feature}),
+        throwsA(
+          isA<CompileError>().having(
+            (e) => e.message,
+            'message',
+            contains(feature.name),
+          ),
         ),
-      ),
-    );
-  }, skip: hasDartIoRuntime);
+      );
+    }, skip: hasDartIoRuntime);
+  }
 
   if (!hasDartIoRuntime) return;
+
+  test(
+    'VM defaults and explicit empty options still reject EH instructions',
+    () {
+      for (final features in <Set<CoreFeature>>[
+        {},
+        {CoreFeature.multiMemory},
+      ]) {
+        expect(
+          () => Module(hostTagFixture('empty').buffer, features: features),
+          throwsA(isA<CompileError>()),
+        );
+      }
+      expect(
+        () => Module(hostTagFixture('empty').buffer),
+        throwsA(isA<CompileError>()),
+      );
+    },
+  );
+
+  test('VM explicitly enables EH instructions alongside other options', () {
+    final options = {CoreFeature.exceptionHandling, CoreFeature.multiMemory};
+    final module = Module(hostTagFixture('empty').buffer, features: options);
+    options.clear();
+    final instance = Instance(module, {
+      'host': {
+        'tick': ImportExportKind.function((_) => null),
+        'tag': ImportExportKind.tag(Tag(const TagDescriptor(parameters: []))),
+      },
+    });
+    expect(
+      (instance.exports['catch']! as FunctionImportExportValue).ref([]),
+      isNull,
+    );
+  });
+
+  test('VM tag-only declarations require explicit exception handling', () {
+    for (final fixture in ['final_import', 'exported_payloads']) {
+      final bytes = hostTagFixture(fixture);
+      expect(() => Module(bytes.buffer), throwsA(isA<CompileError>()));
+      expect(
+        () => Module(bytes.buffer, features: {}),
+        throwsA(isA<CompileError>()),
+      );
+      expect(
+        () => Module(bytes.buffer, features: {CoreFeature.exceptionHandling}),
+        returnsNormally,
+      );
+    }
+  });
 
   test('different memory indices may share one imported memory', () {
     final shared = Memory(const MemoryDescriptor(initial: 1, maximum: 2));

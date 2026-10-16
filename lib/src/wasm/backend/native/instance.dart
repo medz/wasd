@@ -7,9 +7,11 @@ import 'interpreter/imports.dart' as ir_imports;
 import 'interpreter/instance.dart' as ir_instance;
 import 'interpreter/memory.dart' as ir_memory;
 import 'interpreter/runtime_global.dart' as ir_global;
+import 'interpreter/module.dart' as ir_module;
 import 'global.dart' as native_global;
 import 'memory.dart' as native_memory;
 import 'module.dart' as native_module;
+import 'tag.dart' as native_tag;
 
 class Instance implements wasm.Instance {
   Instance(
@@ -32,17 +34,24 @@ class Instance implements wasm.Instance {
     } catch (e) {
       throw LinkError(e.toString(), cause: e);
     }
-    _exports = _buildExports();
+    try {
+      _exports = _buildExports();
+    } on WasmError {
+      rethrow;
+    } catch (e) {
+      throw LinkError(e.toString(), cause: e);
+    }
   }
 
   final wasm.Module _module;
   late final ir_instance.WasmInstance _runtime;
   late final wasm.Exports _exports;
+  Map<String, native_tag.Tag>? _tagBindings;
 
   @override
   wasm.Exports get exports => _exports;
 
-  static ir_imports.WasmImports _buildImports(
+  ir_imports.WasmImports _buildImports(
     wasm.Module module,
     wasm.Imports imports,
   ) {
@@ -50,6 +59,32 @@ class Instance implements wasm.Instance {
     final asyncFunctions = <String, ir_imports.WasmAsyncHostFunction>{};
     final memories = <String, ir_memory.WasmMemory>{};
     final globalBindings = <String, ir_global.RuntimeGlobal>{};
+    final tags = <String, ir_imports.WasmTagImport>{};
+    final decoded = (module as native_module.Module).decoded;
+    final declaredTags = <(String, String)>{};
+    for (final import in decoded.imports) {
+      if (import.kind == ir_module.WasmImportKind.tag) {
+        native_tag.Tag.checkSupportedType(
+          decoded.types[import.tagType!.typeIndex],
+        );
+        declaredTags.add((import.module, import.name));
+      }
+    }
+    if (decoded.exports.any(
+      (export) => export.kind == ir_module.WasmExportKind.tag,
+    )) {
+      final tagTypes = [
+        for (final import in decoded.imports)
+          if (import.kind == ir_module.WasmImportKind.tag)
+            decoded.types[import.tagType!.typeIndex],
+        for (final tag in decoded.tags) decoded.types[tag.typeIndex],
+      ];
+      for (final export in decoded.exports) {
+        if (export.kind == ir_module.WasmExportKind.tag) {
+          native_tag.Tag.checkSupportedType(tagTypes[export.index]);
+        }
+      }
+    }
     final declaredGlobals = {
       for (final descriptor in wasm.Module.imports(module))
         if (descriptor.kind == wasm.ImportExportKind.global)
@@ -98,6 +133,18 @@ class Instance implements wasm.Instance {
               );
             }
             globalBindings[key] = ref.host;
+          case wasm.TagImportExportValue(:final ref):
+            if (!declaredTags.contains((moduleEntry.key, importEntry.key))) {
+              continue;
+            }
+            if (ref is! native_tag.Tag) {
+              throw LinkError(
+                'Tag import `$key` must be created by native backend.',
+              );
+            }
+            final binding = ref.host;
+            tags[key] = binding;
+            (_tagBindings ??= {})[binding.nominalTypeKey] = ref;
           default:
             throw LinkError(
               'Unsupported native import value `${importValue.runtimeType}` for `$key`.',
@@ -111,6 +158,7 @@ class Instance implements wasm.Instance {
       asyncFunctions: asyncFunctions,
       memories: memories,
       globalBindings: globalBindings,
+      tags: tags,
     );
   }
 
@@ -120,10 +168,13 @@ class Instance implements wasm.Instance {
       final name = descriptor.name;
       switch (descriptor.kind) {
         case wasm.ImportExportKind.function:
+          if (_runtime.hasAsyncOnlyHostImports) {
+            result[name] = wasm.ImportExportKind.function(
+              (List<Object?> args) => _runtime.invokeAsync(name, args),
+            );
+            continue;
+          }
           result[name] = wasm.ImportExportKind.function((List<Object?> args) {
-            if (_runtime.hasAsyncOnlyHostImports) {
-              return _runtime.invokeAsync(name, args);
-            }
             try {
               return _runtime.invoke(name, args);
             } catch (error) {
@@ -146,8 +197,14 @@ class Instance implements wasm.Instance {
               native_global.fromRuntime(binding),
             );
           }
-        case wasm.ImportExportKind.table:
         case wasm.ImportExportKind.tag:
+          final binding = _runtime.exportedTagImport(name);
+          final tag = (_tagBindings ??= {}).putIfAbsent(
+            binding.nominalTypeKey,
+            () => native_tag.Tag.fromRuntime(binding),
+          );
+          result[name] = wasm.ImportExportKind.tag(tag);
+        case wasm.ImportExportKind.table:
           break;
       }
     }
