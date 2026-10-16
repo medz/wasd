@@ -97,6 +97,21 @@ void main() {
     );
   });
 
+  test('VM tag-only declarations require explicit exception handling', () {
+    for (final fixture in ['final_import', 'exported_payloads']) {
+      final bytes = hostTagFixture(fixture);
+      expect(() => Module(bytes.buffer), throwsA(isA<CompileError>()));
+      expect(
+        () => Module(bytes.buffer, features: {}),
+        throwsA(isA<CompileError>()),
+      );
+      expect(
+        () => Module(bytes.buffer, features: {CoreFeature.exceptionHandling}),
+        returnsNormally,
+      );
+    }
+  });
+
   test('different memory indices may share one imported memory', () {
     final shared = Memory(const MemoryDescriptor(initial: 1, maximum: 2));
     final module = Module(

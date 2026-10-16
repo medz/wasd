@@ -39,8 +39,11 @@ calling convention when re-imported, so an importing instance selects the async
 pipeline without replaying a synchronous attempt. Exception references captured
 by `catch_ref` also remain valid across instances and interpreter modes.
 
-The option preserves the default and empty feature-set behavior and does not
-enable unrelated interpreter extensions. Throwing or inspecting guest exceptions
+The option does not enable unrelated interpreter extensions. Tag-only modules
+also require this option, even when they execute no exception instructions;
+older native compilation accepted these declarations without usable public tag
+bindings. Default scalar modules retain their existing behavior.
+Throwing or inspecting guest exceptions
 through the existing public host `Exception` API remains unsupported.
 General reference/vector tags, JavaScript tag
 reflection and whole-Core conformance remain separate acceptance work under the

@@ -48,6 +48,15 @@ class Module implements wasm.Module {
         bytes.asUint8List(),
         features: features,
       );
+      if (!features.exceptionHandling &&
+          (module.tags.isNotEmpty ||
+              module.imports.any(
+                (import) => import.kind == native_ir.WasmImportKind.tag,
+              ))) {
+        throw UnsupportedError(
+          'Exception handling is not enabled for tag declarations.',
+        );
+      }
       final predecodedFunctions = <native_predecode.PredecodedFunction>[];
       native_validator.WasmValidator.validateModule(
         module,
