@@ -16,9 +16,7 @@ int? _readHostCpuClock(int id, {required bool resolution}) {
     return null;
   }
   try {
-    final library = Platform.isLinux
-        ? ffi.DynamicLibrary.open('libc.so.6')
-        : ffi.DynamicLibrary.process();
+    final library = ffi.DynamicLibrary.process();
     final read = library
         .lookupFunction<
           ffi.Int32 Function(ffi.Int32, ffi.Pointer<_Timespec>),

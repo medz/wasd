@@ -3682,7 +3682,11 @@ int? _nativeCpuClockNanos(int clockId, {required bool resolution}) {
 
 ffi.DynamicLibrary _openPosixCLibrary() {
   if (io.Platform.isLinux) {
-    return ffi.DynamicLibrary.open('libc.so.6');
+    try {
+      return ffi.DynamicLibrary.open('libc.so.6');
+    } catch (_) {
+      return ffi.DynamicLibrary.process();
+    }
   }
   if (io.Platform.isAndroid) {
     return ffi.DynamicLibrary.open('libc.so');
