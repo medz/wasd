@@ -231,6 +231,72 @@ void main() {
     );
   }
 
+  for (final delayed in [false, true]) {
+    for (final invoke in [false, true]) {
+      test(
+        'initialization rejects same-chain reentry delayed=$delayed invoke=$invoke',
+        () async {
+          var calls = 0;
+          final unhandled = <Object>[];
+          Object? reentryError;
+          Object? initializationError;
+          late WASIComponentNativeRuntime runtime;
+          await runZonedGuarded(
+            () async {
+              runtime = WASIComponentNativeRuntime.component(
+                component: _componentStart(),
+                host: WASIComponentHost(),
+                imports: {
+                  'source': (_) {
+                    calls++;
+                    Future<void> reenter() async {
+                      try {
+                        if (invoke) {
+                          await runtime.invokeExport('missing', []);
+                        } else {
+                          await runtime.initialize();
+                        }
+                      } catch (error) {
+                        reentryError = error;
+                      }
+                    }
+
+                    return delayed
+                        ? Future<void>.delayed(
+                            Duration.zero,
+                          ).then((_) => reenter())
+                        : reenter();
+                  },
+                },
+              );
+              try {
+                await runtime.initialize().timeout(const Duration(seconds: 1));
+              } catch (error) {
+                initializationError = error;
+              }
+              await Future<void>.delayed(Duration.zero);
+            },
+            (error, stack) {
+              unhandled.add(error);
+            },
+          );
+          expect(calls, 1);
+          expect(initializationError, isNull);
+          expect(unhandled, isEmpty);
+          expect(
+            reentryError,
+            isA<WASIPreview2ComponentExecutionException>().having(
+              (error) => error.message,
+              'message',
+              contains('Reentrant Component initialization'),
+            ),
+          );
+          await runtime.initialize();
+        },
+      );
+    }
+  }
+
   test('concurrent initialization awaits the same Component start', () async {
     final completion = Completer<void>();
     var calls = 0;

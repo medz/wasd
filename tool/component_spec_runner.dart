@@ -72,7 +72,9 @@ Future<Map<String, Object?>> executeComponentSpecScript(
         switch (type) {
           case 'module':
             current = null;
-            if (raw['name'] != null || raw['module_type'] == 'text') {
+            final encoding = raw['module_type'];
+            if (raw['name'] != null ||
+                (encoding != null && encoding != 'binary')) {
               throw UnsupportedError(
                 'Only unnamed binary components are supported.',
               );
@@ -362,7 +364,14 @@ Future<Map<String, Object?>> runComponentSpecManifest(
   } catch (error) {
     result['error'] = error.toString();
   } finally {
-    if (temporary != null) await temporary.delete(recursive: true);
+    if (temporary != null) {
+      try {
+        await temporary.delete(recursive: true);
+      } catch (error) {
+        result['status'] = 'failed';
+        result['cleanup_error'] = error.toString();
+      }
+    }
   }
   final totals = <String, int>{
     'files_total': reports.length,

@@ -42,6 +42,73 @@ void main() {
     expect((files.single as Map)['commands'], hasLength(17));
   });
 
+  test('byte-pinned fixtures survive an autocrlf checkout', () async {
+    final checkout = await Directory.systemTemp.createTemp(
+      'wasd-component-crlf-',
+    );
+    addTearDown(() => checkout.delete(recursive: true));
+    Future<void> git(List<String> args) async {
+      final result = await Process.run(
+        'git',
+        args,
+        workingDirectory: checkout.path,
+      );
+      expect(result.exitCode, 0, reason: '${result.stdout}${result.stderr}');
+    }
+
+    const paths = ['$_fixture/strings.wast', '$_fixture/script.json'];
+    await File('.gitattributes').copy('${checkout.path}/.gitattributes');
+    for (final path in paths) {
+      final target = File('${checkout.path}/$path');
+      await target.parent.create(recursive: true);
+      await File(path).copy(target.path);
+    }
+    await git(['init', '-q']);
+    await git(['config', 'core.autocrlf', 'true']);
+    await git(['add', '.gitattributes', ...paths]);
+    for (final path in paths) {
+      await File('${checkout.path}/$path').delete();
+    }
+    await git(['checkout', '--', ...paths]);
+    for (final path in paths) {
+      expect(
+        await File('${checkout.path}/$path').readAsBytes(),
+        await File(path).readAsBytes(),
+        reason: path,
+      );
+    }
+  });
+
+  for (final encoding in ['text', 'future', '', 0, false]) {
+    test(
+      'unknown module encoding $encoding fails and preserves counts',
+      () async {
+        final script = _script();
+        (script['commands'] as List)[0]['module_type'] = encoding;
+        final report = await _run(script);
+        final commands = report['commands'] as List;
+        expect(report['status'], 'failed');
+        expect(commands[0]['passed'], false);
+        expect(
+          commands[0]['error'],
+          contains('Only unnamed binary components'),
+        );
+        final totals = report['totals'] as Map;
+        expect(totals['commands_seen'], 17);
+        expect(totals['instantiations_seen'], 8);
+        expect(totals['commands_skipped'], 0);
+      },
+    );
+  }
+
+  test('explicit binary module encoding executes', () async {
+    final script = _script();
+    for (final command in script['commands'] as List) {
+      if (command['type'] == 'module') command['module_type'] = 'binary';
+    }
+    expect((await _run(script))['status'], 'passed');
+  });
+
   test('wrong string expectation fails', () async {
     final script = _script();
     ((script['commands'] as List)[1]['expected'] as List)[0]['value'] = 'wrong';
@@ -304,6 +371,53 @@ void main() {
       expect(files[1]['error'], contains('File entry must be an object'));
       expect(files[2]['status'], 'passed');
     },
+  );
+
+  test(
+    'cleanup failures retain the completed report and mark it failed',
+    () async {
+      final temp = await _copyFixtures();
+      final marker = File('${temp.path}/conversion-path.txt');
+      addTearDown(() async {
+        if (await marker.exists()) {
+          final path = (await marker.readAsString()).trim();
+          await Process.run('chmod', ['700', path]);
+          final conversion = Directory(path).parent;
+          if (await conversion.exists()) {
+            await conversion.delete(recursive: true);
+          }
+        }
+        await temp.delete(recursive: true);
+      });
+      final converter = File('${temp.path}/converter.sh');
+      await converter.writeAsString('''#!/bin/sh
+if [ "\$1" = "--version" ]; then
+  echo "wasm-tools 1.262.0 cleanup test converter"
+  exit 0
+fi
+output=""
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in -o) shift; output="\$1" ;; esac
+  shift
+done
+cp '${temp.path}/strings/script.json' "\$output"
+cp '${temp.path}/strings/'*.wasm .
+printf '%s' "\$PWD" > '${marker.path}'
+chmod 500 "\$PWD"
+''');
+      await Process.run('chmod', ['+x', converter.path]);
+      final report = await runner.runComponentSpecManifest(
+        File('${temp.path}/manifest.json'),
+        converter: converter.path,
+      );
+      expect(report['status'], 'failed');
+      expect(report['cleanup_error'], isA<String>());
+      final totals = report['totals'] as Map;
+      expect(totals['files_total'], 1);
+      expect(totals['files_passed'], 1);
+      expect(totals['commands_passed'], 17);
+    },
+    skip: Platform.isWindows ? 'Uses POSIX directory permissions.' : false,
   );
 
   for (final mixed in [false, true]) {

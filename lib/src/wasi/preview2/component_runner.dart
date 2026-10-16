@@ -175,7 +175,30 @@ final class WASIComponentNativeRuntime {
   /// Instantiates this component once, retaining its state for later calls.
   Future<void> initialize() {
     if (_genericHost == null) return Future<void>.sync(_initialize);
-    return _genericInitialization ??= _initializeGeneric();
+    if (_initialized) return _genericInitialization ??= Future<void>.value();
+    if (Zone.current[this] == true) {
+      return Future<void>.error(
+        const WASIPreview2ComponentExecutionException(
+          'Reentrant Component initialization is not supported.',
+        ),
+      );
+    }
+    final pending = _genericInitialization;
+    if (pending != null) return pending;
+    final initialization = Completer<void>();
+    // Publish the pending result before a start can invoke a host callback.
+    _genericInitialization = initialization.future;
+    unawaited(
+      runZoned(() async {
+        try {
+          await _initializeGeneric();
+          initialization.complete();
+        } catch (error, stack) {
+          initialization.completeError(error, stack);
+        }
+      }, zoneValues: {this: true}),
+    );
+    return initialization.future;
   }
 
   /// Invokes a named component function export and awaits host callbacks.
