@@ -181,6 +181,21 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        asyncTypeIndex = null,
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
+  /// Map despecialized to a list of key/value tuples in a `(ptr, len)` pair.
+  const WASIComponentCanonicalAdapterFlatValuePlan.map({
+    required this.element,
+    required this.memoryCodec,
+  }) : kind = WASIComponentCanonicalAdapterFlatValueKind.map,
+       primitive = null,
+       labels = const <String>[],
+       ok = null,
+       error = null,
+       cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
+       handleKind = null,
+       resourceTypeIndex = null,
+       asyncTypeIndex = null,
+       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
+
   /// Option tag plus payload flat layout.
   const WASIComponentCanonicalAdapterFlatValuePlan.option({
     required this.element,
@@ -298,7 +313,7 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
   /// Labels used by flags or enum layouts.
   final List<String> labels;
 
-  /// Element layout used by dynamic list layouts.
+  /// Element layout used by dynamic list and despecialized map layouts.
   final WASIComponentCanonicalAdapterFlatValuePlan? element;
 
   /// Success payload layout used by result layouts.
@@ -332,7 +347,8 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
         kind == WASIComponentCanonicalAdapterFlatValueKind.enumeration) {
       return 1;
     }
-    if (kind == WASIComponentCanonicalAdapterFlatValueKind.list) {
+    if (kind == WASIComponentCanonicalAdapterFlatValueKind.list ||
+        kind == WASIComponentCanonicalAdapterFlatValueKind.map) {
       return 2;
     }
     if (kind == WASIComponentCanonicalAdapterFlatValueKind.resource ||
@@ -403,7 +419,8 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
         WASIComponentCanonicalAdapterFlatType.i32,
       ];
     }
-    if (kind == WASIComponentCanonicalAdapterFlatValueKind.list) {
+    if (kind == WASIComponentCanonicalAdapterFlatValueKind.list ||
+        kind == WASIComponentCanonicalAdapterFlatValueKind.map) {
       return const <WASIComponentCanonicalAdapterFlatType>[
         WASIComponentCanonicalAdapterFlatType.i32,
         WASIComponentCanonicalAdapterFlatType.i32,
@@ -512,6 +529,9 @@ enum WASIComponentCanonicalAdapterFlatValueKind {
 
   /// Dynamic list represented by a `(ptr, len)` scalar pair.
   list,
+
+  /// Map represented by the `(ptr, len)` pair of a list of key/value tuples.
+  map,
 
   /// Option represented by a tag plus payload scalar sequence.
   option,
@@ -870,6 +890,34 @@ final class _FlatLayoutResolver {
                 element: elementLayout,
                 memoryCodec: memoryCodec,
               );
+      case WasmComponentDefinedValueTypeKind.map:
+        final keyType = type.keyType;
+        final valueType = type.valueType;
+        if (keyType == null || valueType == null || memoryCodec == null) {
+          return null;
+        }
+        final keyLayout = _resolveValueType(keyType, scope);
+        final valueLayout = _resolveValueType(valueType, scope);
+        if (keyLayout == null || valueLayout == null) {
+          return null;
+        }
+        return WASIComponentCanonicalAdapterFlatValuePlan.map(
+          element: WASIComponentCanonicalAdapterFlatValuePlan.composite(
+            kind: WASIComponentCanonicalAdapterFlatValueKind.tuple,
+            fields:
+                List<WASIComponentCanonicalAdapterFlatFieldPlan>.unmodifiable([
+                  WASIComponentCanonicalAdapterFlatFieldPlan(
+                    label: '0',
+                    value: keyLayout,
+                  ),
+                  WASIComponentCanonicalAdapterFlatFieldPlan(
+                    label: '1',
+                    value: valueLayout,
+                  ),
+                ]),
+          ),
+          memoryCodec: memoryCodec,
+        );
       case WasmComponentDefinedValueTypeKind.option:
         final elementType = type.elementType;
         if (elementType == null) {

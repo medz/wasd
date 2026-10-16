@@ -18,8 +18,384 @@ import 'package:wasd/src/wasm/memory.dart' as wasm;
 
 import 'support/component_fixtures.dart';
 
+Uint8List _mapLiftLowerComponentBytes() {
+  final bytes = canonicalU32ListLiftLowerComponentBytes();
+  for (var i = 8; i + 4 < bytes.length; i++) {
+    if (bytes[i] == 0x07 &&
+        bytes[i + 1] == 0x0e &&
+        bytes[i + 2] == 0x02 &&
+        bytes[i + 3] == 0x70 &&
+        bytes[i + 4] == 0x79) {
+      return Uint8List.fromList([
+        ...bytes.take(i),
+        0x07,
+        0x0f,
+        0x02,
+        0x63,
+        0x79,
+        0x73,
+        ...bytes.skip(i + 5),
+      ]);
+    }
+  }
+  throw StateError('Missing canonical list fixture type section.');
+}
+
+WasmComponentValueData _mapAdapterValue(List<(int, String)> entries) =>
+    WasmComponentValueData(
+      kind: WasmComponentValueDataKind.map,
+      rawBytes: Uint8List(0),
+      items: [
+        for (final entry in entries)
+          WasmComponentValueData(
+            kind: WasmComponentValueDataKind.tuple,
+            rawBytes: Uint8List(0),
+            items: [
+              WasmComponentValueData(
+                kind: WasmComponentValueDataKind.integer,
+                rawBytes: Uint8List(0),
+                integer: entry.$1,
+              ),
+              WasmComponentValueData(
+                kind: WasmComponentValueDataKind.string,
+                rawBytes: Uint8List(0),
+                string: entry.$2,
+              ),
+            ],
+          ),
+      ],
+    );
+
+List<(int, String)> _mapAdapterEntries(WasmComponentValueData value) => [
+  for (final entry in value.items)
+    (entry.items[0].integer! as int, entry.items[1].string!),
+];
+
 void main() {
   group('WASI component canonical adapter plans', () {
+    test('plans a decoded map as a typed pointer length pair', () {
+      final component = WasmComponent.decode(_mapLiftLowerComponentBytes());
+      expect(component.validate(), isEmpty);
+      final plans = componentCanonicalAdapterPlans(component);
+      expect(plans, hasLength(2));
+      for (final plan in plans) {
+        expect(plan.params.single.flatLayout, isNotNull);
+        expect(plan.params.single.flatLayout!.kind.name, 'map');
+        expect(plan.params.single.byteLength, 8);
+        expect(plan.params.single.alignment, 4);
+        expect(plan.params.single.flatLength, 2);
+        expect(plan.params.single.flatLayout!.flatTypes, [
+          WASIComponentCanonicalAdapterFlatType.i32,
+          WASIComponentCanonicalAdapterFlatType.i32,
+        ]);
+        expect(plan.result!.flatLayout!.kind.name, 'map');
+        expect(plan.hasDynamicPayload, isTrue);
+      }
+    });
+
+    test(
+      'invokes map lift and lower callbacks through pointer length pairs',
+      () {
+        final component = WasmComponent.decode(_mapLiftLowerComponentBytes());
+        final plans = componentCanonicalAdapterPlans(component);
+        final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
+        final realloc = _bumpRealloc(memory, start: 512);
+        final codec = plans.first.params.single.memoryCodec!;
+        final input = _mapAdapterValue([(7, 'one'), (7, 'two')]);
+        final output = _mapAdapterValue([(9, 'three'), (9, 'four')]);
+        final inputFlat = codec.storeFlatList(memory, input, realloc: realloc);
+        final seen = <WasmComponentCanonicalKind>[];
+        WasmComponentValueData callback(
+          List<Object?> args,
+          WasmComponentCanonicalKind direction,
+        ) {
+          seen.add(direction);
+          final actual = args.single! as WasmComponentValueData;
+          expect(actual.kind, WasmComponentValueDataKind.map);
+          expect(_mapAdapterEntries(actual), [(7, 'one'), (7, 'two')]);
+          return output;
+        }
+
+        final program = const WASIComponentCanonicalAdapterHost()
+            .bindAdapterPlans(
+              plans,
+              coreFunctions: {
+                1: (args) => callback(args, WasmComponentCanonicalKind.lift),
+              },
+              componentFunctions: {
+                0: (args) => callback(args, WasmComponentCanonicalKind.lower),
+              },
+            );
+        for (final index in [0, 1]) {
+          final flat = program.invokeFlat(
+            index,
+            [inputFlat.pointer, inputFlat.length],
+            memory: memory,
+            realloc: realloc,
+          );
+          final actual = codec.loadFlatList(
+            memory,
+            flat[0]! as int,
+            flat[1]! as int,
+          );
+          expect(actual.kind, WasmComponentValueDataKind.map);
+          expect(_mapAdapterEntries(actual), [(9, 'three'), (9, 'four')]);
+        }
+        expect(seen, [
+          WasmComponentCanonicalKind.lift,
+          WasmComponentCanonicalKind.lower,
+        ]);
+        expect(
+          () => program.invokeFlat(
+            0,
+            [65532, 1],
+            memory: memory,
+            realloc: realloc,
+          ),
+          throwsRangeError,
+        );
+        expect(
+          () => program.invokeFlat(0, [inputFlat.pointer, inputFlat.length]),
+          throwsStateError,
+        );
+        expect(
+          () => program.invokeFlat(0, [
+            inputFlat.pointer,
+            inputFlat.length,
+          ], memory: memory),
+          throwsUnsupportedError,
+        );
+      },
+    );
+
+    test(
+      'distinguishes map key and value types when resolving async aliases',
+      () {
+        final typeBytes = <int>[
+          0x63, 0x79, 0x73, // map<u32, string>
+          0x63, 0x77, 0x73, // map<u64, string>
+          0x63, 0x79, 0x7f, // map<u32, bool>
+          0x66, 0x01, 0x00, // stream<type[0]>
+          0x66, 0x01, 0x01,
+          0x66, 0x01, 0x02,
+        ];
+        final component = WasmComponent.decode(
+          Uint8List.fromList([
+            0x00,
+            0x61,
+            0x73,
+            0x6d,
+            0x0d,
+            0x00,
+            0x01,
+            0x00,
+            0x07,
+            typeBytes.length + 1,
+            6,
+            ...typeBytes,
+          ]),
+        );
+        expect(component.validate(), isEmpty);
+        for (var index = 0; index < 3; index++) {
+          final mapBytes = typeBytes.sublist(index * 3, index * 3 + 3);
+          final source = WasmComponent.decode(
+            Uint8List.fromList([
+              0x00,
+              0x61,
+              0x73,
+              0x6d,
+              0x0d,
+              0x00,
+              0x01,
+              0x00,
+              0x07,
+              7,
+              2,
+              ...mapBytes,
+              0x66,
+              0x01,
+              0x00,
+            ]),
+          );
+          expect(
+            wasiComponentAsyncValueTypeIndex(
+              component,
+              1,
+              source.componentTypeIndexDefinitions,
+            ),
+            3 + index,
+          );
+        }
+      },
+    );
+
+    test('lowers borrowed handles inside ordered map tuples', () {
+      const definitions = <WasmComponentTypeDefinition>[
+        WasmComponentTypeDefinition(
+          kind: WasmComponentTypeKind.resource,
+          resource: WasmComponentResourceType.abstract(),
+        ),
+        WasmComponentTypeDefinition(
+          kind: WasmComponentTypeKind.definedValue,
+          definedValue: WasmComponentDefinedValueType(
+            kind: WasmComponentDefinedValueTypeKind.borrow,
+            typeIndex: 0,
+          ),
+        ),
+        WasmComponentTypeDefinition(
+          kind: WasmComponentTypeKind.definedValue,
+          definedValue: WasmComponentDefinedValueType(
+            kind: WasmComponentDefinedValueTypeKind.map,
+            keyType: WasmComponentValueType.primitive(
+              WasmComponentPrimitiveValueType.u32,
+            ),
+            valueType: WasmComponentValueType.typeIndex(1),
+          ),
+        ),
+      ];
+      final codec = WASIComponentCanonicalValueMemoryCodec.fromAdapterValueType(
+        const WasmComponentValueType.typeIndex(2),
+        definitions,
+      )!;
+      expect(
+        WASIComponentCanonicalValueMemoryCodec.fromAsyncElementType(
+          const WasmComponentValueType.typeIndex(2),
+          definitions,
+        ),
+        isNull,
+      );
+      final layout = WASIComponentCanonicalAdapterFlatValuePlan.map(
+        memoryCodec: codec,
+        element: const WASIComponentCanonicalAdapterFlatValuePlan.composite(
+          kind: WASIComponentCanonicalAdapterFlatValueKind.tuple,
+          fields: [
+            WASIComponentCanonicalAdapterFlatFieldPlan(
+              label: '0',
+              value: WASIComponentCanonicalAdapterFlatValuePlan.primitive(
+                WasmComponentPrimitiveValueType.u32,
+              ),
+            ),
+            WASIComponentCanonicalAdapterFlatFieldPlan(
+              label: '1',
+              value: WASIComponentCanonicalAdapterFlatValuePlan.resource(
+                handleKind: WASIComponentResourceHandleKind.borrow,
+                resourceTypeIndex: 0,
+              ),
+            ),
+          ],
+        ),
+      );
+      final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
+      var closed = 0;
+      List<Object?>? received;
+      final program =
+          WASIComponentCanonicalAdapterHost(
+            borrowLowering: (_) => WASIComponentCanonicalBorrowLowering(
+              lower: (handle) => handle + 1000,
+              close: () {
+                closed++;
+              },
+              isCallScoped: false,
+            ),
+          ).bindAdapterPlans(
+            [_borrowLiftPlan(layout)],
+            coreFunctions: {
+              0: (args) {
+                received = args;
+                final value = codec.loadFlatList(
+                  memory,
+                  args[0]! as int,
+                  args[1]! as int,
+                );
+                expect(value.kind, WasmComponentValueDataKind.map);
+                expect(
+                  value.items.map(
+                    (item) => item.items.map((part) => part.integer),
+                  ),
+                  [
+                    [7, 1008],
+                    [7, 1009],
+                  ],
+                );
+                return null;
+              },
+            },
+          );
+      final value = WasmComponentValueData(
+        kind: WasmComponentValueDataKind.map,
+        rawBytes: Uint8List(0),
+        items: [
+          _u32CompositeValue(WasmComponentValueDataKind.tuple, [7, 8]),
+          _u32CompositeValue(WasmComponentValueDataKind.tuple, [7, 9]),
+        ],
+      );
+      expect(
+        program.invokeLiftedCore(
+          0,
+          [value],
+          memory: memory,
+          realloc: (_, _, _, _) => 64,
+        ),
+        isNull,
+      );
+      expect(received, [64, 2]);
+      expect(closed, 1);
+    });
+
+    test(
+      'collects owned resource uses through map values in both adapters',
+      () {
+        final bytes = _mapLiftLowerComponentBytes().toList();
+        final types = <int>[
+          4,
+          0x3f, 0x7f, 0x00, // resource i32
+          0x69, 0x00, // own<resource[0]>
+          0x63, 0x79, 0x01, // map<u32, own[0]>
+          0x40, 1, 5, ...'input'.codeUnits, 2, 0, 2,
+        ];
+        for (var index = 8; index + 5 < bytes.length; index++) {
+          if (bytes[index] == 7 &&
+              bytes[index + 1] == 15 &&
+              bytes[index + 2] == 2 &&
+              bytes[index + 3] == 0x63) {
+            bytes.replaceRange(index, index + 17, [7, types.length, ...types]);
+            break;
+          }
+        }
+        for (var index = 8; index + 11 < bytes.length; index++) {
+          if (bytes[index] == 8 &&
+              bytes[index + 1] == 18 &&
+              bytes[index + 2] == 2 &&
+              bytes[index + 3] == 0) {
+            bytes[index + 11] = 3; // canonical lift function type
+            break;
+          }
+        }
+        final component = WasmComponent.decode(Uint8List.fromList(bytes));
+        expect(component.validate(), isEmpty);
+        final uses = WASIComponentResourceHost().componentCanonicalResourceUses(
+          component,
+        );
+        expect(uses.map((use) => use.path), [
+          'canonical[0].param[0].input.value',
+          'canonical[0].result.value',
+          'canonical[1].param[0].input.value',
+          'canonical[1].result.value',
+        ]);
+        expect(uses.map((use) => use.resourceTypeIndex), everyElement(0));
+        expect(
+          uses.map((use) => use.handleKind),
+          everyElement(WASIComponentResourceHandleKind.own),
+        );
+        expect(
+          componentCanonicalAdapterPlans(
+            component,
+          ).map((plan) => plan.hasResourceHandles),
+          everyElement(isTrue),
+        );
+      },
+    );
+
     test('maps a scoped async alias by identity among duplicate shapes', () {
       final component = WasmComponent.decode(
         duplicateU32StreamTypeComponentBytes(),

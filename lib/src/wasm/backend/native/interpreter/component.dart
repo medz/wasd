@@ -429,6 +429,7 @@ enum WasmComponentDefinedValueTypeKind {
   record,
   variant,
   list,
+  map,
   fixedList,
   tuple,
   flags,
@@ -448,6 +449,8 @@ final class WasmComponentDefinedValueType {
     this.fields = const <WasmComponentLabeledValueType>[],
     this.cases = const <WasmComponentVariantCase>[],
     this.elementType,
+    this.keyType,
+    this.valueType,
     this.fixedLength,
     this.types = const <WasmComponentValueType>[],
     this.labels = const <String>[],
@@ -461,6 +464,8 @@ final class WasmComponentDefinedValueType {
   final List<WasmComponentLabeledValueType> fields;
   final List<WasmComponentVariantCase> cases;
   final WasmComponentValueType? elementType;
+  final WasmComponentValueType? keyType;
+  final WasmComponentValueType? valueType;
   final int? fixedLength;
   final List<WasmComponentValueType> types;
   final List<String> labels;
@@ -636,6 +641,7 @@ enum WasmComponentValueDataKind {
   tuple,
   record,
   list,
+  map,
   fixedList,
   variant,
   flags,
@@ -827,11 +833,13 @@ final class _WasmComponentValueIndexEntry {
   _WasmComponentValueIndexEntry({
     required this.originPath,
     this.type,
+    this.typeScope,
     this.requiresConsumption = true,
   });
 
   final String originPath;
   final WasmComponentValueType? type;
+  final WasmComponentTypeScope? typeScope;
   bool consumed = false;
   final bool requiresConsumption;
 }
@@ -843,6 +851,7 @@ final class _WasmComponentMaterializedIndexSpaces {
     required this.functionTypes,
     required this.functionTypeContexts,
     required this.valueTypes,
+    required this.valueTypeScopes,
   });
 
   final List<WasmComponentTypeDefinition> typeDefinitions;
@@ -850,6 +859,7 @@ final class _WasmComponentMaterializedIndexSpaces {
   final List<WasmComponentFunctionType?> functionTypes;
   final List<WasmComponentFunctionTypeContext?> functionTypeContexts;
   final List<WasmComponentValueType?> valueTypes;
+  final List<WasmComponentTypeScope?> valueTypeScopes;
 }
 
 final class WasmComponentTypeScope {
@@ -903,6 +913,7 @@ final class _WasmComponentInstanceExportEntry {
     this.function,
     this.functionContext,
     this.value,
+    this.valueTypeScope,
     this.typeDefinition,
     this.typeDefinitionContext,
   });
@@ -911,6 +922,7 @@ final class _WasmComponentInstanceExportEntry {
   final WasmComponentFunctionType? function;
   final WasmComponentFunctionTypeContext? functionContext;
   final WasmComponentValueType? value;
+  final WasmComponentTypeScope? valueTypeScope;
   final WasmComponentTypeDefinition? typeDefinition;
   final WasmComponentTypeDefinitionContext? typeDefinitionContext;
 }
@@ -1107,6 +1119,7 @@ final class WasmComponent {
     final functionTypes = <WasmComponentFunctionType?>[];
     final functionTypeContexts = <WasmComponentFunctionTypeContext?>[];
     final valueTypes = <WasmComponentValueType?>[];
+    final valueTypeScopes = <WasmComponentTypeScope?>[];
     final instanceExportMaps = <_WasmComponentInstanceExportMap?>[];
     var decodedTypeDefinitionCount = 0;
 
@@ -1146,11 +1159,20 @@ final class WasmComponent {
         valueTypes.addAll(
           List<WasmComponentValueType?>.filled(start.resultCount, null),
         );
+        valueTypeScopes.addAll(
+          List<WasmComponentTypeScope?>.filled(start.resultCount, null),
+        );
         return;
       }
       final resultType = functionType.result;
       if (resultType != null) {
         valueTypes.add(resultType);
+        valueTypeScopes.add(
+          _componentFunctionTypeScopeAt(
+            functionTypeContexts,
+            start.functionIndex,
+          ),
+        );
       }
     }
 
@@ -1178,19 +1200,29 @@ final class WasmComponent {
         case _WasmComponentDefinitionEventKind.import:
           final descriptor = imports[event.index].descriptor;
           if (descriptor.kind == WasmComponentExternKind.function) {
-            addFunctionType(
-              _componentFunctionTypeFromDefinitions(
-                visibleTypeDefinitions,
-                descriptor.typeIndex,
-              ),
+            final context = _componentFunctionTypeContextFromDefinitions(
               visibleTypeDefinitions,
-              visibleTypeScope,
+              descriptor.typeIndex,
+              typeScope: visibleTypeScope,
+            );
+            addFunctionType(
+              context?.functionType,
+              context?.typeDefinitions,
+              context?.typeScope,
             );
           } else if (descriptor.kind == WasmComponentExternKind.value) {
             valueTypes.add(
               descriptor.boundKind == WasmComponentExternBoundKind.equality
                   ? _componentValueTypeAt(valueTypes, descriptor.valueIndex)
                   : descriptor.valueType,
+            );
+            valueTypeScopes.add(
+              descriptor.boundKind == WasmComponentExternBoundKind.equality
+                  ? _componentValueTypeScopeAt(
+                      valueTypeScopes,
+                      descriptor.valueIndex,
+                    )
+                  : visibleTypeScope,
             );
           } else if (descriptor.kind == WasmComponentExternKind.component) {
             visibleComponentEntries.add(null);
@@ -1237,6 +1269,9 @@ final class WasmComponent {
             valueTypes.add(
               _componentValueTypeAt(valueTypes, export.sort.index),
             );
+            valueTypeScopes.add(
+              _componentValueTypeScopeAt(valueTypeScopes, export.sort.index),
+            );
           } else if (export.sort.kind == WasmComponentSortKind.component) {
             visibleComponentEntries.add(
               _componentAt(visibleComponentEntries, export.sort.index),
@@ -1266,6 +1301,7 @@ final class WasmComponent {
               functionTypes,
               functionTypeContexts,
               valueTypes,
+              valueTypeScopes,
               visibleTypeScope,
             ),
           );
@@ -1283,6 +1319,7 @@ final class WasmComponent {
             );
           } else if (alias.sort.kind == WasmComponentSortKind.value) {
             valueTypes.add(aliasEntry?.value);
+            valueTypeScopes.add(aliasEntry?.valueTypeScope);
           } else if (alias.sort.kind == WasmComponentSortKind.componentType) {
             final typeDefinitionContext = aliasEntry?.typeDefinitionContext;
             final typeDefinition =
@@ -1296,19 +1333,22 @@ final class WasmComponent {
         case _WasmComponentDefinitionEventKind.canonical:
           final definition = canonicalDefinitions[event.index];
           if (definition.kind == WasmComponentCanonicalKind.lift) {
-            addFunctionType(
-              _componentFunctionTypeFromDefinitions(
-                visibleTypeDefinitions,
-                definition.typeIndex,
-              ),
+            final context = _componentFunctionTypeContextFromDefinitions(
               visibleTypeDefinitions,
-              visibleTypeScope,
+              definition.typeIndex,
+              typeScope: visibleTypeScope,
+            );
+            addFunctionType(
+              context?.functionType,
+              context?.typeDefinitions,
+              context?.typeScope,
             );
           }
         case _WasmComponentDefinitionEventKind.start:
           addStartResults(starts[event.index]);
         case _WasmComponentDefinitionEventKind.value:
           valueTypes.add(valueDefinitions[event.index].type);
+          valueTypeScopes.add(visibleTypeScope);
         case _WasmComponentDefinitionEventKind.typeCount:
           includeDecodedTypeDefinitionsTo(event.index);
         default:
@@ -1329,6 +1369,9 @@ final class WasmComponent {
             functionTypeContexts,
           ),
       valueTypes: List<WasmComponentValueType?>.unmodifiable(valueTypes),
+      valueTypeScopes: List<WasmComponentTypeScope?>.unmodifiable(
+        valueTypeScopes,
+      ),
     );
   }
 
@@ -1655,6 +1698,7 @@ _WasmComponentInstanceExportMap? _componentInstanceExportTypeMap(
   List<WasmComponentFunctionType?> functionTypes,
   List<WasmComponentFunctionTypeContext?> functionTypeContexts,
   List<WasmComponentValueType?> valueTypes,
+  List<WasmComponentTypeScope?> valueTypeScopes,
   WasmComponentTypeScope? visibleTypeScope,
 ) {
   switch (instance.kind) {
@@ -1674,6 +1718,9 @@ _WasmComponentInstanceExportMap? _componentInstanceExportTypeMap(
                 : null,
             value: export.sort.kind == WasmComponentSortKind.value
                 ? _componentValueTypeAt(valueTypes, export.sort.index)
+                : null,
+            valueTypeScope: export.sort.kind == WasmComponentSortKind.value
+                ? _componentValueTypeScopeAt(valueTypeScopes, export.sort.index)
                 : null,
             typeDefinition: _componentTypeSortIndexDefinition(
               export.sort,
@@ -1732,6 +1779,12 @@ _WasmComponentInstanceExportMap _componentExportTypeMap(
         value: export.sort.kind == WasmComponentSortKind.value
             ? _componentValueTypeAt(
                 component.componentValueIndexTypes,
+                export.sort.index,
+              )
+            : null,
+        valueTypeScope: export.sort.kind == WasmComponentSortKind.value
+            ? _componentValueTypeScopeAt(
+                component._indexSpaces.valueTypeScopes,
                 export.sort.index,
               )
             : null,
@@ -1936,6 +1989,9 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
                 : null,
             value: descriptor.kind == WasmComponentExternKind.value
                 ? descriptor.valueType
+                : null,
+            valueTypeScope: descriptor.kind == WasmComponentExternKind.value
+                ? localTypeScope
                 : null,
             typeDefinition: introduced,
             typeDefinitionContext: introducedContext,
@@ -2154,20 +2210,28 @@ WasmComponentFunctionTypeContext? _componentFunctionTypeContextFromDefinitions(
   int? typeIndex, {
   WasmComponentTypeScope? typeScope,
 }) {
-  final functionType = _componentFunctionTypeFromDefinitions(
-    definitions,
-    typeIndex,
-  );
+  final definitionContext = typeScope?.definitionContextAt(typeIndex);
+  final definingScope = definitionContext?.typeScope ?? typeScope;
+  final functionType =
+      definitionContext?.definition.function ??
+      _componentFunctionTypeFromDefinitions(definitions, typeIndex);
   return functionType == null
       ? null
       : WasmComponentFunctionTypeContext(
           functionType: functionType,
           typeDefinitions: List<WasmComponentTypeDefinition>.unmodifiable(
-            definitions,
+            definingScope?.definitions ?? definitions,
           ),
-          typeScope: typeScope,
+          typeScope: definingScope,
         );
 }
+
+WasmComponentTypeScope? _componentValueTypeScopeAt(
+  List<WasmComponentTypeScope?> scopes,
+  int? valueIndex,
+) => valueIndex == null || valueIndex < 0 || valueIndex >= scopes.length
+    ? null
+    : scopes[valueIndex];
 
 WasmComponentValueType? _componentValueTypeAt(
   List<WasmComponentValueType?> valueTypes,
@@ -2579,6 +2643,45 @@ final class _WasmComponentValidationContext {
           '$path.element',
           scopedTypeDefinitions: scopedTypeDefinitions,
         );
+      case WasmComponentDefinedValueTypeKind.map:
+        validateComponentValueType(
+          type.keyType,
+          '$path.key',
+          scopedTypeDefinitions: scopedTypeDefinitions,
+        );
+        validateComponentValueType(
+          type.valueType,
+          '$path.value',
+          scopedTypeDefinitions: scopedTypeDefinitions,
+        );
+        final key = type.keyType;
+        final definitions = scopedTypeDefinitions ?? typeDefinitions;
+        final keyIndex = key?.typeIndex;
+        final primitive =
+            key?.primitive ??
+            (keyIndex != null && keyIndex >= 0 && keyIndex < definitions.length
+                ? definitions[keyIndex].definedValue?.primitive
+                : null);
+        if (primitive == null ||
+            primitive == WasmComponentPrimitiveValueType.f32 ||
+            primitive == WasmComponentPrimitiveValueType.f64 ||
+            primitive == WasmComponentPrimitiveValueType.errorContext) {
+          errors.add(
+            WasmComponentValidationError(
+              path: '$path.key',
+              message:
+                  'Wasm component map key must be bool, an integer, char, or string.',
+            ),
+          );
+        }
+        if (type.valueType == null) {
+          errors.add(
+            WasmComponentValidationError(
+              path: '$path.value',
+              message: 'Wasm component map value type is missing.',
+            ),
+          );
+        }
       case WasmComponentDefinedValueTypeKind.fixedList:
         validateComponentValueType(
           type.elementType,
@@ -3022,6 +3125,19 @@ final class _WasmComponentValidationContext {
           (type) =>
               componentValueTypeContainsResource(type, scope, memo, visiting),
         );
+      case WasmComponentDefinedValueTypeKind.map:
+        return componentValueTypeContainsResource(
+              definedValue.keyType,
+              scope,
+              memo,
+              visiting,
+            ) ||
+            componentValueTypeContainsResource(
+              definedValue.valueType,
+              scope,
+              memo,
+              visiting,
+            );
       case WasmComponentDefinedValueTypeKind.result:
         return componentValueTypeContainsResource(
               definedValue.okType,
@@ -3457,6 +3573,19 @@ final class _WasmComponentValidationContext {
           visiting,
         ),
       ),
+      WasmComponentDefinedValueTypeKind.map =>
+        valueTypeContainsBorrowInDefinitions(
+              definedValue.keyType,
+              definitions,
+              memo,
+              visiting,
+            ) ||
+            valueTypeContainsBorrowInDefinitions(
+              definedValue.valueType,
+              definitions,
+              memo,
+              visiting,
+            ),
       WasmComponentDefinedValueTypeKind.result =>
         valueTypeContainsBorrowInDefinitions(
               definedValue.okType,
@@ -3571,6 +3700,19 @@ final class _WasmComponentValidationContext {
           visiting,
         ),
       ),
+      WasmComponentDefinedValueTypeKind.map =>
+        valueTypeContainsStreamOrFutureInDefinitions(
+              definedValue.keyType,
+              definitions,
+              memo,
+              visiting,
+            ) ||
+            valueTypeContainsStreamOrFutureInDefinitions(
+              definedValue.valueType,
+              definitions,
+              memo,
+              visiting,
+            ),
       WasmComponentDefinedValueTypeKind.result =>
         valueTypeContainsStreamOrFutureInDefinitions(
               definedValue.okType,
@@ -3656,7 +3798,8 @@ final class _WasmComponentValidationContext {
     final contains = switch (definedValue.kind) {
       WasmComponentDefinedValueTypeKind.primitive =>
         definedValue.primitive == WasmComponentPrimitiveValueType.string,
-      WasmComponentDefinedValueTypeKind.list => true,
+      WasmComponentDefinedValueTypeKind.list ||
+      WasmComponentDefinedValueTypeKind.map => true,
       WasmComponentDefinedValueTypeKind.record => definedValue.fields.any(
         (field) => valueTypeContainsListOrStringInDefinitions(
           field.type,
@@ -4660,6 +4803,7 @@ final class _WasmComponentValidationContext {
     required List<WasmComponentValueDefinition> valueDefinitions,
   }) {
     final functionTypes = <WasmComponentFunctionType?>[];
+    final functionTypeContexts = <WasmComponentFunctionTypeContext?>[];
     final valueEntries = <_WasmComponentValueIndexEntry>[];
     final instanceExportMaps = <_WasmComponentInstanceExportMap?>[];
     final componentIndexEntries = <WasmComponent?>[];
@@ -4751,6 +4895,13 @@ final class _WasmComponentValidationContext {
                 definitions: visibleTypeDefinitions,
               ),
             );
+            functionTypeContexts.add(
+              _componentFunctionTypeContextFromDefinitions(
+                visibleTypeDefinitions,
+                descriptor.typeIndex,
+                typeScope: visibleTypeScope,
+              ),
+            );
           } else if (descriptor.kind == WasmComponentExternKind.value) {
             valueEntries.add(
               _WasmComponentValueIndexEntry(
@@ -4760,6 +4911,14 @@ final class _WasmComponentValidationContext {
                         WasmComponentExternBoundKind.equality
                     ? equalityValueType
                     : descriptor.valueType,
+                typeScope:
+                    descriptor.boundKind ==
+                            WasmComponentExternBoundKind.equality &&
+                        descriptor.valueIndex != null &&
+                        descriptor.valueIndex! >= 0 &&
+                        descriptor.valueIndex! < valueEntries.length
+                    ? valueEntries[descriptor.valueIndex!].typeScope
+                    : visibleTypeScope,
               ),
             );
           } else if (descriptor.kind == WasmComponentExternKind.coreModule) {
@@ -4808,6 +4967,7 @@ final class _WasmComponentValidationContext {
             export,
             'export[${event.index}]',
             functionTypes: functionTypes,
+            functionTypeContexts: functionTypeContexts,
             valueEntries: valueEntries,
             coreCounts: coreCounts,
             visibleTypeDefinitions: visibleTypeDefinitions,
@@ -4899,6 +5059,7 @@ final class _WasmComponentValidationContext {
               instance,
               componentIndexEntries: componentIndexEntries,
               functionTypes: functionTypes,
+              functionTypeContexts: functionTypeContexts,
               valueEntries: valueEntries,
               visibleTypeDefinitions: visibleTypeDefinitions,
               visibleTypeScope: visibleTypeScope,
@@ -4943,11 +5104,13 @@ final class _WasmComponentValidationContext {
           );
           if (sort.kind == WasmComponentSortKind.function) {
             functionTypes.add(knownAliasEntry?.function);
+            functionTypeContexts.add(knownAliasEntry?.functionContext);
           } else if (sort.kind == WasmComponentSortKind.value) {
             valueEntries.add(
               _WasmComponentValueIndexEntry(
                 originPath: 'alias[${event.index}]',
                 type: knownAliasEntry?.value,
+                typeScope: knownAliasEntry?.valueTypeScope,
               ),
             );
           } else if (sort.kind == WasmComponentSortKind.component) {
@@ -5022,6 +5185,13 @@ final class _WasmComponentValidationContext {
                 definitions: visibleTypeDefinitions,
               ),
             );
+            functionTypeContexts.add(
+              _componentFunctionTypeContextFromDefinitions(
+                visibleTypeDefinitions,
+                definition.typeIndex,
+                typeScope: visibleTypeScope,
+              ),
+            );
           }
         case _WasmComponentDefinitionEventKind.start:
           final start = starts[event.index];
@@ -5030,11 +5200,19 @@ final class _WasmComponentValidationContext {
               start,
               'start[${event.index}]',
               functionTypes: functionTypes,
+              functionTypeContexts: functionTypeContexts,
               valueEntries: valueEntries,
+              visibleTypeScope: visibleTypeScope,
             ).map(
               (type) => _WasmComponentValueIndexEntry(
                 originPath: 'start[${event.index}].result',
                 type: type,
+                typeScope:
+                    _componentFunctionTypeScopeAt(
+                      functionTypeContexts,
+                      start.functionIndex,
+                    ) ??
+                    visibleTypeScope,
               ),
             ),
           );
@@ -5045,10 +5223,23 @@ final class _WasmComponentValidationContext {
             'value[${event.index}].type',
             scopedTypeDefinitions: visibleTypeDefinitions,
           );
+          if (staticValueTypeContainsRuntimeValue(
+            valueDefinition.type,
+            visibleTypeScope,
+          )) {
+            errors.add(
+              WasmComponentValidationError(
+                path: 'value[${event.index}].type',
+                message:
+                    'Wasm component static value type cannot contain own, borrow, future, stream, or error-context.',
+              ),
+            );
+          }
           valueEntries.add(
             _WasmComponentValueIndexEntry(
               originPath: 'value[${event.index}]',
               type: valueDefinition.type,
+              typeScope: visibleTypeScope,
             ),
           );
       }
@@ -5056,6 +5247,60 @@ final class _WasmComponentValidationContext {
 
     if (errors.isEmpty) {
       validateConsumedValues(valueEntries);
+    }
+  }
+
+  bool staticValueTypeContainsRuntimeValue(
+    WasmComponentValueType? type,
+    WasmComponentTypeScope scope, [
+    Set<WasmComponentTypeDefinitionContext>? visiting,
+  ]) {
+    if (type == null) {
+      return false;
+    }
+    if (type.primitive != null) {
+      return type.primitive == WasmComponentPrimitiveValueType.errorContext;
+    }
+    final context = scope.definitionContextAt(type.typeIndex);
+    final defined = context?.definition.definedValue;
+    if (context == null || defined == null) {
+      return false;
+    }
+    final active = visiting ?? <WasmComponentTypeDefinitionContext>{};
+    if (!active.add(context)) {
+      return false;
+    }
+    bool contains(WasmComponentValueType? child) =>
+        staticValueTypeContainsRuntimeValue(child, context.typeScope, active);
+    try {
+      return switch (defined.kind) {
+        WasmComponentDefinedValueTypeKind.own ||
+        WasmComponentDefinedValueTypeKind.borrow ||
+        WasmComponentDefinedValueTypeKind.stream ||
+        WasmComponentDefinedValueTypeKind.future => true,
+        WasmComponentDefinedValueTypeKind.primitive =>
+          defined.primitive == WasmComponentPrimitiveValueType.errorContext,
+        WasmComponentDefinedValueTypeKind.record => defined.fields.any(
+          (field) => contains(field.type),
+        ),
+        WasmComponentDefinedValueTypeKind.variant => defined.cases.any(
+          (case_) => contains(case_.type),
+        ),
+        WasmComponentDefinedValueTypeKind.list ||
+        WasmComponentDefinedValueTypeKind.fixedList ||
+        WasmComponentDefinedValueTypeKind.option => contains(
+          defined.elementType,
+        ),
+        WasmComponentDefinedValueTypeKind.map =>
+          contains(defined.keyType) || contains(defined.valueType),
+        WasmComponentDefinedValueTypeKind.tuple => defined.types.any(contains),
+        WasmComponentDefinedValueTypeKind.result =>
+          contains(defined.okType) || contains(defined.errorType),
+        WasmComponentDefinedValueTypeKind.flags ||
+        WasmComponentDefinedValueTypeKind.enumeration => false,
+      };
+    } finally {
+      active.remove(context);
     }
   }
 
@@ -5129,6 +5374,7 @@ final class _WasmComponentValidationContext {
     WasmComponentExport export,
     String path, {
     required List<WasmComponentFunctionType?> functionTypes,
+    required List<WasmComponentFunctionTypeContext?> functionTypeContexts,
     required List<_WasmComponentValueIndexEntry> valueEntries,
     required _WasmComponentCoreIndexCounts coreCounts,
     required List<WasmComponentTypeDefinition> visibleTypeDefinitions,
@@ -5145,6 +5391,12 @@ final class _WasmComponentValidationContext {
         functionTypes.add(
           componentFunctionTypeAt(functionTypes, export.sort.index),
         );
+        functionTypeContexts.add(
+          _componentFunctionTypeContextAt(
+            functionTypeContexts,
+            export.sort.index,
+          ),
+        );
       case WasmComponentSortKind.value:
         final valueType = consumeComponentValueIndex(
           export.sort.index,
@@ -5155,6 +5407,9 @@ final class _WasmComponentValidationContext {
           _WasmComponentValueIndexEntry(
             originPath: path,
             type: valueType,
+            typeScope: export.sort.index < valueEntries.length
+                ? valueEntries[export.sort.index].typeScope
+                : null,
             requiresConsumption: false,
           ),
         );
@@ -5390,6 +5645,7 @@ final class _WasmComponentValidationContext {
     WasmComponentInstance instance, {
     required List<WasmComponent?> componentIndexEntries,
     required List<WasmComponentFunctionType?> functionTypes,
+    required List<WasmComponentFunctionTypeContext?> functionTypeContexts,
     required List<_WasmComponentValueIndexEntry> valueEntries,
     required List<WasmComponentTypeDefinition> visibleTypeDefinitions,
     required WasmComponentTypeScope visibleTypeScope,
@@ -5412,8 +5668,20 @@ final class _WasmComponentValidationContext {
               function: export.sort.kind == WasmComponentSortKind.function
                   ? componentFunctionTypeAt(functionTypes, export.sort.index)
                   : null,
+              functionContext:
+                  export.sort.kind == WasmComponentSortKind.function
+                  ? _componentFunctionTypeContextAt(
+                      functionTypeContexts,
+                      export.sort.index,
+                    )
+                  : null,
               value: export.sort.kind == WasmComponentSortKind.value
                   ? componentValueTypeAt(valueEntries, export.sort.index)
+                  : null,
+              valueTypeScope:
+                  export.sort.kind == WasmComponentSortKind.value &&
+                      export.sort.index < valueEntries.length
+                  ? valueEntries[export.sort.index].typeScope
                   : null,
               typeDefinition: _componentTypeSortIndexDefinition(
                 export.sort,
@@ -5936,7 +6204,9 @@ final class _WasmComponentValidationContext {
     WasmComponentStart start,
     String path, {
     required List<WasmComponentFunctionType?> functionTypes,
+    required List<WasmComponentFunctionTypeContext?> functionTypeContexts,
     required List<_WasmComponentValueIndexEntry> valueEntries,
+    required WasmComponentTypeScope visibleTypeScope,
   }) {
     validateComponentFunctionIndex(
       start.functionIndex,
@@ -5974,11 +6244,22 @@ final class _WasmComponentValidationContext {
         start.arguments.length < functionType.params.length
         ? start.arguments.length
         : functionType.params.length;
+    final expectedScope =
+        _componentFunctionTypeScopeAt(
+          functionTypeContexts,
+          start.functionIndex,
+        ) ??
+        visibleTypeScope;
     for (var i = 0; i < comparableArgumentCount; i++) {
       final valueType = componentValueTypeAt(valueEntries, start.arguments[i]);
       final parameterType = functionType.params[i].type;
       if (valueType != null &&
-          !componentValueTypesMatch(parameterType, valueType)) {
+          !componentValueTypesMatch(
+            parameterType,
+            valueType,
+            expectedScope,
+            valueEntries[start.arguments[i]].typeScope ?? visibleTypeScope,
+          )) {
         errors.add(
           WasmComponentValidationError(
             path: '$path.arguments[$i]',
@@ -6094,10 +6375,109 @@ final class _WasmComponentValidationContext {
   bool componentValueTypesMatch(
     WasmComponentValueType expected,
     WasmComponentValueType actual,
-  ) {
-    return expected.kind == actual.kind &&
+    WasmComponentTypeScope expectedScope,
+    WasmComponentTypeScope actualScope, [
+    Set<
+      (WasmComponentTypeDefinitionContext, WasmComponentTypeDefinitionContext)
+    >?
+    visiting,
+  ]) {
+    if (identical(expectedScope, actualScope) &&
+        expected.kind == actual.kind &&
         expected.primitive == actual.primitive &&
-        expected.typeIndex == actual.typeIndex;
+        expected.typeIndex == actual.typeIndex) {
+      return true;
+    }
+    final expectedContext = expectedScope.definitionContextAt(
+      expected.typeIndex,
+    );
+    final actualContext = actualScope.definitionContextAt(actual.typeIndex);
+    final expectedDefinition = expectedContext?.definition.definedValue;
+    final actualDefinition = actualContext?.definition.definedValue;
+    final expectedPrimitive =
+        expected.primitive ?? expectedDefinition?.primitive;
+    final actualPrimitive = actual.primitive ?? actualDefinition?.primitive;
+    if (expectedPrimitive != null || actualPrimitive != null) {
+      return expectedPrimitive == actualPrimitive;
+    }
+    if (expectedDefinition == null ||
+        actualDefinition == null ||
+        expectedDefinition.kind != actualDefinition.kind ||
+        expectedDefinition.fixedLength != actualDefinition.fixedLength ||
+        expectedDefinition.labels.length != actualDefinition.labels.length ||
+        expectedDefinition.fields.length != actualDefinition.fields.length ||
+        expectedDefinition.cases.length != actualDefinition.cases.length ||
+        expectedDefinition.types.length != actualDefinition.types.length) {
+      return false;
+    }
+    if (expectedDefinition.kind == WasmComponentDefinedValueTypeKind.own ||
+        expectedDefinition.kind == WasmComponentDefinedValueTypeKind.borrow) {
+      return identical(
+        expectedContext!.typeScope.definitionAt(expectedDefinition.typeIndex),
+        actualContext!.typeScope.definitionAt(actualDefinition.typeIndex),
+      );
+    }
+    final active =
+        visiting ??
+        <
+          (
+            WasmComponentTypeDefinitionContext,
+            WasmComponentTypeDefinitionContext,
+          )
+        >{};
+    final pair = (expectedContext!, actualContext!);
+    if (!active.add(pair)) {
+      return false;
+    }
+    bool matches(WasmComponentValueType? left, WasmComponentValueType? right) =>
+        left == null || right == null
+        ? left == right
+        : componentValueTypesMatch(
+            left,
+            right,
+            expectedContext.typeScope,
+            actualContext.typeScope,
+            active,
+          );
+    try {
+      if (!matches(
+            expectedDefinition.elementType,
+            actualDefinition.elementType,
+          ) ||
+          !matches(expectedDefinition.keyType, actualDefinition.keyType) ||
+          !matches(expectedDefinition.valueType, actualDefinition.valueType) ||
+          !matches(expectedDefinition.okType, actualDefinition.okType) ||
+          !matches(expectedDefinition.errorType, actualDefinition.errorType)) {
+        return false;
+      }
+      for (var i = 0; i < expectedDefinition.labels.length; i++) {
+        if (expectedDefinition.labels[i] != actualDefinition.labels[i]) {
+          return false;
+        }
+      }
+      for (var i = 0; i < expectedDefinition.fields.length; i++) {
+        final left = expectedDefinition.fields[i];
+        final right = actualDefinition.fields[i];
+        if (left.label != right.label || !matches(left.type, right.type)) {
+          return false;
+        }
+      }
+      for (var i = 0; i < expectedDefinition.cases.length; i++) {
+        final left = expectedDefinition.cases[i];
+        final right = actualDefinition.cases[i];
+        if (left.label != right.label || !matches(left.type, right.type)) {
+          return false;
+        }
+      }
+      for (var i = 0; i < expectedDefinition.types.length; i++) {
+        if (!matches(expectedDefinition.types[i], actualDefinition.types[i])) {
+          return false;
+        }
+      }
+      return true;
+    } finally {
+      active.remove(pair);
+    }
   }
 
   void validateComponentFunctionIndex(
@@ -6732,6 +7112,17 @@ bool _componentValueTypeHasInvalidTypeReference(
         active,
       ),
     ),
+    WasmComponentDefinedValueTypeKind.map =>
+      _componentValueTypeHasInvalidTypeReference(
+            definedValue.keyType,
+            typeDefinitions,
+            active,
+          ) ||
+          _componentValueTypeHasInvalidTypeReference(
+            definedValue.valueType,
+            typeDefinitions,
+            active,
+          ),
     WasmComponentDefinedValueTypeKind.result =>
       _componentValueTypeHasInvalidTypeReference(
             definedValue.okType,
@@ -6986,6 +7377,33 @@ WasmComponentValueData _readDefinedComponentValueData(
         elementType,
         typeDefinitions,
         WasmComponentValueDataKind.list,
+      );
+    case WasmComponentDefinedValueTypeKind.map:
+      final keyType = type.keyType;
+      final valueType = type.valueType;
+      if (keyType == null || valueType == null) {
+        throw const FormatException(
+          'Wasm component map value type is missing its key or value type.',
+        );
+      }
+      final count = reader.readVarUint32();
+      final items = <WasmComponentValueData>[];
+      final pairTypes = [keyType, valueType];
+      for (var i = 0; i < count; i++) {
+        items.add(
+          _readSequentialComponentValues(
+            reader,
+            reader.offset,
+            pairTypes,
+            typeDefinitions,
+            WasmComponentValueDataKind.tuple,
+          ),
+        );
+      }
+      return WasmComponentValueData(
+        kind: WasmComponentValueDataKind.map,
+        rawBytes: _componentValueRawBytes(reader, start),
+        items: List.unmodifiable(items),
       );
     case WasmComponentDefinedValueTypeKind.fixedList:
       final elementType = type.elementType;
@@ -7321,6 +7739,12 @@ WasmComponentDefinedValueType _readDefinedValueTypeWithLead(
       return WasmComponentDefinedValueType(
         kind: WasmComponentDefinedValueTypeKind.list,
         elementType: _readComponentValueType(reader),
+      );
+    case 0x63:
+      return WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.map,
+        keyType: _readComponentValueType(reader),
+        valueType: _readComponentValueType(reader),
       );
     case 0x67:
       return WasmComponentDefinedValueType(

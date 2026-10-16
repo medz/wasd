@@ -255,6 +255,8 @@ final class WASIComponentWitAdapterValueType {
     required this.text,
     this.primitive,
     this.element,
+    this.key,
+    this.value,
     List<WASIComponentWitAdapterValueType> elements = const [],
     List<WASIComponentWitAdapterRecordField> fields = const [],
     List<String> labels = const [],
@@ -296,6 +298,18 @@ final class WASIComponentWitAdapterValueType {
          kind: WASIComponentWitAdapterValueKind.list,
          text: text,
          element: element,
+       );
+
+  /// Creates a `map<K, V>` WIT adapter value type.
+  WASIComponentWitAdapterValueType.map({
+    required String text,
+    required WASIComponentWitAdapterValueType key,
+    required WASIComponentWitAdapterValueType value,
+  }) : this._(
+         kind: WASIComponentWitAdapterValueKind.map,
+         text: text,
+         key: key,
+         value: value,
        );
 
   /// Creates a `stream<T>` WIT adapter value type.
@@ -404,6 +418,12 @@ final class WASIComponentWitAdapterValueType {
   /// Option payload type.
   final WASIComponentWitAdapterValueType? element;
 
+  /// Map key type.
+  final WASIComponentWitAdapterValueType? key;
+
+  /// Map value type.
+  final WASIComponentWitAdapterValueType? value;
+
   /// Tuple element types.
   final List<WASIComponentWitAdapterValueType> elements;
 
@@ -469,6 +489,9 @@ enum WASIComponentWitAdapterValueKind {
 
   /// `list<T>`.
   list,
+
+  /// `map<K, V>`.
+  map,
 
   /// `stream<T>`.
   stream,
@@ -937,6 +960,59 @@ _parseWitAdapterValueType(
       error: null,
     );
   }
+  final mapArgs = _genericArgs('map', text);
+  if (mapArgs != null) {
+    if (mapArgs.length != 2 || mapArgs.any((arg) => arg.isEmpty)) {
+      return (type: null, error: 'unsupported WIT adapter $context type $text');
+    }
+    final key = _parseWitAdapterValueType(
+      mapArgs[0],
+      '$context map key',
+      typeContext,
+      visitingTypes,
+    );
+    if (key.error != null) {
+      return (type: null, error: key.error);
+    }
+    final keyType = key.type!;
+    if (keyType.kind != WASIComponentWitAdapterValueKind.primitive ||
+        !switch (keyType.primitive) {
+          WasmComponentPrimitiveValueType.boolean ||
+          WasmComponentPrimitiveValueType.s8 ||
+          WasmComponentPrimitiveValueType.u8 ||
+          WasmComponentPrimitiveValueType.s16 ||
+          WasmComponentPrimitiveValueType.u16 ||
+          WasmComponentPrimitiveValueType.s32 ||
+          WasmComponentPrimitiveValueType.u32 ||
+          WasmComponentPrimitiveValueType.s64 ||
+          WasmComponentPrimitiveValueType.u64 ||
+          WasmComponentPrimitiveValueType.char ||
+          WasmComponentPrimitiveValueType.string => true,
+          _ => false,
+        }) {
+      return (
+        type: null,
+        error: 'unsupported WIT adapter $context map key type ${mapArgs[0]}',
+      );
+    }
+    final value = _parseWitAdapterValueType(
+      mapArgs[1],
+      '$context map value',
+      typeContext,
+      visitingTypes,
+    );
+    if (value.error != null) {
+      return (type: null, error: value.error);
+    }
+    return (
+      type: WASIComponentWitAdapterValueType.map(
+        text: text,
+        key: keyType,
+        value: value.type!,
+      ),
+      error: null,
+    );
+  }
   final streamArgs = _genericArgs('stream', text);
   if (streamArgs != null) {
     final element = _parseWitAdapterAsyncElementValueType(
@@ -1342,6 +1418,9 @@ bool _containsWitAdapterAsyncValueType(WASIComponentWitAdapterValueType type) {
     case WASIComponentWitAdapterValueKind.option:
     case WASIComponentWitAdapterValueKind.list:
       return _containsWitAdapterAsyncValueType(type.element!);
+    case WASIComponentWitAdapterValueKind.map:
+      return _containsWitAdapterAsyncValueType(type.key!) ||
+          _containsWitAdapterAsyncValueType(type.value!);
     case WASIComponentWitAdapterValueKind.tuple:
       return type.elements.any(_containsWitAdapterAsyncValueType);
     case WASIComponentWitAdapterValueKind.record:
@@ -1562,6 +1641,8 @@ Object? _validateWitAdapterValue(
       return _validateWitAdapterOptionValue(type, value, path);
     case WASIComponentWitAdapterValueKind.list:
       return _validateWitAdapterListValue(type, value, path);
+    case WASIComponentWitAdapterValueKind.map:
+      return _validateWitAdapterMapValue(type, value, path);
     case WASIComponentWitAdapterValueKind.stream:
       return _validateWitAdapterStreamValue(type, value, path);
     case WASIComponentWitAdapterValueKind.future:
@@ -1755,6 +1836,33 @@ Object? _validateWitAdapterListValue(
   final items = value.itemValues;
   for (var i = 0; i < items.length; i++) {
     _validateWitAdapterValue(elementType, items[i], '$path[$i]');
+  }
+  return value;
+}
+
+Object? _validateWitAdapterMapValue(
+  WASIComponentWitAdapterValueType type,
+  Object? value,
+  String path,
+) {
+  if (value is! WasmComponentValueData ||
+      value.kind != WasmComponentValueDataKind.map) {
+    throw StateError('WIT adapter value $path does not match ${type.text}.');
+  }
+  final items = value.itemValues;
+  for (var i = 0; i < items.length; i++) {
+    final entry = items[i];
+    if (entry is! WasmComponentValueData ||
+        entry.kind != WasmComponentValueDataKind.tuple ||
+        entry.itemValues.length != 2) {
+      throw StateError('WIT adapter value $path[$i] needs a key/value tuple.');
+    }
+    _validateWitAdapterValue(type.key!, entry.itemValues[0], '$path[$i].key');
+    _validateWitAdapterValue(
+      type.value!,
+      entry.itemValues[1],
+      '$path[$i].value',
+    );
   }
   return value;
 }

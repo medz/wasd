@@ -4,6 +4,104 @@ import 'package:wasd/src/wasi/component/wit_document.dart';
 
 void main() {
   group('WASIComponentWitDocument', () {
+    test('binds map signatures with aliases and nested record values', () {
+      final document = WASIComponentWitDocument.parse('''
+package acme:maps;
+interface tables {
+  type key = string;
+  record entry { values: list<u32> }
+  type entries = map<key, entry>;
+  update: func(value: entries) -> list<map<bool, entries>>;
+}
+world command { import tables; }
+''');
+      final functions = wasiComponentWitWorldFunctions(
+        document,
+        document.worldNamed('command')!,
+      );
+
+      expect(functions.single.signature.canBind, isTrue);
+      expect(wasiComponentWitAdapterBindingErrors(functions), isEmpty);
+      final parameter = functions.single.signature.params.single.type;
+      expect(parameter.kind, WASIComponentWitAdapterValueKind.map);
+      expect(parameter.key?.text, 'string');
+      expect(parameter.value?.kind, WASIComponentWitAdapterValueKind.record);
+      final result = functions.single.signature.result!;
+      expect(result.kind, WASIComponentWitAdapterValueKind.list);
+      expect(result.element?.kind, WASIComponentWitAdapterValueKind.map);
+    });
+
+    test('accepts each scalar map key type', () {
+      for (final key in const [
+        'bool',
+        's8',
+        'u8',
+        's16',
+        'u16',
+        's32',
+        'u32',
+        's64',
+        'u64',
+        'char',
+        'string',
+      ]) {
+        final document = WASIComponentWitDocument.parse('''
+interface tables { read: func(value: map<$key, u32>); }
+world command { import tables; }
+''');
+        final functions = wasiComponentWitWorldFunctions(
+          document,
+          document.worldNamed('command')!,
+        );
+        expect(functions.single.signature.canBind, isTrue, reason: key);
+      }
+    });
+
+    test('rejects invalid map key types arity and nested async payloads', () {
+      for (final type in const [
+        'map<f32, u32>',
+        'map<f64, u32>',
+        'map<list<u8>, u32>',
+        'map<tuple<u8>, u32>',
+        'map<option<u32>, u32>',
+        'map<map<u32, u32>, u32>',
+        'map<future<u32>, u32>',
+        'map<u32>',
+        'map<u32, u32, u32>',
+        'stream<map<string, future<u8>>>',
+      ]) {
+        final document = WASIComponentWitDocument.parse('''
+interface tables { read: func(value: $type); }
+world command { import tables; }
+''');
+        final functions = wasiComponentWitWorldFunctions(
+          document,
+          document.worldNamed('command')!,
+        );
+        expect(functions.single.signature.canBind, isFalse, reason: type);
+      }
+    });
+
+    test('rejects aliased composite map key types', () {
+      final document = WASIComponentWitDocument.parse('''
+interface tables {
+  type key = tuple<u32>;
+  read: func(value: map<key, u32>);
+}
+world command { import tables; }
+''');
+      final functions = wasiComponentWitWorldFunctions(
+        document,
+        document.worldNamed('command')!,
+      );
+
+      expect(functions.single.signature.canBind, isFalse);
+      expect(
+        functions.single.signature.unsupportedReason,
+        contains('map key type key'),
+      );
+    });
+
     test('parses package interfaces and world import/export boundaries', () {
       const source = '''
 package wasi:cli@0.3.0;

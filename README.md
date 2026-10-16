@@ -78,6 +78,8 @@ their original paths. It also exposed and fixed validation of multiple
 supertypes. See the [standards plan](doc/standards.md) for the `65,336` command
 result and its execution and public API coverage boundaries.
 
+The development checkout adds unreleased [synchronous Component map adapters](doc/component_maps.md).
+
 ## Quick Start
 
 Run included examples:
