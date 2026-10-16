@@ -12,7 +12,7 @@ by WASD execution, validation, and host tests at the exact release commit.
 | Area | Target for 1.0 | Maturity and source |
 | --- | --- | --- |
 | Core WebAssembly | Release 3.0, W3C snapshot dated 2026-10-01; spec source `957c932e7158c5a6891be68ca424aaa0aa505f97` | [W3C Candidate Recommendation Draft](https://www.w3.org/TR/2026/CRD-wasm-core-2-20261001/), distinct from the [2019 Recommendation](https://www.w3.org/TR/2019/REC-wasm-core-1-20191205/) |
-| WASI Preview1 | Legacy `wasi_snapshot_preview1`, with a separately pinned WITX/fixture revision before its release gate | [WASI 0.1](https://wasi.dev/releases/wasi-p1); not the Component Model ABI |
+| WASI Preview1 | Legacy `wasi_snapshot_preview1`; `wasi-0.1` branch snapshot `fae981bae14809d91f9bc2d63852d461f331d161` | [Frozen WITX](https://github.com/WebAssembly/WASI/tree/fae981bae14809d91f9bc2d63852d461f331d161/preview1/witx); not the Component Model ABI |
 | WASI Preview2 | WASI `0.2.12` | [Tagged WIT contract](https://github.com/WebAssembly/WASI/tree/v0.2.12); stable release interfaces, not all experimental WASI proposals |
 | WASI Preview3 | WASI `0.3.1`, source `59e48bfe3fae9bf2480eb15abd8f55999eb3b395`; retain explicit `0.3.0` compatibility | [Release](https://github.com/WebAssembly/WASI/releases/tag/v0.3.1); includes newly required `map`, `implements`, and `external-id` support |
 | Component Model | General validation, linking, instantiation, and execution of the features required by the frozen WASI releases; freeze an updated source revision before its acceptance gate | [Specification and tests](https://github.com/WebAssembly/component-model); an evolving proposal, not a W3C Recommendation. Existing async gate is pinned to `73b7ad51d3b5d6f1ef53c923d8c585e28b242bcc` |
@@ -110,12 +110,32 @@ codecs and a portable public instance API remain open requirements.
 
 ## Implementation and evidence matrix
 
+The unreleased Preview1 gate freezes official runner/source
+`6600796756adce3632409d7e207a9834c9d99ff8` and precompiled fixtures
+`c63d52e69316d1aa2c9e7db6251892775204e7e0` in
+`tool/wasi_preview1_contract.lock.json`. It verifies all 137 fixture inputs
+and 15 runner source files by SHA-256 and Git blob before executing exactly
+72 unique cases (AssemblyScript 12, C 14, Rust 46). Missing, duplicate,
+unexecuted, skipped, xfailed or xpassed cases fail the gate. Native CI runs
+this profile on Linux and macOS and preserves the raw result and gate report.
+
+```sh
+dart run tool/wasi_testsuite_preview1_gate.dart --testsuite-dir third_party/wasi-testsuite-fixtures --runner-dir third_party/wasi-testsuite-source/test-runner --python build/wasi-testsuite-venv/bin/python --json build/wasi-preview1.json
+```
+
+This selected suite does not import `fd_datasync`, `fd_sync`, `proc_raise`,
+`sock_accept`, `sock_recv` or `sock_send`; `sock_shutdown` has error cases only.
+Successful inherited-socket operations, host sync/durability and process/thread
+CPU-clock semantics still need separate acceptance. Node and browser CI runs
+`test/wasi_test.dart` as in-repo regressions with explicit platform skips;
+neither profile executes these 72 official guests.
+
 | Area | Implementation in 0.5.0 | Evidence and remaining work |
 | --- | --- | --- |
 | Core decoding and validation | Pure Dart decoder, predecoder, and validator under `lib/src/wasm/backend/native/interpreter/` | Fresh VM baseline: `260/260` official root WAST files, `65,212/65,212` commands, zero skips, at testsuite `193e551ff22663995b1ac95dc62344133669e14b`, using wasm-tools `1.254.0`. Enumerate newer specification deltas and public API feature selection |
 | Numeric, control, memory, table, reference, tail-call, SIMD, GC, exception, memory64/multiple-memory instructions | Interpreter paths exist; feature availability depends on the entrypoint/profile | Same root-suite baseline; it does not prove cross-platform parity, every valid type combination, or proposals outside that suite. GC `v128` data initialization was an uncovered gap in synchronous and forced async execution |
 | Threads and shared memory | Atomic/thread-related interpreter paths exist | Sequential instruction tests do not prove concurrent shared-memory, scheduling, or wait/notify behavior. Freeze an explicit threading profile and run real concurrency tests |
-| WASI Preview1 | VM host, in-repo Node host, browser shim and virtual filesystem | Unit/regression tests exist. Re-run a pinned official P1 suite and platform matrix; document permissions and native filesystem/syscall boundaries |
+| WASI Preview1 | VM host, in-repo Node host, browser shim and virtual filesystem | Historical unit/regression coverage; the unreleased pinned 72-case native gate above replaces the unpinned official report. Host syscall and platform boundaries remain open |
 | WASI Preview2 | VM command/proxy runners, synchronous Canonical ABI, WIT adapters and host interfaces for random, clocks, io, cli, filesystem, sockets, http | Focused conformance/toolchain tests exist. Audit all stable package exports and execution worlds. A command/proxy runner is not general Component Model execution |
 | WASI Preview3 0.3.0 | VM command/service runners, async Canonical ABI, stream/future/task/resource support; six-package/eight-world lock | Historical published `0.5.0` / `0.6.0-dev.1` baseline: `39/45` fixtures passed, with six native TCP failures. The `0.6.0-dev.2` acceptance gate records `45/45` passed and zero failed, skipped, xfailed or xpassed for the Linux/macOS native AOT profile, including same-socket TCP bind/listen/connect and monotonic clock deadline checks. `tool/wasi_preview3_contract.lock.json` records this gate. Upgrade to 0.3.1 with feature-level regressions |
 | Component Model binary/WIT | Strict decoder and component/WIT/adapter machinery exist | Frozen historical async gate: WASD decode `37/37`, wasm-tools validation `31/31`, Wasmtime reference execution `31/31`. Only the first executes WASD code, and it only decodes. Add WASD assertion execution for general synchronous and async components |

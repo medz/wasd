@@ -84,6 +84,10 @@ see the [standards plan](doc/standards.md) for their scope.
 Unreleased WASI `0.3.1` contract and linking support retains `0.3.0` and adds
 versioned WIT calls plus command/service execution tests. The official 45-case
 suite remains a separate `0.3.0` compatibility gate.
+An unreleased Preview1 gate freezes all 72 official `wasm32-wasip1` cases and
+verifies every fixture and runner input before execution. Native Linux/macOS
+results and Node/browser regressions remain separate acceptance profiles;
+see the [standards plan](doc/standards.md) for the uncovered syscall boundaries.
 
 ## Quick Start
 
@@ -389,7 +393,7 @@ specification targets, implementation evidence, and remaining acceptance gates.
 
 | Runtime | Preview1 host | Preview2 runner | Preview3 runner | Filesystem model |
 | --- | --- | --- | --- | --- |
-| Dart VM | In-repo `wasi_snapshot_preview1`; passes official `wasm32-wasip1` wasi-testsuite command modules | Stable WASI 0.2.12 command and HTTP proxy components | Stable WASI 0.3.0 command and HTTP service components | Real host preopens plus portable in-memory VFS |
+| Dart VM | In-repo `wasi_snapshot_preview1`; 72 selected official `wasm32-wasip1` command modules | Stable WASI 0.2.12 command and HTTP proxy components | Stable WASI 0.3.0 command and HTTP service components | Real host preopens plus portable in-memory VFS |
 | Node.js | In-repo `wasi_snapshot_preview1`, not `node:wasi` | Not supported | Not supported | Real host preopens plus portable in-memory VFS |
 | Browser JS | In-repo `wasi_snapshot_preview1` | Not supported | Not supported | Portable in-memory VFS |
 

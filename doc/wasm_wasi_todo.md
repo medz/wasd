@@ -37,12 +37,13 @@ P2/P3 work starts only after these P1 gates are green.
     `20` harness-level custom-section unsupported-command skips.
 
 - [x] `WASI-P1-OFFICIAL-WASIP1`
-  - Status: official wasi-testsuite `wasm32-wasip1` command modules pass in the
-    current recorded run.
-  - Evidence:
-    `.dart_tool/wasi_testsuite_wasd_p1_current.json`
-  - Result: `72` passed, `0` failed, `0` skipped for `wasm32-wasip1`.
-  - Note: the `41` skipped tests in that JSON are `wasm32-wasip3`, not P1.
+  - Historical evidence: `.dart_tool/wasi_testsuite_wasd_p1_current.json`
+    records 72 P1 passes; its source/fixture revisions were not recorded.
+  - Unreleased replacement: `tool/wasi_testsuite_preview1_gate.dart` and
+    `tool/wasi_preview1_contract.lock.json` freeze source `6600796`, fixtures
+    `c63d52e`, 137 inputs, 15 runner sources and exactly 72 unique cases.
+    Linux/macOS native CI retains `build/wasi-preview1.json` and the raw
+    official result; all failures, skips, xfails and xpasses reject acceptance.
 
 - [x] `P1-NODE-HOST-REGULAR-FILE-TIMESTAMPS`
   - Status: Node host-backed regular-file `fd_filestat_set_times` and
@@ -87,11 +88,14 @@ P2/P3 work starts only after these P1 gates are green.
     `dart test test/readme_snippets_test.dart test/readme_commands_test.dart --reporter=compact`
     `dart analyze`
 
-- [x] `SUPPORT-P1`
-  - Status: Preview1 is complete for the repository's current command-module
-    host model.
-  - Evidence: all P1 implementation, conformance, runtime, README, benchmark,
-    and analyzer gates above are checked.
+- [ ] `SUPPORT-P1`
+  - The selected official command suite and in-repo regression gates do not
+    establish complete Preview1 host semantics or every platform.
+  - Remaining acceptance includes six imports absent from the selected suite
+    (`fd_datasync`, `fd_sync`, `proc_raise`, `sock_accept`, `sock_recv`,
+    `sock_send`), successful inherited-socket shutdown, host sync/durability,
+    and process/thread CPU-clock behavior. See the pinned scope and runtime
+    boundaries in [the standards plan](standards.md).
 
 ## Next Blocking TODO
 
