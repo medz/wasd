@@ -96,3 +96,25 @@ jobs:
       # DOOM tests require downloaded game assets and run separately.
       - run: python3 tool/test_toolchain_installer.py
       - run: dart test --exclude-tags=doom --reporter=expanded
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: WebAssembly/wasi-testsuite
+          ref: 6600796756adce3632409d7e207a9834c9d99ff8
+          path: third_party/wasi-testsuite-source
+          sparse-checkout: test-runner
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: WebAssembly/wasi-testsuite
+          ref: c63d52e69316d1aa2c9e7db6251892775204e7e0
+          path: third_party/wasi-testsuite-fixtures
+          sparse-checkout: tests/rust/testsuite/wasm32-wasip3
+          persist-credentials: false
+      - run: python3 -m venv build/wasi-testsuite-venv
+      - run: build/wasi-testsuite-venv/bin/python -m pip install --only-binary=:all: -r third_party/wasi-testsuite-source/test-runner/requirements.txt
+      - run: env DART=dart dart run tool/wasi_testsuite_preview3_runner.dart --testsuite-dir third_party/wasi-testsuite-fixtures --runner-dir third_party/wasi-testsuite-source/test-runner --python build/wasi-testsuite-venv/bin/python --json build/wasi-preview3.json --markdown build/wasi-preview3.md
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: wasi-preview3-${{ matrix.os }}
+          path: build/wasi-preview3.*

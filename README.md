@@ -309,19 +309,25 @@ Uint8List loadYourModuleBytes() => throw UnimplementedError();
 dart analyze
 dart test test/wasi_test.dart test/wasm_test.dart
 dart test test/wasi_preview2_conformance_test.dart test/wasi_preview2_http_proxy_toolchain_test.dart
-dart test test/wasi_preview3_async_runtime_test.dart test/wasi_preview3_service_runner_test.dart test/wasi_preview3_standard_wit_test.dart
+dart test test/wasi_preview3_async_runtime_test.dart test/wasi_preview3_service_runner_test.dart test/wasi_preview3_standard_wit_test.dart test/wasi_preview3_sockets_test.dart
 dart run tool/wasi_testsuite_preview3_runner.dart \
   --testsuite-dir=/path/to/wasi-testsuite \
   --runner-dir=/path/to/wasi-testsuite/test-runner \
   --python=/path/to/venv/bin/python
 ```
 
-The frozen official `wasm32-wasip3` gate passes `39/45` fixtures. The remaining
+The recorded published `wasm32-wasip3` baseline passes `39/45` fixtures. The remaining
 six (`sockets-tcp-bind`, `sockets-tcp-listen`, `sockets-echo`,
 `sockets-tcp-connect`, `sockets-tcp-receive`, and `sockets-tcp-send`) require
 the explicit native TCP bind/listen split that `dart:io` cannot represent; they
 fail with `not-supported`. There are no skips, expected failures, or unexpected
 passes.
+
+The development checkout adds native Preview3 TCP bind/listen on Linux and
+macOS using the same OS socket through bind, listen or connect. Bind reserves
+an address without starting a listener. This addition is unreleased and is not
+included in published `0.6.0-dev.1`; the fixed official set is checked in native
+CI. Other native platforms still report `not-supported` for explicit TCP bind.
 
 The frozen Component Model async gate currently records three distinct kinds
 of evidence:
@@ -380,11 +386,10 @@ Preview2 native TCP bind/listen is currently unsupported; Preview2 native TCP
 connect and UDP bind/connect remain available.
 
 Preview3 synchronous socket imports may return pending Dart callbacks; the
-component runner waits for them before returning to the guest. Explicit native
-TCP bind returns `not-supported` because `dart:io` only exposes
-`ServerSocket.bind`, which starts listening before the separate WASI `listen`
-transition. Unbound TCP listen and connect remain available and wait for real
-OS endpoints before reporting success. Native UDP bind and implicit UDP
+component runner waits for them before returning to the guest. The development
+Linux/macOS backend uses native sockets for explicitly bound TCP endpoints;
+unbound TCP listen and connect continue to use `dart:io`. These operations wait
+for real OS endpoints before reporting success. Native UDP bind and implicit UDP
 connect likewise wait for a real `RawDatagramSocket`. TCP and UDP option values
 are applied through native raw socket options when an active endpoint exists.
 `RawDatagramSocket` has no IPv6-only bind option, so an IPv6 wildcard UDP socket

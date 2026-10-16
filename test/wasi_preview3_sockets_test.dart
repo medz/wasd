@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' as io;
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
@@ -1697,57 +1698,282 @@ void main() {
       tags: 'network',
     );
 
-    test('native TCP bind reports unsupported without fake state', () async {
-      final host = WASIPreview3NativeSocketsHost();
-      final imports = host.imports;
-      final tcp = _createSocket(imports, tcp: true);
-      addTearDown(
-        () => host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', tcp),
-      );
+    test(
+      'native TCP bind reserves without listening and releases on drop',
+      () async {
+        final host = WASIPreview3NativeSocketsHost();
+        final imports = host.imports;
+        final tcp = _createSocket(imports, tcp: true);
+        var dropped = false;
+        addTearDown(() {
+          if (!dropped) {
+            host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', tcp);
+          }
+        });
 
-      final bound =
-          await imports['wasi:sockets/types@0.3.0.tcp-socket.bind']!(<Object?>[
-                tcp,
-                _ipv4Socket(port: 0, a: 127, b: 0, c: 0, d: 1),
-              ])
-              as WasmComponentValueData;
+        final bound =
+            await imports['wasi:sockets/types@0.3.0.tcp-socket.bind']!(
+                  <Object?>[
+                    tcp,
+                    _ipv4Socket(port: 0, a: 127, b: 0, c: 0, d: 1),
+                  ],
+                )
+                as WasmComponentValueData;
 
-      expect(_errorLabel(bound), 'not-supported');
-      expect(
-        _errorLabel(
-          imports['wasi:sockets/types@0.3.0.tcp-socket.get-local-address']!(
-                <Object?>[tcp],
-              )
-              as WasmComponentValueData,
-        ),
-        'invalid-state',
-      );
-      expect(
-        imports['wasi:sockets/types@0.3.0.tcp-socket.get-is-listening']!(
-          <Object?>[tcp],
-        ),
-        isFalse,
-      );
-      expect(
-        _errorLabel(
-          await imports['wasi:sockets/types@0.3.0.tcp-socket.bind']!(<Object?>[
-                tcp,
-                _ipv4Socket(port: 0, a: 127, b: 0, c: 0, d: 1),
-              ])
-              as WasmComponentValueData,
-        ),
-        'not-supported',
-      );
-      expect(
-        _isOk(
-          imports['wasi:sockets/types@0.3.0.tcp-socket.set-listen-backlog-size']!(
-                <Object?>[tcp, BigInt.one],
-              )
-              as WasmComponentValueData,
-        ),
-        isTrue,
-      );
-    });
+        if (!io.Platform.isLinux && !io.Platform.isMacOS) {
+          expect(_errorLabel(bound), 'not-supported');
+          return;
+        }
+        expect(_isOk(bound), isTrue);
+        final port = await _waitForPort(imports, tcp, tcp: true);
+        await expectLater(
+          io.ServerSocket.bind(io.InternetAddress.loopbackIPv4, port),
+          throwsA(isA<io.SocketException>()),
+        );
+        await expectLater(
+          io.Socket.connect(io.InternetAddress.loopbackIPv4, port),
+          throwsA(isA<io.SocketException>()),
+        );
+        expect(
+          imports['wasi:sockets/types@0.3.0.tcp-socket.get-is-listening']!(
+            <Object?>[tcp],
+          ),
+          isFalse,
+        );
+        expect(
+          _errorLabel(
+            await imports['wasi:sockets/types@0.3.0.tcp-socket.bind']!(
+                  <Object?>[
+                    tcp,
+                    _ipv4Socket(port: 0, a: 127, b: 0, c: 0, d: 1),
+                  ],
+                )
+                as WasmComponentValueData,
+          ),
+          'invalid-state',
+        );
+        expect(
+          _isOk(
+            imports['wasi:sockets/types@0.3.0.tcp-socket.set-listen-backlog-size']!(
+                  <Object?>[tcp, BigInt.one],
+                )
+                as WasmComponentValueData,
+          ),
+          isTrue,
+        );
+        host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', tcp);
+        dropped = true;
+        final replacement = await io.ServerSocket.bind(
+          io.InternetAddress.loopbackIPv4,
+          port,
+        );
+        await replacement.close();
+      },
+      tags: 'network',
+    );
+
+    test(
+      'native TCP listener reservation is enforced across independent hosts',
+      () async {
+        final first = WASIPreview3NativeSocketsHost();
+        final second = WASIPreview3NativeSocketsHost();
+        final firstSocket = _createSocket(first.imports, tcp: true);
+        final secondSocket = _createSocket(second.imports, tcp: true);
+        WASIComponentStream<int>? accepted;
+        addTearDown(() {
+          accepted?.readable.drop();
+          accepted?.writable.drop();
+          first.table.dropNamed(
+            'wasi:sockets/types@0.3.0.tcp-socket',
+            firstSocket,
+          );
+          second.table.dropNamed(
+            'wasi:sockets/types@0.3.0.tcp-socket',
+            secondSocket,
+          );
+        });
+        final bound =
+            await first.imports['wasi:sockets/types@0.3.0.tcp-socket.bind']!(
+                  <Object?>[
+                    firstSocket,
+                    _ipv4Socket(port: 0, a: 127, b: 0, c: 0, d: 1),
+                  ],
+                )
+                as WasmComponentValueData;
+        if (!io.Platform.isLinux && !io.Platform.isMacOS) {
+          expect(_errorLabel(bound), 'not-supported');
+          return;
+        }
+        expect(_isOk(bound), isTrue);
+        final port = await _waitForPort(first.imports, firstSocket, tcp: true);
+        accepted =
+            _okValue(
+                  await first
+                          .imports['wasi:sockets/types@0.3.0.tcp-socket.listen']!(
+                        <Object?>[firstSocket],
+                      )
+                      as WasmComponentValueData,
+                )
+                as WASIComponentStream<int>;
+        expect(
+          _errorLabel(
+            await second.imports['wasi:sockets/types@0.3.0.tcp-socket.bind']!(
+                  <Object?>[
+                    secondSocket,
+                    _ipv4Socket(port: port, a: 127, b: 0, c: 0, d: 1),
+                  ],
+                )
+                as WasmComponentValueData,
+          ),
+          'address-in-use',
+        );
+      },
+      tags: 'network',
+    );
+
+    test(
+      'native TCP receive lets a timer cancel a sustained transfer',
+      () async {
+        const totalBytes = 16 * 1024 * 1024;
+        final host = WASIPreview3NativeSocketsHost();
+        final imports = host.imports;
+        final server = _createSocket(imports, tcp: true);
+        WASIComponentStream<int>? accepted;
+        int? socket;
+        addTearDown(() {
+          accepted?.readable.drop();
+          accepted?.writable.drop();
+          if (socket != null) {
+            host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', socket);
+          }
+          host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', server);
+        });
+        final bound =
+            await imports['wasi:sockets/types@0.3.0.tcp-socket.bind']!(
+                  <Object?>[
+                    server,
+                    _ipv4Socket(port: 0, a: 127, b: 0, c: 0, d: 1),
+                  ],
+                )
+                as WasmComponentValueData;
+        if (!io.Platform.isLinux && !io.Platform.isMacOS) {
+          expect(_errorLabel(bound), 'not-supported');
+          return;
+        }
+        expect(_isOk(bound), isTrue);
+        accepted =
+            _okValue(
+                  await imports['wasi:sockets/types@0.3.0.tcp-socket.listen']!(
+                        <Object?>[server],
+                      )
+                      as WasmComponentValueData,
+                )
+                as WASIComponentStream<int>;
+        final ready = ReceivePort();
+        addTearDown(ready.close);
+        final producer = await Isolate.spawn(_produceTcpBytes, (
+          await _waitForPort(imports, server, tcp: true),
+          totalBytes,
+          ready.sendPort,
+        ));
+        addTearDown(() => producer.kill(priority: Isolate.immediate));
+        await ready.first;
+        socket = (await accepted.readable.readWhenAvailable(1)).single;
+        // Let the independent sender fill the OS queue before draining it.
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        final receive =
+            imports['wasi:sockets/types@0.3.0.tcp-socket.receive']!(<Object?>[
+                  socket,
+                ])
+                as List<Object?>;
+        final incoming = receive.first as WASIComponentStream<int>;
+        final cancelled = Completer<void>();
+        var received = 0;
+        var receivedAtCancellation = totalBytes;
+        Timer? timer;
+        addTearDown(() => timer?.cancel());
+        try {
+          while (!cancelled.isCompleted) {
+            final bytes = await incoming.readable.readWhenAvailable(65536);
+            if (bytes.isEmpty) break;
+            received += bytes.length;
+            timer ??= Timer(const Duration(milliseconds: 1), () {
+              receivedAtCancellation = received;
+              incoming.readable.drop();
+              cancelled.complete();
+            });
+          }
+        } on WASIComponentAsyncEndpointStateError {
+          if (!cancelled.isCompleted) rethrow;
+        }
+        expect(received, greaterThan(0));
+        await cancelled.future;
+        expect(receivedAtCancellation, lessThan(totalBytes));
+      },
+      tags: 'network',
+      timeout: const Timeout(Duration(seconds: 10)),
+    );
+
+    test(
+      'native bound connect cancellation does not affect reused descriptors',
+      () async {
+        final peer = await io.ServerSocket.bind(
+          io.InternetAddress.loopbackIPv4,
+          0,
+        );
+        final peers = peer.listen((socket) => socket.destroy());
+        addTearDown(() async {
+          await peers.cancel();
+          await peer.close();
+        });
+        final host = WASIPreview3NativeSocketsHost();
+        final imports = host.imports;
+        for (var iteration = 0; iteration < 12; iteration++) {
+          final client = _createSocket(imports, tcp: true);
+          final bound =
+              await imports['wasi:sockets/types@0.3.0.tcp-socket.bind']!(
+                    <Object?>[
+                      client,
+                      _ipv4Socket(port: 0, a: 127, b: 0, c: 0, d: 1),
+                    ],
+                  )
+                  as WasmComponentValueData;
+          if (!io.Platform.isLinux && !io.Platform.isMacOS) {
+            expect(_errorLabel(bound), 'not-supported');
+            host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', client);
+            return;
+          }
+          expect(_isOk(bound), isTrue);
+          final pending =
+              imports['wasi:sockets/types@0.3.0.tcp-socket.connect']!(<Object?>[
+                    client,
+                    _ipv4Socket(port: peer.port, a: 127, b: 0, c: 0, d: 1),
+                  ])
+                  as Future<WasmComponentValueData>;
+          host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', client);
+
+          final replacement = _createSocket(imports, tcp: true);
+          expect(
+            _isOk(
+              await imports['wasi:sockets/types@0.3.0.tcp-socket.bind']!(
+                    <Object?>[
+                      replacement,
+                      _ipv4Socket(port: 0, a: 127, b: 0, c: 0, d: 1),
+                    ],
+                  )
+                  as WasmComponentValueData,
+            ),
+            isTrue,
+          );
+          expect(_errorLabel(await pending), 'invalid-state');
+          host.table.dropNamed(
+            'wasi:sockets/types@0.3.0.tcp-socket',
+            replacement,
+          );
+        }
+      },
+      tags: 'network',
+    );
 
     test('native IPv6 TCP listener does not reserve the IPv4 port', () async {
       final host = WASIPreview3NativeSocketsHost();
@@ -1805,6 +2031,24 @@ void main() {
         final imports = host.imports;
         final server = _createSocket(imports, tcp: true);
         final client = _createSocket(imports, tcp: true);
+        int? boundClientPort;
+        if (io.Platform.isLinux || io.Platform.isMacOS) {
+          for (final socket in <int>[server, client]) {
+            expect(
+              _isOk(
+                await imports['wasi:sockets/types@0.3.0.tcp-socket.bind']!(
+                      <Object?>[
+                        socket,
+                        _ipv4Socket(port: 0, a: 127, b: 0, c: 0, d: 1),
+                      ],
+                    )
+                    as WasmComponentValueData,
+              ),
+              isTrue,
+            );
+          }
+          boundClientPort = await _waitForPort(imports, client, tcp: true);
+        }
         final listenResult =
             await imports['wasi:sockets/types@0.3.0.tcp-socket.listen']!(
                   <Object?>[server],
@@ -1829,6 +2073,21 @@ void main() {
         final accepted = (await acceptedStream.readable.readWhenAvailable(
           1,
         )).single;
+        if (boundClientPort != null) {
+          expect(
+            await _waitForPort(imports, client, tcp: true),
+            boundClientPort,
+          );
+          final remote =
+              _okValue(
+                    imports['wasi:sockets/types@0.3.0.tcp-socket.get-remote-address']!(
+                          <Object?>[accepted],
+                        )
+                        as WasmComponentValueData,
+                  )
+                  as WasmComponentValueData;
+          expect(_socketPort(remote), boundClientPort);
+        }
 
         final serverReceive =
             imports['wasi:sockets/types@0.3.0.tcp-socket.receive']!(<Object?>[
@@ -2801,4 +3060,22 @@ Future<List<int>> _readExactly(
     values.addAll(chunk);
   }
   return values;
+}
+
+Future<void> _produceTcpBytes((int, int, SendPort) args) async {
+  final (port, length, ready) = args;
+  final socket = await io.Socket.connect(io.InternetAddress.loopbackIPv4, port);
+  final chunk = Uint8List(65536);
+  try {
+    for (var sent = 0; sent < length; sent += chunk.length) {
+      socket.add(chunk);
+    }
+    ready.send(null);
+    await socket.flush();
+    await socket.close();
+  } on io.SocketException {
+    // The receiver intentionally cancels before the complete payload arrives.
+  } finally {
+    socket.destroy();
+  }
 }
