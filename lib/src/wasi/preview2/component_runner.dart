@@ -89,6 +89,8 @@ final class WASIComponentNativeRuntime {
   /// Creates a component executor without a fixed WASI version profile.
   ///
   /// The caller owns the allocation scope for this instance and its calls.
+  /// Export calls and Component starts await [imports]. A core module start
+  /// cannot invoke generic imports; it is rejected before launching callbacks.
   WASIComponentNativeRuntime.component({
     required this.component,
     required WASIComponentHost host,
@@ -168,23 +170,27 @@ final class WASIComponentNativeRuntime {
   late final WASIComponentCanonicalAdapterProgram _synchronousAdapterProgram;
   var _decodedTypeDefinitionCount = 0;
   var _initialized = false;
+  Future<void>? _genericInitialization;
 
   /// Instantiates this component once, retaining its state for later calls.
-  void initialize() => _initialize();
+  Future<void> initialize() {
+    if (_genericHost == null) return Future<void>.sync(_initialize);
+    return _genericInitialization ??= _initializeGeneric();
+  }
 
-  /// Invokes a named synchronous component function export.
+  /// Invokes a named component function export and awaits host callbacks.
   ///
   /// Initializes the instance on its first call. Resource lifetime belongs to
   /// the caller's allocation scope, which may span several invocations.
-  Object? invokeExportSynchronously(String name, List<Object?> args) {
-    _initialize();
+  Future<Object?> invokeExport(String name, List<Object?> args) async {
+    await initialize();
     final function = _exportedFunctions[name];
     if (function == null) {
       throw WASIPreview2ComponentExecutionException(
         'Component function export `$name` not found.',
       );
     }
-    return function.invokeSynchronously(args);
+    return await function.invoke(args);
   }
 
   /// Executes the Preview2 command export.
@@ -294,6 +300,24 @@ final class WASIComponentNativeRuntime {
     if (_initialized) {
       return;
     }
+    _prepareExecution();
+    _processDefinitions();
+    _initialized = true;
+  }
+
+  Future<void> _initializeGeneric() async {
+    _prepareExecution();
+    for (final event in component.definitionEvents) {
+      if (event.kind == WasmComponentDefinitionKind.start) {
+        await _startFunction(component.starts[event.index]).invoke(const []);
+      } else {
+        _processDefinition(event);
+      }
+    }
+    _initialized = true;
+  }
+
+  void _prepareExecution() {
     final plan = _checkComponent();
     _initializeAdapterCallbacks(plan.adapterPlans);
     _adapterProgram = plan.bindAdapters(
@@ -309,8 +333,6 @@ final class WASIComponentNativeRuntime {
       componentFunctions: _adapterComponentCallbacks,
       maxBufferedElementsForStream: _preview3Host == null ? null : (_) => 0,
     );
-    _processDefinitions();
-    _initialized = true;
   }
 
   WASIComponentHostBindingPlan _checkComponent() {
@@ -428,39 +450,40 @@ final class WASIComponentNativeRuntime {
 
   void _processDefinitions() {
     for (final event in component.definitionEvents) {
-      switch (event.kind) {
-        case WasmComponentDefinitionKind.coreModule:
-          _coreModules.add(component.coreModules[event.index]);
-        case WasmComponentDefinitionKind.coreInstance:
-          _coreInstances.add(
-            _instantiateCoreInstance(component.coreInstances[event.index]),
-          );
-        case WasmComponentDefinitionKind.typeCount:
-          _includeTypeDefinitionsTo(event.index);
-        case WasmComponentDefinitionKind.import:
-          _addComponentImport(component.imports[event.index]);
-        case WasmComponentDefinitionKind.alias:
-          _addAlias(component.aliases[event.index]);
-        case WasmComponentDefinitionKind.canonical:
-          _addCanonical(
-            event.index,
-            component.canonicalDefinitions[event.index],
-          );
-        case WasmComponentDefinitionKind.instance:
-          _componentInstances.add(
-            _instantiateComponentInstance(component.instances[event.index]),
-          );
-        case WasmComponentDefinitionKind.export:
-          _addExport(component.exports[event.index]);
-        case WasmComponentDefinitionKind.start:
-          _runStart(component.starts[event.index]);
-        case WasmComponentDefinitionKind.component:
-          _components.add(component.components[event.index]);
-        case WasmComponentDefinitionKind.coreType:
-        case WasmComponentDefinitionKind.type:
-        case WasmComponentDefinitionKind.value:
-          break;
-      }
+      _processDefinition(event);
+    }
+  }
+
+  void _processDefinition(WasmComponentDefinitionEvent event) {
+    switch (event.kind) {
+      case WasmComponentDefinitionKind.coreModule:
+        _coreModules.add(component.coreModules[event.index]);
+      case WasmComponentDefinitionKind.coreInstance:
+        _coreInstances.add(
+          _instantiateCoreInstance(component.coreInstances[event.index]),
+        );
+      case WasmComponentDefinitionKind.typeCount:
+        _includeTypeDefinitionsTo(event.index);
+      case WasmComponentDefinitionKind.import:
+        _addComponentImport(component.imports[event.index]);
+      case WasmComponentDefinitionKind.alias:
+        _addAlias(component.aliases[event.index]);
+      case WasmComponentDefinitionKind.canonical:
+        _addCanonical(event.index, component.canonicalDefinitions[event.index]);
+      case WasmComponentDefinitionKind.instance:
+        _componentInstances.add(
+          _instantiateComponentInstance(component.instances[event.index]),
+        );
+      case WasmComponentDefinitionKind.export:
+        _addExport(component.exports[event.index]);
+      case WasmComponentDefinitionKind.start:
+        _runStart(component.starts[event.index]);
+      case WasmComponentDefinitionKind.component:
+        _components.add(component.components[event.index]);
+      case WasmComponentDefinitionKind.coreType:
+      case WasmComponentDefinitionKind.type:
+      case WasmComponentDefinitionKind.value:
+        break;
     }
   }
 
@@ -623,7 +646,17 @@ final class WASIComponentNativeRuntime {
         'Missing WASI Preview2 import callback `$key`.',
       );
     }
-    return _ComponentFunction(name: resolvedKey, invoke: callback);
+    return _ComponentFunction(
+      name: resolvedKey,
+      invoke: callback,
+      // Generic imports accept FutureOr. Synchronous initialization (notably a
+      // core start) must reject them before the callback can launch a Future.
+      invokeSync: _genericHost == null
+          ? null
+          : (_) => throw WASIPreview2ComponentExecutionException(
+              'Generic import callback `$resolvedKey` cannot be invoked synchronously.',
+            ),
+    );
   }
 
   WasmComponentTypeDefinition? _typeDefinitionAt(int? index) {
@@ -1251,7 +1284,10 @@ final class WASIComponentNativeRuntime {
         return _CoreInstance.fromRuntime(
           runtime,
           wrapMemory: _wrapMemory,
-          allowSynchronousImports: _preview3Host == null,
+          // Generic imports are FutureOr and must stay on the async pipeline
+          // even when the Core module's static call analysis permits sync.
+          allowSynchronousImports:
+              _genericHost == null && _preview3Host == null,
         );
       case WasmComponentCoreInstanceKind.inlineExports:
         return _CoreInstance(
@@ -1646,14 +1682,17 @@ final class WASIComponentNativeRuntime {
     }
   }
 
-  void _runStart(WasmComponentStart start) {
+  _ComponentFunction _startFunction(WasmComponentStart start) {
     if (start.arguments.isNotEmpty || start.resultCount != 0) {
       throw const WASIPreview2ComponentExecutionException(
         'Component starts with values are not executable in the Preview2 runner yet.',
       );
     }
-    final function = _componentFunctions[start.functionIndex];
-    final result = function.invokeSynchronously(const <Object?>[]);
+    return _componentFunctions[start.functionIndex];
+  }
+
+  void _runStart(WasmComponentStart start) {
+    final result = _startFunction(start).invokeSynchronously(const <Object?>[]);
     if (result is Future) {
       throw const WASIPreview2ComponentExecutionException(
         'Async component start is not executable in the Preview2 runner yet.',

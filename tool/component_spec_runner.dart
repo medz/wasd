@@ -11,6 +11,18 @@ import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 const _defaultManifest = 'test/fixtures/component_spec/manifest.json';
 const _revision = '0220da84209397d9067c19cac83dae969aa85a7b';
 const _counts = ['instantiations', 'returns', 'traps'];
+const _repository = 'https://github.com/WebAssembly/component-model';
+// Independent source anchor: changing a manifest and its input cannot silently
+// replace the complete upstream file while retaining the frozen revision.
+const _frozenStrings = {
+  'path': 'test/values/strings.wast',
+  'blob': 'e96f54e97689a32ba70b05e12226e01b8dea024b',
+  'sha256': 'a70c90a0ede0e2364040da75f4c2c0e56c2d34fdac746a11b6347fdbac60283c',
+  'commands': 17,
+  'instantiations': 8,
+  'returns': 5,
+  'traps': 4,
+};
 
 /// Recognizes only the three string trap categories used by the frozen file.
 /// Decode, link and lookup errors are never accepted as string traps.
@@ -45,7 +57,7 @@ Future<Map<String, Object?>> executeComponentSpecScript(
       'totals': _totals(records),
     };
   }
-  await host.table.runScoped(() {
+  await host.table.runScoped(() async {
     for (var i = 0; i < commands.length; i++) {
       final raw = commands[i];
       final record = <String, Object?>{'index': i, 'passed': false};
@@ -73,7 +85,7 @@ Future<Map<String, Object?>> executeComponentSpecScript(
               component: component,
               host: host,
             );
-            runtime.initialize();
+            await runtime.initialize();
             current = runtime;
             break;
           case 'assert_return':
@@ -102,7 +114,7 @@ Future<Map<String, Object?>> executeComponentSpecScript(
                   (expected.single as Map)['value'] is! String) {
                 throw UnsupportedError('Expected exactly one string result.');
               }
-              final actual = runtime.invokeExportSynchronously(name, const []);
+              final actual = await runtime.invokeExport(name, const []);
               final value = (expected.single as Map)['value'] as String;
               record['expected'] = value;
               record['actual'] = actual;
@@ -122,7 +134,7 @@ Future<Map<String, Object?>> executeComponentSpecScript(
               // initialization and action decoding happen outside this catch.
               Object? invocationError;
               try {
-                runtime.invokeExportSynchronously(name, const []);
+                await runtime.invokeExport(name, const []);
               } catch (error) {
                 invocationError = error;
               }
@@ -251,13 +263,22 @@ Future<Map<String, Object?>> runComponentSpecManifest(
       temporary = await Directory.systemTemp.createTemp('wasd-component-spec-');
     }
     for (var i = 0; i < files.length; i++) {
-      final entry = files[i] as Map;
-      final report = <String, Object?>{
-        'path': entry['path'],
-        'status': 'failed',
-      };
+      final report = <String, Object?>{'index': i, 'status': 'failed'};
       reports.add(report);
       try {
+        final entry = files[i];
+        if (entry is! Map) {
+          throw const FormatException('File entry must be an object.');
+        }
+        report['path'] = entry['path'];
+        if (inventory['repository'] != _repository ||
+            _frozenStrings.entries.any(
+              (field) => entry[field.key] != field.value,
+            )) {
+          throw const FormatException(
+            'Frozen Component source identity mismatch.',
+          );
+        }
         final source = _inputFile(base, entry['source']);
         _verifyHash(source, entry['sha256']);
         final bytes = source.readAsBytesSync();

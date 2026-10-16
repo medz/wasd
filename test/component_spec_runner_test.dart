@@ -231,7 +231,7 @@ void main() {
         error,
         contains(
           corruption == 'git-blob'
-              ? 'Git blob mismatch'
+              ? 'Frozen Component source identity mismatch'
               : corruption == 'missing-binary'
               ? 'Cannot open file'
               : 'SHA-256 mismatch',
@@ -239,6 +239,72 @@ void main() {
       );
     });
   }
+
+  for (final mutation in ['source-and-hashes', 'official-path']) {
+    test(
+      'frozen source identity rejects coordinated $mutation drift',
+      () async {
+        final temp = await _copyFixtures();
+        addTearDown(() => temp.delete(recursive: true));
+        final manifest = File('${temp.path}/manifest.json');
+        final inventory = jsonDecode(await manifest.readAsString()) as Map;
+        final entry = inventory['files'][0] as Map;
+        if (mutation == 'source-and-hashes') {
+          final source = File('${temp.path}/strings/strings.wast');
+          await source.writeAsString(
+            '${await source.readAsString()}\n;; drift\n',
+          );
+          final bytes = await source.readAsBytes();
+          entry['sha256'] = sha256.convert(bytes).toString();
+          entry['blob'] = sha1.convert([
+            ...utf8.encode('blob ${bytes.length}\u0000'),
+            ...bytes,
+          ]).toString();
+        } else {
+          entry['path'] = 'test/values/other.wast';
+        }
+        await manifest.writeAsString(jsonEncode(inventory));
+        final report = await runner.runComponentSpecManifest(
+          manifest,
+          usePreparedInputs: true,
+        );
+        expect(report['status'], 'failed');
+        expect((report['totals'] as Map)['files_failed'], 1);
+        expect(
+          ((report['files'] as List).single as Map)['error'],
+          contains('Frozen Component source identity mismatch'),
+        );
+      },
+    );
+  }
+
+  test(
+    'malformed file entries are counted and later files still execute',
+    () async {
+      final temp = await _copyFixtures();
+      addTearDown(() => temp.delete(recursive: true));
+      final manifest = File('${temp.path}/manifest.json');
+      final inventory = jsonDecode(await manifest.readAsString()) as Map;
+      final entry = inventory['files'][0];
+      inventory['files'] = [entry, null, entry];
+      await manifest.writeAsString(jsonEncode(inventory));
+      final report = await runner.runComponentSpecManifest(
+        manifest,
+        usePreparedInputs: true,
+      );
+      expect(report['status'], 'failed');
+      final totals = report['totals'] as Map;
+      expect(totals['files_total'], 3);
+      expect(totals['files_passed'], 2);
+      expect(totals['files_failed'], 1);
+      expect(totals['commands_passed'], 34);
+      final files = report['files'] as List;
+      expect(files, hasLength(3));
+      expect(files[1]['status'], 'failed');
+      expect(files[1]['error'], contains('File entry must be an object'));
+      expect(files[2]['status'], 'passed');
+    },
+  );
 
   for (final mixed in [false, true]) {
     test(
