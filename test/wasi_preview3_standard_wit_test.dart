@@ -45,19 +45,12 @@ void main() {
       expect(testsuite['fixture_count'], 45);
       final official = gateResults['wasi_testsuite']! as Map<String, Object?>;
       expect(official['total'], testsuite['fixture_count']);
-      expect(official['passed'], 39);
-      expect(official['failed'], 6);
+      expect(official['passed'], 45);
+      expect(official['failed'], 0);
       expect(official['skipped'], 0);
       expect(official['xfailed'], 0);
       expect(official['xpassed'], 0);
-      expect(official['failed_fixtures'], <String>[
-        'sockets-tcp-bind',
-        'sockets-tcp-listen',
-        'sockets-echo',
-        'sockets-tcp-connect',
-        'sockets-tcp-receive',
-        'sockets-tcp-send',
-      ]);
+      expect(official['failed_fixtures'], isEmpty);
     });
 
     test('pins all normalized Preview3 WIT source digests', () {
@@ -134,23 +127,15 @@ void main() {
       final readme = File('README.md').readAsStringSync();
       final support = File('doc/wasm_wasi_todo.md').readAsStringSync();
       expect(changelog, startsWith('## $version\n'));
-      final publishedVersion = RegExp(
-        r'The current published release is `([^`]+)`\.',
-      ).firstMatch(readme)!.group(1)!;
+      final previewVersions = RegExp(
+        r'This preview is `([^`]+)`\.',
+      ).allMatches(readme).map((match) => match.group(1)!).toList();
+      expect(previewVersions, <String>[version]);
       final installation = RegExp(
         r'## Installation\s+([\s\S]*?)\n## Quick Start',
       ).firstMatch(readme)!.group(1)!;
-      expect(installation, contains('wasd: ^$publishedVersion'));
-      // A source candidate may be ahead of the published installation version.
-      final candidateVersions = RegExp(
-        r'Version `([^`]+)` on `main` is an\s+unpublished candidate\.',
-      ).allMatches(readme).map((match) => match.group(1)!).toList();
-      expect(
-        candidateVersions,
-        version == publishedVersion ? <String>[] : <String>[version],
-        reason:
-            'Only the current unpublished source may have a candidate claim.',
-      );
+      expect(installation, contains('wasd: ^$version'));
+      expect(installation, contains('dart pub add wasd:^$version'));
 
       final strictClaim = '${strictDecode['passed']}/${strictDecode['total']}';
       final wasmToolsClaim = '${wasmTools['passed']}/${wasmTools['total']}';

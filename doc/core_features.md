@@ -2,9 +2,10 @@
 
 The multi-memory option is part of the `0.6.0-dev.1` preview. Stable `0.5.2`
 does not provide it. The [exception-handling option and public native tags](host_tags.md)
-are unreleased additions. The previously unpublished `0.5.3` floating-point fixes are included
-in this batch; their frozen artifacts remain archived for restoration, with no
-separate `0.5.3` release planned.
+and numeric public `Exception` bindings are introduced in `0.6.0-dev.2`;
+`0.6.0-dev.1` does not provide them. The previously unpublished `0.5.3`
+floating-point fixes are included in this batch; their frozen artifacts remain
+archived for restoration, with no separate `0.5.3` release planned.
 
 `Module` accepts an optional set of Core extensions. Omitting the set, or passing
 an empty set, preserves the existing backend defaults. `supportedFeatures` is
