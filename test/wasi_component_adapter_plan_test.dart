@@ -2447,6 +2447,133 @@ void main() {
       },
     );
 
+    for (final (width, mask) in const [
+      (1, 0x1),
+      (8, 0xff),
+      (9, 0x1ff),
+      (16, 0xffff),
+      (17, 0x1ffff),
+      (32, 0xffffffff),
+    ]) {
+      for (final asyncCallbacks in [false, true]) {
+        test('flags lift and lower mask core bits for $width labels '
+            'asyncCallbacks=$asyncCallbacks', () async {
+          final labels = [for (var i = 1; i <= width; i++) 'f$i'];
+          var coreResult = 0;
+          List<String>? loweredLabels;
+          final program = const WASIComponentCanonicalAdapterHost()
+              .bindAdapterPlans(
+                [
+                  _flagsAdapterPlan(labels, WasmComponentCanonicalKind.lift),
+                  _flagsAdapterPlan(labels, WasmComponentCanonicalKind.lower),
+                ],
+                coreFunctions: {
+                  0: (args) {
+                    expect(args, [0]);
+                    return asyncCallbacks
+                        ? Future<int>.value(coreResult)
+                        : coreResult;
+                  },
+                },
+                componentFunctions: {
+                  0: (args) {
+                    final flags = args.single! as WasmComponentValueData;
+                    expect(flags.kind, WasmComponentValueDataKind.flags);
+                    loweredLabels = flags.labels;
+                    return asyncCallbacks
+                        ? Future<WasmComponentValueData>.value(flags)
+                        : flags;
+                  },
+                },
+              );
+          final cases = [
+            (bits: 0, expectedLabels: <String>[], expectedBits: 0),
+            (bits: 0xffffffff, expectedLabels: labels, expectedBits: mask),
+            (bits: -1, expectedLabels: labels, expectedBits: mask),
+            if (width == 9)
+              (
+                bits: 0xffffff11,
+                expectedLabels: ['f1', 'f5', 'f9'],
+                expectedBits: 0x111,
+              ),
+          ];
+          for (final case_ in cases) {
+            coreResult = case_.bits;
+            final lifted =
+                (asyncCallbacks
+                        ? await program.invokeLiftedCoreAsync(0, [
+                            _flagsValue([]),
+                          ])
+                        : program.invokeLiftedCore(0, [_flagsValue([])]))
+                    as WasmComponentValueData;
+            expect(lifted.kind, WasmComponentValueDataKind.flags);
+            expect(lifted.labels, case_.expectedLabels);
+            final lowered = asyncCallbacks
+                ? await program.invokeLoweredCoreAsync(1, [case_.bits])
+                : program.invokeLoweredCore(1, [case_.bits]);
+            expect(loweredLabels, case_.expectedLabels);
+            expect(lowered, [case_.expectedBits]);
+          }
+        });
+      }
+    }
+
+    test('flags mask undefined core bits and reject invalid host values', () {
+      const labels = ['read', 'write', 'exec'];
+      Object? coreResult = 0x8;
+      var componentResult = _flagsValue([]);
+      var coreCalls = 0;
+      var componentCalls = 0;
+      final program = const WASIComponentCanonicalAdapterHost()
+          .bindAdapterPlans(
+            [
+              _flagsAdapterPlan(labels, WasmComponentCanonicalKind.lift),
+              _flagsAdapterPlan(labels, WasmComponentCanonicalKind.lower),
+            ],
+            coreFunctions: {
+              0: (_) {
+                coreCalls++;
+                return coreResult;
+              },
+            },
+            componentFunctions: {
+              0: (args) {
+                componentCalls++;
+                expect(
+                  (args.single! as WasmComponentValueData).labels,
+                  isEmpty,
+                );
+                return componentResult;
+              },
+            },
+          );
+      final lifted =
+          program.invokeLiftedCore(0, [_flagsValue([])])!
+              as WasmComponentValueData;
+      expect(lifted.labels, isEmpty);
+      expect(program.invokeLoweredCore(1, [0x8]), [0]);
+
+      for (final invalid in [
+        _flagsValue(['unknown']),
+        _flagsValue(['read', 'read']),
+      ]) {
+        expect(() => program.invokeLiftedCore(0, [invalid]), throwsStateError);
+        expect(coreCalls, 1);
+        componentResult = invalid;
+        expect(() => program.invokeLoweredCore(1, [0]), throwsStateError);
+      }
+      final callsBeforeInvalidInput = componentCalls;
+      for (final invalid in <Object?>['8', 1.5, null]) {
+        expect(() => program.invokeLoweredCore(1, [invalid]), throwsStateError);
+        expect(componentCalls, callsBeforeInvalidInput);
+        coreResult = invalid;
+        expect(
+          () => program.invokeLiftedCore(0, [_flagsValue([])]),
+          throwsStateError,
+        );
+      }
+    });
+
     test('invokes flags and enum adapter programs through flat scalars', () {
       final component = WasmComponent.decode(
         canonicalFlagsEnumLiftLowerComponentBytes(),
@@ -2508,10 +2635,6 @@ void main() {
       expect(program.invokeFlat(1, const <Object?>[0x2]), [0x4]);
       expect(program.invokeFlat(2, const <Object?>[1]), [2]);
       expect(program.invokeFlat(3, const <Object?>[0]), [1]);
-      expect(
-        () => program.invokeFlat(0, const <Object?>[0x8]),
-        throwsStateError,
-      );
       expect(() => program.invokeFlat(2, const <Object?>[3]), throwsStateError);
     });
 
@@ -4000,6 +4123,61 @@ WASIComponentCanonicalAdapterPlan _borrowLiftPlan(
     postReturnIndex: postReturnIndex,
     callbackIndex: null,
     isAsync: isAsync,
+  );
+}
+
+WasmComponentValueData _flagsValue(List<String> labels) =>
+    WasmComponentValueData(
+      kind: WasmComponentValueDataKind.flags,
+      rawBytes: Uint8List(0),
+      labels: labels,
+    );
+
+WASIComponentCanonicalAdapterPlan _flagsAdapterPlan(
+  List<String> labels,
+  WasmComponentCanonicalKind kind,
+) {
+  const type = WasmComponentValueType.typeIndex(0);
+  final index = kind == WasmComponentCanonicalKind.lift ? 0 : 1;
+  final valuePlan = WASIComponentCanonicalAdapterValuePlan(
+    path: 'canonical[$index].flags',
+    label: 'flags',
+    type: type,
+    memoryCodec:
+        WASIComponentCanonicalValueMemoryCodec.fromAdapterValueType(type, [
+          WasmComponentTypeDefinition(
+            kind: WasmComponentTypeKind.definedValue,
+            definedValue: WasmComponentDefinedValueType(
+              kind: WasmComponentDefinedValueTypeKind.flags,
+              labels: labels,
+            ),
+          ),
+        ]),
+    flatLayout: WASIComponentCanonicalAdapterFlatValuePlan.flags(
+      labels: labels,
+    ),
+    resourceUses: const [],
+  );
+  return WASIComponentCanonicalAdapterPlan(
+    canonicalIndex: index,
+    definition: WasmComponentCanonicalDefinition(
+      kind: kind,
+      coreFunctionIndex: kind == WasmComponentCanonicalKind.lift ? 0 : null,
+      functionIndex: kind == WasmComponentCanonicalKind.lower ? 0 : null,
+    ),
+    functionType: const WasmComponentFunctionType(
+      params: [WasmComponentLabeledValueType(label: 'flags', type: type)],
+      result: type,
+    ),
+    params: [valuePlan],
+    result: valuePlan,
+    resourceUses: const [],
+    stringEncoding: WASIComponentCanonicalStringEncoding.utf8,
+    memoryIndex: null,
+    reallocIndex: null,
+    postReturnIndex: null,
+    callbackIndex: null,
+    isAsync: false,
   );
 }
 
