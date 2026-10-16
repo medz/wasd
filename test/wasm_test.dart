@@ -2,12 +2,16 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:wasd/src/wasm/backend/native/interpreter/features.dart'
+    as native_features;
 import 'package:wasd/src/wasm/backend/native/interpreter/module.dart'
     as native_module;
 import 'package:wasd/src/wasm/backend/native/interpreter/runtime_function.dart'
     as native_runtime;
 import 'package:wasd/src/wasm/backend/native/interpreter/value.dart'
     as native_value;
+import 'package:wasd/src/wasm/backend/native/interpreter/validator.dart'
+    as native_validator;
 import 'package:wasd/src/wasm/backend/native/interpreter/vm.dart' as native_vm;
 import 'package:wasd/src/wasm/host_control_flow.dart';
 import 'package:wasd/wasm.dart';
@@ -116,6 +120,78 @@ final _invalidBranchHintCustomSectionBytes = Uint8List.fromList(const <int>[
 final _invalidBytes = Uint8List.fromList([0x00, 0x00, 0x00, 0x00]);
 
 void main() {
+  group('native GC type validation', () {
+    const features = native_features.WasmFeatureSet(gc: true);
+
+    native_module.WasmModule moduleWithSupertypes(List<int> supertypes) {
+      // Two non-final empty structs followed by a child with the given parents.
+      // Mirrors the frozen Core type-subtyping.wast multiple-supertypes case.
+      final types = <int>[
+        3,
+        0x50,
+        0,
+        0x5f,
+        0,
+        0x50,
+        0,
+        0x5f,
+        0,
+        0x50,
+        supertypes.length,
+        ...supertypes,
+        0x5f,
+        0,
+      ];
+      return native_module.WasmModule.decode(
+        Uint8List.fromList([
+          0x00,
+          0x61,
+          0x73,
+          0x6d,
+          0x01,
+          0x00,
+          0x00,
+          0x00,
+          0x01,
+          types.length,
+          ...types,
+        ]),
+        features: features,
+      );
+    }
+
+    for (final supertypes in <List<int>>[
+      [],
+      [0],
+    ]) {
+      test('accepts ${supertypes.length} supertype', () {
+        final module = moduleWithSupertypes(supertypes);
+        native_validator.WasmValidator.validateModule(
+          module,
+          features: features,
+        );
+      });
+    }
+
+    test('rejects multiple supertypes after binary decoding', () {
+      final module = moduleWithSupertypes([0, 1]);
+      expect(module.types.last.superTypeIndices, [0, 1]);
+      expect(
+        () => native_validator.WasmValidator.validateModule(
+          module,
+          features: features,
+        ),
+        throwsA(
+          isA<FormatException>().having(
+            (error) => error.message,
+            'message',
+            contains('multiple supertypes'),
+          ),
+        ),
+      );
+    });
+  });
+
   group('WebAssembly.validate', () {
     test('returns true for valid bytes', () {
       expect(WebAssembly.validate(_wasmBytes.buffer), isTrue);

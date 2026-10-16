@@ -61,7 +61,7 @@ if os.environ.get('FAIL_DOWNLOAD'):
     print('curl: HTTP 403', file=sys.stderr)
     sys.exit(22)
 if not (url.startswith('https://github.com/WebAssembly/wabt/releases/download/1.0.41/') or
-        url.startswith('https://github.com/bytecodealliance/wasm-tools/releases/download/v1.254.0/')):
+        url.startswith('https://github.com/bytecodealliance/wasm-tools/releases/download/v1.262.0/')):
     sys.exit(22)
 shutil.copyfile(pathlib.Path(os.environ['OFFICIAL_ARCHIVES']) / url.rsplit('/', 1)[1], output)
 ''')

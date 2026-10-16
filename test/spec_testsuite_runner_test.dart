@@ -3,7 +3,233 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+import '../tool/core_spec_runner.dart' as core_spec;
+
 void main() {
+  for (final mixed in [false, true]) {
+    test('frozen Core runner rejects empty conversions mixed=$mixed', () async {
+      final temp = await Directory.systemTemp.createTemp('wasd_core_empty_');
+      addTearDown(() => temp.delete(recursive: true));
+      final module = File('${temp.path}/empty.wasm');
+      await module.writeAsBytes([0, 97, 115, 109, 1, 0, 0, 0]);
+      final converter = File('${temp.path}/converter.sh');
+      await converter.writeAsString('''
+#!/bin/sh
+if [ "\$1" = "--version" ]; then
+  echo "inventory test converter"
+  exit 0
+fi
+input=""
+output=""
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in
+    *.wast) input="\$1" ;;
+    -o) shift; output="\$1" ;;
+  esac
+  shift
+done
+case "\$input" in
+  ${mixed ? '*' : 'never-match-'}multi-memory/*)
+    cp '${module.path}' "\$output.module.wasm"
+    printf '{"commands":[{"type":"module","filename":"%s"}]}' "\${output##*/}.module.wasm" > "\$output" ;;
+  *) printf '{"commands":[]}' > "\$output" ;;
+esac
+''');
+      await Process.run('chmod', ['+x', converter.path]);
+      final jsonPath = '${temp.path}/result.json';
+      final markdownPath = '${temp.path}/result.md';
+      final result = await Process.run(Platform.resolvedExecutable, [
+        'tool/core_spec_runner.dart',
+        '--file=test/core/memory_grow.wast',
+        '--file=test/core/multi-memory/memory_grow.wast',
+        '--wast2json=${converter.path}',
+        '--no-conversion-cache',
+        '--output-json=$jsonPath',
+        '--output-md=$markdownPath',
+      ]);
+      expect(result.exitCode, 1, reason: '${result.stdout}\n${result.stderr}');
+      final payload = jsonDecode(await File(jsonPath).readAsString()) as Map;
+      final totals = payload['totals'] as Map;
+      expect(payload['status'], 'failed');
+      expect(totals['commands_seen'], mixed ? 1 : 0);
+      expect(totals['files_passed'], mixed ? 1 : 0);
+      expect(totals['files_failed'], mixed ? 1 : 2);
+      final empty = (payload['files'] as List).where(
+        (file) => file['commands_seen'] == 0,
+      );
+      expect(empty.every((file) => file['passed'] == false), isTrue);
+      final groups = payload['group_stats'] as Map;
+      expect((groups['core'] as Map)['failed'], mixed ? 1 : 2);
+      final markdown = await File(markdownPath).readAsString();
+      expect(markdown, contains('- Failed files: ${mixed ? 1 : 2}'));
+    });
+  }
+
+  test('frozen Core inventory retains all 261 official source paths', () {
+    final inventory =
+        jsonDecode(File('tool/core_spec_inventory.json').readAsStringSync())
+            as Map<String, dynamic>;
+    expect(inventory['revision'], '957c932e7158c5a6891be68ca424aaa0aa505f97');
+    expect(
+      inventory['testsuite_revision'],
+      '193e551ff22663995b1ac95dc62344133669e14b',
+    );
+    final inputs = core_spec.verifyCoreSpecInputs(inventory);
+    expect(inputs, hasLength(261));
+    expect(
+      inputs.keys.where((path) => path.startsWith('test/core/')),
+      hasLength(258),
+    );
+    expect(
+      inputs.keys.where((path) => path.startsWith('test/custom/')),
+      hasLength(3),
+    );
+    expect(
+      inputs['test/core/memory_grow.wast']!.path,
+      isNot(inputs['test/core/multi-memory/memory_grow.wast']!.path),
+    );
+    expect(
+      inputs.values.where((file) => file.path.contains('/fixtures/')),
+      hasLength(9),
+    );
+    expect(
+      inputs['test/core/gc/type-subtyping.wast']!.readAsStringSync(),
+      contains('(type \$child (sub \$parent1 \$parent2 (struct))))'),
+      reason: 'The official invalid assertion must remain unchanged.',
+    );
+  });
+
+  test('frozen Core inventory rejects duplicate source paths', () {
+    final inventory = <String, dynamic>{
+      'files': [
+        {'path': 'test/core/memory_grow.wast', 'source': 'unused', 'blob': ''},
+        {'path': 'test/core/memory_grow.wast', 'source': 'unused', 'blob': ''},
+      ],
+    };
+    expect(
+      () => core_spec.verifyCoreSpecInputs(inventory),
+      throwsA(
+        isA<FormatException>().having(
+          (error) => error.message,
+          'message',
+          contains('Duplicate official path'),
+        ),
+      ),
+    );
+  });
+
+  test('frozen Core inventory rejects changed source bytes before running', () {
+    final inventory =
+        jsonDecode(File('tool/core_spec_inventory.json').readAsStringSync())
+            as Map<String, dynamic>;
+    final entries = inventory['files'] as List<dynamic>;
+    final entry = entries.first as Map<String, dynamic>;
+    entry['blob'] = '0000000000000000000000000000000000000000';
+    expect(
+      () => core_spec.verifyCoreSpecInputs(inventory),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('Git blob mismatch'),
+        ),
+      ),
+    );
+  });
+
+  test(
+    'frozen Core runner preserves both memory_grow paths and fails skips',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'wasd_core_inventory_',
+      );
+      addTearDown(() => temp.delete(recursive: true));
+      final converter = File('${temp.path}/converter.sh');
+      await converter.writeAsString('''
+#!/bin/sh
+if [ "\$1" = "--version" ]; then
+  echo "inventory test converter"
+  exit 0
+fi
+output=""
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in
+    -o) shift; output="\$1" ;;
+  esac
+  shift
+done
+printf '{"commands":[{"type":"inventory_skip_probe"}]}' > "\$output"
+''');
+      await Process.run('chmod', ['+x', converter.path]);
+      final jsonPath = '${temp.path}/result.json';
+      final result = await Process.run(Platform.resolvedExecutable, [
+        'tool/core_spec_runner.dart',
+        '--file=test/core/memory_grow.wast',
+        '--file=test/core/multi-memory/memory_grow.wast',
+        '--wast2json=${converter.path}',
+        '--no-conversion-cache',
+        '--output-json=$jsonPath',
+        '--output-md=${temp.path}/result.md',
+      ]);
+      expect(result.exitCode, 1, reason: '${result.stdout}\n${result.stderr}');
+      final payload = jsonDecode(await File(jsonPath).readAsString()) as Map;
+      final totals = payload['totals'] as Map;
+      final specification = payload['core_specification'] as Map;
+      expect(payload['status'], 'failed');
+      expect(totals['files_total'], 2);
+      expect(totals['commands_skipped'], 2);
+      expect(specification['files_verified'], 261);
+      expect(specification['files_selected'], 2);
+      expect(specification['scope'], 'subset');
+      expect(
+        (payload['files'] as List).map((file) => file['path']),
+        containsAll([
+          'test/core/memory_grow.wast',
+          'test/core/multi-memory/memory_grow.wast',
+        ]),
+      );
+    },
+  );
+
+  test(
+    'frozen Core runner keeps converter failures outside passed execution',
+    () async {
+      final temp = await Directory.systemTemp.createTemp('wasd_core_convert_');
+      addTearDown(() => temp.delete(recursive: true));
+      final converter = File('${temp.path}/converter.sh');
+      await converter.writeAsString('''
+#!/bin/sh
+if [ "\$1" = "--version" ]; then
+  echo "inventory test converter"
+  exit 0
+fi
+echo 'official assertion could not be converted' >&2
+exit 17
+''');
+      await Process.run('chmod', ['+x', converter.path]);
+      final jsonPath = '${temp.path}/result.json';
+      final result = await Process.run(Platform.resolvedExecutable, [
+        'tool/core_spec_runner.dart',
+        '--file=test/core/gc/type-subtyping.wast',
+        '--wast2json=${converter.path}',
+        '--no-conversion-cache',
+        '--output-json=$jsonPath',
+        '--output-md=${temp.path}/result.md',
+      ]);
+      expect(result.exitCode, 1, reason: '${result.stdout}\n${result.stderr}');
+      final payload = jsonDecode(await File(jsonPath).readAsString()) as Map;
+      final totals = payload['totals'] as Map;
+      expect(payload['status'], 'failed');
+      expect(totals['files_failed'], 1);
+      expect(totals['commands_passed'], 0);
+      expect(totals['commands_skipped'], 0);
+      expect(
+        (payload['files'] as List).single['first_failure_reason'],
+        'wast-convert-failed',
+      );
+    },
+  );
+
   test(
     'core runner rejects an empty testsuite in execution and prepare modes',
     () async {

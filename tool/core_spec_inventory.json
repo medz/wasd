@@ -1,0 +1,1313 @@
+{
+  "repository": "https://github.com/WebAssembly/spec",
+  "revision": "957c932e7158c5a6891be68ca424aaa0aa505f97",
+  "testsuite_repository": "https://github.com/WebAssembly/testsuite",
+  "testsuite_revision": "193e551ff22663995b1ac95dc62344133669e14b",
+  "files": [
+    {
+      "path": "test/core/address.wast",
+      "blob": "8e52030ecdabfba5392e5e2acff28f255ad5776e",
+      "source": "third_party/wasm-spec-tests/address.wast"
+    },
+    {
+      "path": "test/core/align.wast",
+      "blob": "56e5fdb7ab95cab09804617c7fbe1ce91a7f91cc",
+      "source": "third_party/wasm-spec-tests/align.wast"
+    },
+    {
+      "path": "test/core/annotations.wast",
+      "blob": "912d10f38accf7dadc29056dd1b47d42dcf80105",
+      "source": "third_party/wasm-spec-tests/annotations.wast"
+    },
+    {
+      "path": "test/core/binary-leb128.wast",
+      "blob": "787ba9eb59ea4a2b5d37f98740ccca4bafeed6d3",
+      "source": "third_party/wasm-spec-tests/binary-leb128.wast"
+    },
+    {
+      "path": "test/core/binary.wast",
+      "blob": "e328be360345522d394a7366298cebec656ad81f",
+      "source": "third_party/wasm-spec-tests/binary.wast"
+    },
+    {
+      "path": "test/core/block.wast",
+      "blob": "44915b991b6b0886655cc1af244eb012bca4a6e8",
+      "source": "third_party/wasm-spec-tests/block.wast"
+    },
+    {
+      "path": "test/core/br.wast",
+      "blob": "35f707c92227a462a61e2a2986833eb15a8a0783",
+      "source": "third_party/wasm-spec-tests/br.wast"
+    },
+    {
+      "path": "test/core/br_if.wast",
+      "blob": "9d0cdd81faf14d70a89420bc8ade14c2319d2de7",
+      "source": "third_party/wasm-spec-tests/br_if.wast"
+    },
+    {
+      "path": "test/core/br_on_non_null.wast",
+      "blob": "e25dd4f0207ad64a74574618cb25f05b809ee101",
+      "source": "third_party/wasm-spec-tests/br_on_non_null.wast"
+    },
+    {
+      "path": "test/core/br_on_null.wast",
+      "blob": "e47dae50a3fbadfa2857829ba83b74cd8311bb51",
+      "source": "third_party/wasm-spec-tests/br_on_null.wast"
+    },
+    {
+      "path": "test/core/br_table.wast",
+      "blob": "2a5197ce14efc0ee8be092dea745abf586121088",
+      "source": "third_party/wasm-spec-tests/br_table.wast"
+    },
+    {
+      "path": "test/core/bulk-memory/bulk.wast",
+      "blob": "5dcac724cf1bec63e89cef367088b2011de756ce",
+      "source": "third_party/wasm-spec-tests/bulk.wast"
+    },
+    {
+      "path": "test/core/bulk-memory/memory_copy.wast",
+      "blob": "472995d79dc0b326a8051bb93a530b3912491ece",
+      "source": "third_party/wasm-spec-tests/memory_copy.wast"
+    },
+    {
+      "path": "test/core/bulk-memory/memory_fill.wast",
+      "blob": "98374a15863d1804f928ff3f61a81780efe0fa4e",
+      "source": "third_party/wasm-spec-tests/memory_fill.wast"
+    },
+    {
+      "path": "test/core/bulk-memory/memory_init.wast",
+      "blob": "2a8284c6525bb5ed510afc2aa5f1e9c59f0c3c62",
+      "source": "third_party/wasm-spec-tests/memory_init.wast"
+    },
+    {
+      "path": "test/core/bulk-memory/table-sub.wast",
+      "blob": "c3a7440cec77e9eb2c10cbc75f375721ea3bdb49",
+      "source": "third_party/wasm-spec-tests/table-sub.wast"
+    },
+    {
+      "path": "test/core/bulk-memory/table_copy.wast",
+      "blob": "380e84ee594fa8c5c55d85df497b9caabb0f7828",
+      "source": "third_party/wasm-spec-tests/table_copy.wast"
+    },
+    {
+      "path": "test/core/bulk-memory/table_fill.wast",
+      "blob": "80a657fcfcfa9db8401b0a3c012b438fe1eafdde",
+      "source": "third_party/wasm-spec-tests/table_fill.wast"
+    },
+    {
+      "path": "test/core/bulk-memory/table_init.wast",
+      "blob": "e74c56f34cb45bfaf2cc4f2010444e2f26f062ae",
+      "source": "third_party/wasm-spec-tests/table_init.wast"
+    },
+    {
+      "path": "test/core/call.wast",
+      "blob": "e4f854f7a55aa6666fca69ead8f245f55c04954a",
+      "source": "third_party/wasm-spec-tests/call.wast"
+    },
+    {
+      "path": "test/core/call_indirect.wast",
+      "blob": "74b5e8d2e80e8e6c12f85bcb8f1dae597b6d7bda",
+      "source": "third_party/wasm-spec-tests/call_indirect.wast"
+    },
+    {
+      "path": "test/core/call_ref.wast",
+      "blob": "aa9ac7b873dd763cec5e414e863a390dae04ba70",
+      "source": "third_party/wasm-spec-tests/call_ref.wast"
+    },
+    {
+      "path": "test/core/comments.wast",
+      "blob": "5ef64a6c1e60e898c86f51a53dcb11201e5025f8",
+      "source": "third_party/wasm-spec-tests/comments.wast"
+    },
+    {
+      "path": "test/core/const.wast",
+      "blob": "56565029870ad4e3dc500e3cb538ec7110e06d4d",
+      "source": "third_party/wasm-spec-tests/const.wast"
+    },
+    {
+      "path": "test/core/conversions.wast",
+      "blob": "65d09339cac0297c25e451915a1f95e96fdacff3",
+      "source": "third_party/wasm-spec-tests/conversions.wast"
+    },
+    {
+      "path": "test/core/custom.wast",
+      "blob": "12b0476503e77f3d9ba7b3bf779eed0160fac2bd",
+      "source": "third_party/wasm-spec-tests/custom.wast"
+    },
+    {
+      "path": "test/core/data.wast",
+      "blob": "fd05b5e4430d9249c8dbe26e60ae10fbfa935284",
+      "source": "test/fixtures/core_spec/core/data.wast"
+    },
+    {
+      "path": "test/core/elem.wast",
+      "blob": "6cf25e65fbc24f5f8b9e00dc8af61d87baa58c3b",
+      "source": "test/fixtures/core_spec/core/elem.wast"
+    },
+    {
+      "path": "test/core/endianness.wast",
+      "blob": "4f28a168f2ac18e72dd7e5a1743350bf537422f9",
+      "source": "third_party/wasm-spec-tests/endianness.wast"
+    },
+    {
+      "path": "test/core/exceptions/tag.wast",
+      "blob": "b2ec2864fa3bad089298f93ba53e59fa6bf9d5b9",
+      "source": "third_party/wasm-spec-tests/tag.wast"
+    },
+    {
+      "path": "test/core/exceptions/throw.wast",
+      "blob": "dc1aa4a98a1b9b2b769b813d340f31848617f4bd",
+      "source": "third_party/wasm-spec-tests/throw.wast"
+    },
+    {
+      "path": "test/core/exceptions/throw_ref.wast",
+      "blob": "f59710a1f998505c8268f3f83459b92c4717a8e0",
+      "source": "third_party/wasm-spec-tests/throw_ref.wast"
+    },
+    {
+      "path": "test/core/exceptions/try_table.wast",
+      "blob": "f402ffb4a12d5d12c4406992f4dd11deb45cd158",
+      "source": "third_party/wasm-spec-tests/try_table.wast"
+    },
+    {
+      "path": "test/core/exports.wast",
+      "blob": "f27b10a54c59e0ce1ccc551df844bd5913647a03",
+      "source": "third_party/wasm-spec-tests/exports.wast"
+    },
+    {
+      "path": "test/core/f32.wast",
+      "blob": "0f8ae0aa45cf70d86b9afddb3f9f872d7eed7159",
+      "source": "third_party/wasm-spec-tests/f32.wast"
+    },
+    {
+      "path": "test/core/f32_bitwise.wast",
+      "blob": "8554d6741d0cd40fd01bed6fd946831980fefd7f",
+      "source": "third_party/wasm-spec-tests/f32_bitwise.wast"
+    },
+    {
+      "path": "test/core/f32_cmp.wast",
+      "blob": "0dd7167c03808b0e92d55f494eb266a285f6e278",
+      "source": "third_party/wasm-spec-tests/f32_cmp.wast"
+    },
+    {
+      "path": "test/core/f64.wast",
+      "blob": "afd2b2f7341d92f53e4e3dccef7dc8cf164fb1dc",
+      "source": "third_party/wasm-spec-tests/f64.wast"
+    },
+    {
+      "path": "test/core/f64_bitwise.wast",
+      "blob": "f268a3e18fac657fa14ecee435f2c24b7fdb218d",
+      "source": "third_party/wasm-spec-tests/f64_bitwise.wast"
+    },
+    {
+      "path": "test/core/f64_cmp.wast",
+      "blob": "dd79929d2068bd868dc8c14287a72ef32222eff9",
+      "source": "third_party/wasm-spec-tests/f64_cmp.wast"
+    },
+    {
+      "path": "test/core/fac.wast",
+      "blob": "0e61c1f9eee9e8d7607179ee6ac966129c2056b6",
+      "source": "third_party/wasm-spec-tests/fac.wast"
+    },
+    {
+      "path": "test/core/float_exprs.wast",
+      "blob": "114cc99c7aaec5b77c0f1195018815992033c34b",
+      "source": "third_party/wasm-spec-tests/float_exprs.wast"
+    },
+    {
+      "path": "test/core/float_literals.wast",
+      "blob": "9f6fa55ad37ffe2e2a3e9f1a4d1fc63cac716871",
+      "source": "third_party/wasm-spec-tests/float_literals.wast"
+    },
+    {
+      "path": "test/core/float_memory.wast",
+      "blob": "3801158f92b4c3fecad647d4ed670384bb53757b",
+      "source": "third_party/wasm-spec-tests/float_memory.wast"
+    },
+    {
+      "path": "test/core/float_misc.wast",
+      "blob": "a2153cfabd92dce0d45b1817337dbd93b7294faa",
+      "source": "third_party/wasm-spec-tests/float_misc.wast"
+    },
+    {
+      "path": "test/core/forward.wast",
+      "blob": "7bb3770d7d56b1f7133d55561257650d377fd6ff",
+      "source": "third_party/wasm-spec-tests/forward.wast"
+    },
+    {
+      "path": "test/core/func.wast",
+      "blob": "f2d18cc9f1e8cb972c01b3d91b174b71d0d9b892",
+      "source": "third_party/wasm-spec-tests/func.wast"
+    },
+    {
+      "path": "test/core/func_ptrs.wast",
+      "blob": "f6f8e2c429dd59eda8eedebec94e3d175e2e9137",
+      "source": "third_party/wasm-spec-tests/func_ptrs.wast"
+    },
+    {
+      "path": "test/core/gc/array.wast",
+      "blob": "81f943d211386080dce7b88136f6f2cc3061b8b8",
+      "source": "third_party/wasm-spec-tests/array.wast"
+    },
+    {
+      "path": "test/core/gc/array_copy.wast",
+      "blob": "135bf902e9d3929acce0aee7dd364a1bb6380d38",
+      "source": "third_party/wasm-spec-tests/array_copy.wast"
+    },
+    {
+      "path": "test/core/gc/array_fill.wast",
+      "blob": "f5d55b9b58b6e723dd93014ba67cd06df82c023b",
+      "source": "third_party/wasm-spec-tests/array_fill.wast"
+    },
+    {
+      "path": "test/core/gc/array_init_data.wast",
+      "blob": "b213ec409d92c9ee076c0d4ea797bded70ce7c6f",
+      "source": "third_party/wasm-spec-tests/array_init_data.wast"
+    },
+    {
+      "path": "test/core/gc/array_init_elem.wast",
+      "blob": "88bab5758e5c1bd6046543a2531a2c81397c9941",
+      "source": "third_party/wasm-spec-tests/array_init_elem.wast"
+    },
+    {
+      "path": "test/core/gc/array_new_data.wast",
+      "blob": "a849119a028da396a3aa71fac3e544c6d53548d2",
+      "source": "third_party/wasm-spec-tests/array_new_data.wast"
+    },
+    {
+      "path": "test/core/gc/array_new_elem.wast",
+      "blob": "219c997267fcda59028a08f25f63b7ada4b38304",
+      "source": "third_party/wasm-spec-tests/array_new_elem.wast"
+    },
+    {
+      "path": "test/core/gc/binary-gc.wast",
+      "blob": "589573f2cc7182f4e5676549565bb7dd3366a843",
+      "source": "third_party/wasm-spec-tests/binary-gc.wast"
+    },
+    {
+      "path": "test/core/gc/br_on_cast.wast",
+      "blob": "3c895c07101d301e8ff61899841e4bfb2ae300de",
+      "source": "third_party/wasm-spec-tests/br_on_cast.wast"
+    },
+    {
+      "path": "test/core/gc/br_on_cast_fail.wast",
+      "blob": "db6db11b05fb1c5e0b88103183ca685954e1d5c0",
+      "source": "third_party/wasm-spec-tests/br_on_cast_fail.wast"
+    },
+    {
+      "path": "test/core/gc/extern.wast",
+      "blob": "acc443a25b6aa8ddcc5ba1384d7d5875d05e83af",
+      "source": "third_party/wasm-spec-tests/extern.wast"
+    },
+    {
+      "path": "test/core/gc/i31.wast",
+      "blob": "6309e72b6579f8543c7567e2ff8ade1e8c3218b0",
+      "source": "third_party/wasm-spec-tests/i31.wast"
+    },
+    {
+      "path": "test/core/gc/ref_cast.wast",
+      "blob": "8e35431193505155cb3e00cbbdff73f1c5eca229",
+      "source": "third_party/wasm-spec-tests/ref_cast.wast"
+    },
+    {
+      "path": "test/core/gc/ref_eq.wast",
+      "blob": "001efd69f89f1e19a030fe93316e89042d970a6c",
+      "source": "third_party/wasm-spec-tests/ref_eq.wast"
+    },
+    {
+      "path": "test/core/gc/ref_test.wast",
+      "blob": "590b81b8a4c41f67179fb7e45b1ca186718e43c9",
+      "source": "third_party/wasm-spec-tests/ref_test.wast"
+    },
+    {
+      "path": "test/core/gc/struct.wast",
+      "blob": "d7740167a28c09bf077c5c8a80ca4bcb94eac8c9",
+      "source": "third_party/wasm-spec-tests/struct.wast"
+    },
+    {
+      "path": "test/core/gc/type-subtyping.wast",
+      "blob": "e2775ae5ccc30e8ad0cc5a5a06b6b447ff51b75e",
+      "source": "test/fixtures/core_spec/core/gc/type-subtyping.wast"
+    },
+    {
+      "path": "test/core/global.wast",
+      "blob": "fec03743c29999b4a77285132f056c9a0d24be92",
+      "source": "third_party/wasm-spec-tests/global.wast"
+    },
+    {
+      "path": "test/core/i32.wast",
+      "blob": "2e8ab70053a10b9cfd0bb78fdb666a648d50aaae",
+      "source": "third_party/wasm-spec-tests/i32.wast"
+    },
+    {
+      "path": "test/core/i64.wast",
+      "blob": "b662f3d92781548ebf4d0636e5b3067d17f7c314",
+      "source": "third_party/wasm-spec-tests/i64.wast"
+    },
+    {
+      "path": "test/core/id.wast",
+      "blob": "dcf151f22cde9445bc1ebb29c2276da4d782b88f",
+      "source": "third_party/wasm-spec-tests/id.wast"
+    },
+    {
+      "path": "test/core/if.wast",
+      "blob": "35a4cf6cb96c4047542fdc55a30d54043198ad1c",
+      "source": "third_party/wasm-spec-tests/if.wast"
+    },
+    {
+      "path": "test/core/imports.wast",
+      "blob": "543ed65c5f3233ad9655552100c4a835f176b6cf",
+      "source": "third_party/wasm-spec-tests/imports.wast"
+    },
+    {
+      "path": "test/core/inline-module.wast",
+      "blob": "dc7ead7767f2934044fbba50d3cc77b095e3b479",
+      "source": "third_party/wasm-spec-tests/inline-module.wast"
+    },
+    {
+      "path": "test/core/instance.wast",
+      "blob": "b88025d699fae816421fe484b9ec80e3d4e6fb2b",
+      "source": "third_party/wasm-spec-tests/instance.wast"
+    },
+    {
+      "path": "test/core/int_exprs.wast",
+      "blob": "22e1fbcb5c9269dd448a18b64330000f135d8aa1",
+      "source": "third_party/wasm-spec-tests/int_exprs.wast"
+    },
+    {
+      "path": "test/core/int_literals.wast",
+      "blob": "73b37cc5a9bf3ab79b4498f821c20c6c8c833b88",
+      "source": "third_party/wasm-spec-tests/int_literals.wast"
+    },
+    {
+      "path": "test/core/labels.wast",
+      "blob": "6fbf6292d2e73f6f2f3e688041ea0689a76cb8da",
+      "source": "third_party/wasm-spec-tests/labels.wast"
+    },
+    {
+      "path": "test/core/left-to-right.wast",
+      "blob": "634aa9c86a3a474ebcb5684759e02a7cc9f05083",
+      "source": "third_party/wasm-spec-tests/left-to-right.wast"
+    },
+    {
+      "path": "test/core/linking.wast",
+      "blob": "6a8ba1d0cc8e47813db3ba3c140df28950051b14",
+      "source": "third_party/wasm-spec-tests/linking.wast"
+    },
+    {
+      "path": "test/core/load.wast",
+      "blob": "ef5ec7c429c1ce6e790285ff639d33e82732e175",
+      "source": "third_party/wasm-spec-tests/load.wast"
+    },
+    {
+      "path": "test/core/local_get.wast",
+      "blob": "45dbcaeeb4c2589dffb5fdb2abcf9c7fed85ef55",
+      "source": "third_party/wasm-spec-tests/local_get.wast"
+    },
+    {
+      "path": "test/core/local_init.wast",
+      "blob": "176ccc64bb26062afd3e717658235324f2be7a07",
+      "source": "third_party/wasm-spec-tests/local_init.wast"
+    },
+    {
+      "path": "test/core/local_set.wast",
+      "blob": "ce9cf77f444f02c4e4cd6ab74b1eff85c727d5cd",
+      "source": "third_party/wasm-spec-tests/local_set.wast"
+    },
+    {
+      "path": "test/core/local_tee.wast",
+      "blob": "eeb26e6e015a02d990de2fa408a1d3d0ea8f6030",
+      "source": "third_party/wasm-spec-tests/local_tee.wast"
+    },
+    {
+      "path": "test/core/loop.wast",
+      "blob": "0f76a25917cc53dc0adc04b32f437fa2ea527dbe",
+      "source": "third_party/wasm-spec-tests/loop.wast"
+    },
+    {
+      "path": "test/core/memory.wast",
+      "blob": "8ae51eca4b59351dc00a42fd4ab7a233514434dd",
+      "source": "third_party/wasm-spec-tests/memory.wast"
+    },
+    {
+      "path": "test/core/memory64/address64.wast",
+      "blob": "29771ae776cb8991e627176063e6a52d91a8c6bd",
+      "source": "third_party/wasm-spec-tests/address64.wast"
+    },
+    {
+      "path": "test/core/memory64/align64.wast",
+      "blob": "067c08d6866517f2ea5a7ade8afba17de2ac2862",
+      "source": "third_party/wasm-spec-tests/align64.wast"
+    },
+    {
+      "path": "test/core/memory64/binary_leb128_64.wast",
+      "blob": "21a07ecb84681549f1210ed7390931f319de370c",
+      "source": "third_party/wasm-spec-tests/binary_leb128_64.wast"
+    },
+    {
+      "path": "test/core/memory64/bulk64.wast",
+      "blob": "e83404bb7322bb34be9814bd141dfa02c3eb5e9f",
+      "source": "third_party/wasm-spec-tests/bulk64.wast"
+    },
+    {
+      "path": "test/core/memory64/call_indirect64.wast",
+      "blob": "48f4d0b15f735dcc0d87ce484b10aa55ef5e6332",
+      "source": "third_party/wasm-spec-tests/call_indirect64.wast"
+    },
+    {
+      "path": "test/core/memory64/endianness64.wast",
+      "blob": "e583ea9b484fe16d72899fa3fae33475ab51ce05",
+      "source": "third_party/wasm-spec-tests/endianness64.wast"
+    },
+    {
+      "path": "test/core/memory64/float_memory64.wast",
+      "blob": "674b254f5a1fddb5ebc0901b5f04ba2794b3e73c",
+      "source": "third_party/wasm-spec-tests/float_memory64.wast"
+    },
+    {
+      "path": "test/core/memory64/load64.wast",
+      "blob": "3365203780a867c73e78bcca8e1557693bd37e14",
+      "source": "test/fixtures/core_spec/core/memory64/load64.wast"
+    },
+    {
+      "path": "test/core/memory64/memory64-imports.wast",
+      "blob": "fb45f3157e86cb805f01a82a52d989c2c1635c2c",
+      "source": "third_party/wasm-spec-tests/memory64-imports.wast"
+    },
+    {
+      "path": "test/core/memory64/memory64.wast",
+      "blob": "b9d9ed9082b3c0a1cf91056cc92c5dc43756fb5a",
+      "source": "third_party/wasm-spec-tests/memory64.wast"
+    },
+    {
+      "path": "test/core/memory64/memory_copy64.wast",
+      "blob": "95c21f2aff2ac8e1163ac50209b4045102403e36",
+      "source": "third_party/wasm-spec-tests/memory_copy64.wast"
+    },
+    {
+      "path": "test/core/memory64/memory_fill64.wast",
+      "blob": "c2ea37a1b27533c6732fbafe128c51fb797cbf13",
+      "source": "third_party/wasm-spec-tests/memory_fill64.wast"
+    },
+    {
+      "path": "test/core/memory64/memory_grow64.wast",
+      "blob": "90d8de60759b5afa8b0961fb890fede0011763f5",
+      "source": "third_party/wasm-spec-tests/memory_grow64.wast"
+    },
+    {
+      "path": "test/core/memory64/memory_init64.wast",
+      "blob": "8707bee10223be11b52425aeda2612b1e4055535",
+      "source": "third_party/wasm-spec-tests/memory_init64.wast"
+    },
+    {
+      "path": "test/core/memory64/memory_redundancy64.wast",
+      "blob": "4aa1ebac1c5eca9966264f114bc30afa9765223b",
+      "source": "third_party/wasm-spec-tests/memory_redundancy64.wast"
+    },
+    {
+      "path": "test/core/memory64/memory_trap64.wast",
+      "blob": "78d39d87bec3a159b2069c8212678e393470fb2f",
+      "source": "third_party/wasm-spec-tests/memory_trap64.wast"
+    },
+    {
+      "path": "test/core/memory64/table64.wast",
+      "blob": "45ed0b9ea96f3362986083a964fbfcd85463b8e3",
+      "source": "third_party/wasm-spec-tests/table64.wast"
+    },
+    {
+      "path": "test/core/memory64/table_copy64.wast",
+      "blob": "4b30019b7cf45113e86a9de587a57b38cfe34103",
+      "source": "third_party/wasm-spec-tests/table_copy64.wast"
+    },
+    {
+      "path": "test/core/memory64/table_copy_mixed.wast",
+      "blob": "e34cde0d0bab41c715aaaef0a7aa6e124d83d303",
+      "source": "third_party/wasm-spec-tests/table_copy_mixed.wast"
+    },
+    {
+      "path": "test/core/memory64/table_fill64.wast",
+      "blob": "ea0c75252387052e5c98f91c16d579e64b65be3b",
+      "source": "third_party/wasm-spec-tests/table_fill64.wast"
+    },
+    {
+      "path": "test/core/memory64/table_get64.wast",
+      "blob": "2c6f0497e2a5289f7e3b0edbecf53aae7307ba99",
+      "source": "third_party/wasm-spec-tests/table_get64.wast"
+    },
+    {
+      "path": "test/core/memory64/table_grow64.wast",
+      "blob": "7019e0d90169557290a093b8e4d96b90f03e81a8",
+      "source": "third_party/wasm-spec-tests/table_grow64.wast"
+    },
+    {
+      "path": "test/core/memory64/table_init64.wast",
+      "blob": "b631bb5b6a3d8ebffae221d32cb4199cec7beb50",
+      "source": "third_party/wasm-spec-tests/table_init64.wast"
+    },
+    {
+      "path": "test/core/memory64/table_set64.wast",
+      "blob": "6d212a2e54adbf9124242816d613459be9ddcfb5",
+      "source": "third_party/wasm-spec-tests/table_set64.wast"
+    },
+    {
+      "path": "test/core/memory64/table_size64.wast",
+      "blob": "2893c2b15cbb2946f95eefc251b5813965dc4734",
+      "source": "third_party/wasm-spec-tests/table_size64.wast"
+    },
+    {
+      "path": "test/core/memory_grow.wast",
+      "blob": "30d74bafb77a8914e4248ab1bb104aad8393a0f6",
+      "source": "test/fixtures/core_spec/core/memory_grow.wast"
+    },
+    {
+      "path": "test/core/memory_redundancy.wast",
+      "blob": "dd317311b041680fdd4dd093d70daac34cfbe672",
+      "source": "third_party/wasm-spec-tests/memory_redundancy.wast"
+    },
+    {
+      "path": "test/core/memory_size.wast",
+      "blob": "239e66d8f28ce92f10f544a8b7758e4995823ab4",
+      "source": "third_party/wasm-spec-tests/memory_size.wast"
+    },
+    {
+      "path": "test/core/memory_trap.wast",
+      "blob": "5ce8f5c31a042ae44dc22b927ab103e84cbbedad",
+      "source": "third_party/wasm-spec-tests/memory_trap.wast"
+    },
+    {
+      "path": "test/core/multi-memory/address0.wast",
+      "blob": "a0223652062e303023da71fecb182b142e54d962",
+      "source": "third_party/wasm-spec-tests/address0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/address1.wast",
+      "blob": "d43d6475ca54ee8fffd31e98badb76de8e56e974",
+      "source": "third_party/wasm-spec-tests/address1.wast"
+    },
+    {
+      "path": "test/core/multi-memory/align0.wast",
+      "blob": "f1507087fad1ca0ab2ee92a504cc14219ee0b72f",
+      "source": "third_party/wasm-spec-tests/align0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/binary0.wast",
+      "blob": "88270ac9e804f5911c33e8a3612a0d84ef35a6f2",
+      "source": "third_party/wasm-spec-tests/binary0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/data0.wast",
+      "blob": "2cb95851ce2533b68ca81736bda8ae0645aa6e78",
+      "source": "third_party/wasm-spec-tests/data0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/data1.wast",
+      "blob": "8348d5c58ab0902e4f2d42b44b9b09ae433d0a84",
+      "source": "third_party/wasm-spec-tests/data1.wast"
+    },
+    {
+      "path": "test/core/multi-memory/data_drop0.wast",
+      "blob": "b617b10eafae1cdd20797915988837d615ef55f1",
+      "source": "third_party/wasm-spec-tests/data_drop0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/exports0.wast",
+      "blob": "6eb94d13b50d223e22b6ce2cf92b2644fa87af32",
+      "source": "third_party/wasm-spec-tests/exports0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/float_exprs0.wast",
+      "blob": "8b40b349dd1bfcf964f19ac791115e53a2657da2",
+      "source": "third_party/wasm-spec-tests/float_exprs0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/float_exprs1.wast",
+      "blob": "834696acd7505fad8612dc305f08fc74c8d6f666",
+      "source": "third_party/wasm-spec-tests/float_exprs1.wast"
+    },
+    {
+      "path": "test/core/multi-memory/float_memory0.wast",
+      "blob": "00e22dfb0a4f5037b5e0697bf86fb76435da09b3",
+      "source": "third_party/wasm-spec-tests/float_memory0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/imports0.wast",
+      "blob": "ce827a2d2c9f3d4c34b253f0556f130b43ee3bef",
+      "source": "third_party/wasm-spec-tests/imports0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/imports1.wast",
+      "blob": "bae0f80087d12c83d83cbc0b0f429753907e29e8",
+      "source": "third_party/wasm-spec-tests/imports1.wast"
+    },
+    {
+      "path": "test/core/multi-memory/imports2.wast",
+      "blob": "314bc131d0933d0087e3725a4a293a0f255bd60f",
+      "source": "third_party/wasm-spec-tests/imports2.wast"
+    },
+    {
+      "path": "test/core/multi-memory/imports3.wast",
+      "blob": "37cc4eb87ba41eff544b10f96d4ca53a66374ca0",
+      "source": "third_party/wasm-spec-tests/imports3.wast"
+    },
+    {
+      "path": "test/core/multi-memory/imports4.wast",
+      "blob": "411b1c0f4027e09c93391442aab1acc4867f38a7",
+      "source": "third_party/wasm-spec-tests/imports4.wast"
+    },
+    {
+      "path": "test/core/multi-memory/linking0.wast",
+      "blob": "b09c69f6abae915c441a6eac709e95ed51915db6",
+      "source": "third_party/wasm-spec-tests/linking0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/linking1.wast",
+      "blob": "39eabb00b09d80cba9b682ccde681be7e8b96112",
+      "source": "third_party/wasm-spec-tests/linking1.wast"
+    },
+    {
+      "path": "test/core/multi-memory/linking2.wast",
+      "blob": "26bf3cca2acaedf5e34b24279e786cfaa16ea6a2",
+      "source": "third_party/wasm-spec-tests/linking2.wast"
+    },
+    {
+      "path": "test/core/multi-memory/linking3.wast",
+      "blob": "e23fbe4e6c98ff0962e8c989d72d25bf0c5ee712",
+      "source": "third_party/wasm-spec-tests/linking3.wast"
+    },
+    {
+      "path": "test/core/multi-memory/load0.wast",
+      "blob": "2332a200872edcd2ab5e8ec24d5cad0b3cf6f999",
+      "source": "third_party/wasm-spec-tests/load0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/load1.wast",
+      "blob": "be309c39cb332fbed1ae18b5e65dfed46c79b37d",
+      "source": "third_party/wasm-spec-tests/load1.wast"
+    },
+    {
+      "path": "test/core/multi-memory/load2.wast",
+      "blob": "dfe6fed763706d1785ff4681542819d3479a0972",
+      "source": "third_party/wasm-spec-tests/load2.wast"
+    },
+    {
+      "path": "test/core/multi-memory/memory-multi.wast",
+      "blob": "b5b71fd9e400ea361613d5e0ca1c3d849fcc70f8",
+      "source": "third_party/wasm-spec-tests/memory-multi.wast"
+    },
+    {
+      "path": "test/core/multi-memory/memory_copy0.wast",
+      "blob": "5a5d910e789a7b4a0c0859a9bd27aac5f2f15adf",
+      "source": "third_party/wasm-spec-tests/memory_copy0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/memory_copy1.wast",
+      "blob": "df9165f42add62292b3582d00a2ba3902829f9b6",
+      "source": "third_party/wasm-spec-tests/memory_copy1.wast"
+    },
+    {
+      "path": "test/core/multi-memory/memory_fill0.wast",
+      "blob": "eaf15bf5aab9b0e26759d64f40874766b078c48f",
+      "source": "third_party/wasm-spec-tests/memory_fill0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/memory_grow.wast",
+      "blob": "40d25cf08d06b5235faab6ccddac8d02b9dbaea0",
+      "source": "third_party/wasm-spec-tests/memory_grow.wast"
+    },
+    {
+      "path": "test/core/multi-memory/memory_init0.wast",
+      "blob": "190da6b9d0ceb87534a4771377a56c49b64708d4",
+      "source": "third_party/wasm-spec-tests/memory_init0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/memory_size0.wast",
+      "blob": "47ad9ec4b52e7b8983b433d7d3a4f122f41ae5ff",
+      "source": "third_party/wasm-spec-tests/memory_size0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/memory_size1.wast",
+      "blob": "69026a650cd52046ebfbebd4a2a025a87154881d",
+      "source": "third_party/wasm-spec-tests/memory_size1.wast"
+    },
+    {
+      "path": "test/core/multi-memory/memory_size2.wast",
+      "blob": "e59917e371c848655a95cd1835887067c63c1841",
+      "source": "third_party/wasm-spec-tests/memory_size2.wast"
+    },
+    {
+      "path": "test/core/multi-memory/memory_size3.wast",
+      "blob": "834aa1c36877eb9550cd4bc3580bd119db57b2c4",
+      "source": "third_party/wasm-spec-tests/memory_size3.wast"
+    },
+    {
+      "path": "test/core/multi-memory/memory_size_import.wast",
+      "blob": "8a72e65cac5f436e4c738571599cf4d7d0ca8379",
+      "source": "third_party/wasm-spec-tests/memory_size_import.wast"
+    },
+    {
+      "path": "test/core/multi-memory/memory_trap0.wast",
+      "blob": "26ecdf84441b1d639086ffffe2ef1a97d2a765fa",
+      "source": "third_party/wasm-spec-tests/memory_trap0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/memory_trap1.wast",
+      "blob": "bd692d04c5d72b538f62a496e9b4c348a9d97d67",
+      "source": "third_party/wasm-spec-tests/memory_trap1.wast"
+    },
+    {
+      "path": "test/core/multi-memory/start0.wast",
+      "blob": "677279ed6c7720eebc2ff1f735fe1402847347f2",
+      "source": "third_party/wasm-spec-tests/start0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/store0.wast",
+      "blob": "2f217b1f9daecad67f7c6afdea42a7e0ae3b277b",
+      "source": "third_party/wasm-spec-tests/store0.wast"
+    },
+    {
+      "path": "test/core/multi-memory/store1.wast",
+      "blob": "10cf2c4262a699222f23d08accff21efb427e028",
+      "source": "third_party/wasm-spec-tests/store1.wast"
+    },
+    {
+      "path": "test/core/multi-memory/store2.wast",
+      "blob": "c3e51c480e91008dac98d21849319b2c8cfceb43",
+      "source": "third_party/wasm-spec-tests/store2.wast"
+    },
+    {
+      "path": "test/core/multi-memory/traps0.wast",
+      "blob": "fd942e4b6492d36f4a3f1ea74c70107fcaede674",
+      "source": "third_party/wasm-spec-tests/traps0.wast"
+    },
+    {
+      "path": "test/core/names.wast",
+      "blob": "9c53234cf0938dfac5051f61d9c24e61d41d89f9",
+      "source": "third_party/wasm-spec-tests/names.wast"
+    },
+    {
+      "path": "test/core/nop.wast",
+      "blob": "e8fe2de4b5f2e527dc51be22531f2668cd3f16fd",
+      "source": "third_party/wasm-spec-tests/nop.wast"
+    },
+    {
+      "path": "test/core/obsolete-keywords.wast",
+      "blob": "a90eb96d2312b43b60a03be8348e2f05e7ada5a1",
+      "source": "third_party/wasm-spec-tests/obsolete-keywords.wast"
+    },
+    {
+      "path": "test/core/ref.wast",
+      "blob": "aef1b392ca29bb5db2ef0ccbdfad7597994122af",
+      "source": "third_party/wasm-spec-tests/ref.wast"
+    },
+    {
+      "path": "test/core/ref_as_non_null.wast",
+      "blob": "6b3380fc59703be1c9bd4fcf3897fb6dd63aa40c",
+      "source": "third_party/wasm-spec-tests/ref_as_non_null.wast"
+    },
+    {
+      "path": "test/core/ref_func.wast",
+      "blob": "adb5cb788d33c693ffecd39360074c7228f68eac",
+      "source": "third_party/wasm-spec-tests/ref_func.wast"
+    },
+    {
+      "path": "test/core/ref_is_null.wast",
+      "blob": "730170df4595b13a39bfbef9a105db445d5a1792",
+      "source": "third_party/wasm-spec-tests/ref_is_null.wast"
+    },
+    {
+      "path": "test/core/ref_null.wast",
+      "blob": "3faadafbae0e157916185b2f4a66774c1ebeda95",
+      "source": "third_party/wasm-spec-tests/ref_null.wast"
+    },
+    {
+      "path": "test/core/relaxed-simd/i16x8_relaxed_q15mulr_s.wast",
+      "blob": "8e0e5d67d64f0f17f0e88526c836b42c939d3cfe",
+      "source": "third_party/wasm-spec-tests/i16x8_relaxed_q15mulr_s.wast"
+    },
+    {
+      "path": "test/core/relaxed-simd/i32x4_relaxed_trunc.wast",
+      "blob": "6de0ea53a650ded8ec1871dba0dc1e157b5cd042",
+      "source": "third_party/wasm-spec-tests/i32x4_relaxed_trunc.wast"
+    },
+    {
+      "path": "test/core/relaxed-simd/i8x16_relaxed_swizzle.wast",
+      "blob": "aea31d059e859a5010d005ae34272947fdb5ce94",
+      "source": "third_party/wasm-spec-tests/i8x16_relaxed_swizzle.wast"
+    },
+    {
+      "path": "test/core/relaxed-simd/relaxed_dot_product.wast",
+      "blob": "41dee0afcfa4b5c8541152227adde2f5ebc2c67c",
+      "source": "third_party/wasm-spec-tests/relaxed_dot_product.wast"
+    },
+    {
+      "path": "test/core/relaxed-simd/relaxed_laneselect.wast",
+      "blob": "144beb53e548245fb097e0eaf53a4fc3b5425fbd",
+      "source": "third_party/wasm-spec-tests/relaxed_laneselect.wast"
+    },
+    {
+      "path": "test/core/relaxed-simd/relaxed_madd_nmadd.wast",
+      "blob": "7fc9d05fa7c5dabc1363ee51cad93358969b39cc",
+      "source": "third_party/wasm-spec-tests/relaxed_madd_nmadd.wast"
+    },
+    {
+      "path": "test/core/relaxed-simd/relaxed_min_max.wast",
+      "blob": "d8a04ba4df93f363d2e9629f8933dab138eb3e68",
+      "source": "third_party/wasm-spec-tests/relaxed_min_max.wast"
+    },
+    {
+      "path": "test/core/return.wast",
+      "blob": "7077f25b696fba38def3df010e4680d8dfb185a6",
+      "source": "third_party/wasm-spec-tests/return.wast"
+    },
+    {
+      "path": "test/core/return_call.wast",
+      "blob": "0285662f4d01fe72d79ef2748e06f8342c74d6d7",
+      "source": "test/fixtures/core_spec/core/return_call.wast"
+    },
+    {
+      "path": "test/core/return_call_indirect.wast",
+      "blob": "9ef29f074aa1ee41c17bc3adba65fbe58036888f",
+      "source": "test/fixtures/core_spec/core/return_call_indirect.wast"
+    },
+    {
+      "path": "test/core/return_call_ref.wast",
+      "blob": "acf8013a5b600c8daf608e7093459beccf476fad",
+      "source": "test/fixtures/core_spec/core/return_call_ref.wast"
+    },
+    {
+      "path": "test/core/select.wast",
+      "blob": "61e4dc22db8d31fb5af17a623ec013b3ec905aa4",
+      "source": "third_party/wasm-spec-tests/select.wast"
+    },
+    {
+      "path": "test/core/simd/simd_address.wast",
+      "blob": "56a5e4567d73f4b37f69abe23b760393a29e178e",
+      "source": "third_party/wasm-spec-tests/simd_address.wast"
+    },
+    {
+      "path": "test/core/simd/simd_align.wast",
+      "blob": "ed91ed5c6020d150512b287d0ab3dc5f506e2545",
+      "source": "third_party/wasm-spec-tests/simd_align.wast"
+    },
+    {
+      "path": "test/core/simd/simd_bit_shift.wast",
+      "blob": "98e155651e4935918949bff7fa5141c3a76d42a3",
+      "source": "third_party/wasm-spec-tests/simd_bit_shift.wast"
+    },
+    {
+      "path": "test/core/simd/simd_bitwise.wast",
+      "blob": "f646bf61d46b657d601d5332151187e658690adc",
+      "source": "third_party/wasm-spec-tests/simd_bitwise.wast"
+    },
+    {
+      "path": "test/core/simd/simd_boolean.wast",
+      "blob": "6ab330fe5082392a1e90164afae23038c1c2036b",
+      "source": "third_party/wasm-spec-tests/simd_boolean.wast"
+    },
+    {
+      "path": "test/core/simd/simd_const.wast",
+      "blob": "a57cef10966ffec51e2e80586bc3ce2ac6866849",
+      "source": "third_party/wasm-spec-tests/simd_const.wast"
+    },
+    {
+      "path": "test/core/simd/simd_conversions.wast",
+      "blob": "552e943612351d4ce3186314e7527f47d326514b",
+      "source": "third_party/wasm-spec-tests/simd_conversions.wast"
+    },
+    {
+      "path": "test/core/simd/simd_f32x4.wast",
+      "blob": "819db8cfd1860b8f75f123abb68a362e4ca7b4f0",
+      "source": "third_party/wasm-spec-tests/simd_f32x4.wast"
+    },
+    {
+      "path": "test/core/simd/simd_f32x4_arith.wast",
+      "blob": "56f80f547bfd772a2b6abe41d447fab48685d8e1",
+      "source": "third_party/wasm-spec-tests/simd_f32x4_arith.wast"
+    },
+    {
+      "path": "test/core/simd/simd_f32x4_cmp.wast",
+      "blob": "9e9a8735bfc8e419cee35bcc7f7a00bd7a76d326",
+      "source": "third_party/wasm-spec-tests/simd_f32x4_cmp.wast"
+    },
+    {
+      "path": "test/core/simd/simd_f32x4_pmin_pmax.wast",
+      "blob": "b0f47b380c95c20d4f88274c2ca0ca01931a7684",
+      "source": "third_party/wasm-spec-tests/simd_f32x4_pmin_pmax.wast"
+    },
+    {
+      "path": "test/core/simd/simd_f32x4_rounding.wast",
+      "blob": "e59f99a77bd0a3b2aa4e6874a9dbbcd951637923",
+      "source": "third_party/wasm-spec-tests/simd_f32x4_rounding.wast"
+    },
+    {
+      "path": "test/core/simd/simd_f64x2.wast",
+      "blob": "8ebd33b368668caa3a5539883d51e8f2eb0de5e5",
+      "source": "third_party/wasm-spec-tests/simd_f64x2.wast"
+    },
+    {
+      "path": "test/core/simd/simd_f64x2_arith.wast",
+      "blob": "4ab3b01e9645b2991e9e40f15c6c051a7cc32713",
+      "source": "third_party/wasm-spec-tests/simd_f64x2_arith.wast"
+    },
+    {
+      "path": "test/core/simd/simd_f64x2_cmp.wast",
+      "blob": "cab815ea56d5c22c84da19916a4b47b3216c3765",
+      "source": "third_party/wasm-spec-tests/simd_f64x2_cmp.wast"
+    },
+    {
+      "path": "test/core/simd/simd_f64x2_pmin_pmax.wast",
+      "blob": "e8167b0e549503f380197ba6a2fdf96772355f82",
+      "source": "third_party/wasm-spec-tests/simd_f64x2_pmin_pmax.wast"
+    },
+    {
+      "path": "test/core/simd/simd_f64x2_rounding.wast",
+      "blob": "f82c6d2941c85173a1833502026074a3d004c9f0",
+      "source": "third_party/wasm-spec-tests/simd_f64x2_rounding.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i16x8_arith.wast",
+      "blob": "3dc4d5ed734619ca8a0994c27528dedd391d9009",
+      "source": "third_party/wasm-spec-tests/simd_i16x8_arith.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i16x8_arith2.wast",
+      "blob": "454f598df4242686990bde844a6031b9e86a1226",
+      "source": "third_party/wasm-spec-tests/simd_i16x8_arith2.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i16x8_cmp.wast",
+      "blob": "24068ce321c1f2d4115b1e18b04baa64fb0b4f4f",
+      "source": "third_party/wasm-spec-tests/simd_i16x8_cmp.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i16x8_extadd_pairwise_i8x16.wast",
+      "blob": "c2267de9c3ee5611584279e851f2824946eff040",
+      "source": "third_party/wasm-spec-tests/simd_i16x8_extadd_pairwise_i8x16.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i16x8_extmul_i8x16.wast",
+      "blob": "cc8cf8f40203ee1a2181883ba95b5eb4d8a3f9d4",
+      "source": "third_party/wasm-spec-tests/simd_i16x8_extmul_i8x16.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i16x8_q15mulr_sat_s.wast",
+      "blob": "2cea8cc748859ea5d44007ed3cb852d5a696f932",
+      "source": "third_party/wasm-spec-tests/simd_i16x8_q15mulr_sat_s.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i16x8_sat_arith.wast",
+      "blob": "cea4ebbc7f9d9a9a6258d8506cfebd9297d741d8",
+      "source": "third_party/wasm-spec-tests/simd_i16x8_sat_arith.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i32x4_arith.wast",
+      "blob": "f0e09b8bf76bc13ddc32db5d8a33f2ab3974d6a0",
+      "source": "third_party/wasm-spec-tests/simd_i32x4_arith.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i32x4_arith2.wast",
+      "blob": "63c3f4a42c3373f77395cb8ada61a9df21b230e3",
+      "source": "third_party/wasm-spec-tests/simd_i32x4_arith2.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i32x4_cmp.wast",
+      "blob": "fca45ab96bd0878d4352e2be53fcdb94197c0330",
+      "source": "third_party/wasm-spec-tests/simd_i32x4_cmp.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i32x4_dot_i16x8.wast",
+      "blob": "8b9277ca3d23ef67c6e4a7f4db91211cd2576101",
+      "source": "third_party/wasm-spec-tests/simd_i32x4_dot_i16x8.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i32x4_extadd_pairwise_i16x8.wast",
+      "blob": "2d1682d40e7dc9fc269b39b2b6fe8d2235e99dc5",
+      "source": "third_party/wasm-spec-tests/simd_i32x4_extadd_pairwise_i16x8.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i32x4_extmul_i16x8.wast",
+      "blob": "f04db6770f750afe5e74c52e620e428acf25bbad",
+      "source": "third_party/wasm-spec-tests/simd_i32x4_extmul_i16x8.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i32x4_trunc_sat_f32x4.wast",
+      "blob": "40af590f52a7caa60a7e180734f2892a928ffe5b",
+      "source": "third_party/wasm-spec-tests/simd_i32x4_trunc_sat_f32x4.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i32x4_trunc_sat_f64x2.wast",
+      "blob": "9bf507d77fbeff15f4b8be7ded9d877101d9caa9",
+      "source": "third_party/wasm-spec-tests/simd_i32x4_trunc_sat_f64x2.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i64x2_arith.wast",
+      "blob": "00963a0d032d0e8dd58b1b4396d89bc9a1548b19",
+      "source": "third_party/wasm-spec-tests/simd_i64x2_arith.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i64x2_arith2.wast",
+      "blob": "14398d8a46ad7b405cb908ca357688430d65ccc0",
+      "source": "third_party/wasm-spec-tests/simd_i64x2_arith2.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i64x2_cmp.wast",
+      "blob": "50e58b64b1164accd5621be0a3f92213cb404272",
+      "source": "third_party/wasm-spec-tests/simd_i64x2_cmp.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i64x2_extmul_i32x4.wast",
+      "blob": "9259279c927f0a42676f55825d5f734d6f75f70a",
+      "source": "third_party/wasm-spec-tests/simd_i64x2_extmul_i32x4.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i8x16_arith.wast",
+      "blob": "1e56b4c00f4655c784e67a2f636ea41e53c5b037",
+      "source": "third_party/wasm-spec-tests/simd_i8x16_arith.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i8x16_arith2.wast",
+      "blob": "991ec14bb85dcc8dddceaab9b33d07b0aae4da5f",
+      "source": "third_party/wasm-spec-tests/simd_i8x16_arith2.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i8x16_cmp.wast",
+      "blob": "8683accea43918419b96569a77d9342950bf5e42",
+      "source": "third_party/wasm-spec-tests/simd_i8x16_cmp.wast"
+    },
+    {
+      "path": "test/core/simd/simd_i8x16_sat_arith.wast",
+      "blob": "a799a8b7398e59e0c9500965589abaad98be774e",
+      "source": "third_party/wasm-spec-tests/simd_i8x16_sat_arith.wast"
+    },
+    {
+      "path": "test/core/simd/simd_int_to_int_extend.wast",
+      "blob": "be8d554ca5e6a24cb8bf7fc518ed50a8c500bfbc",
+      "source": "third_party/wasm-spec-tests/simd_int_to_int_extend.wast"
+    },
+    {
+      "path": "test/core/simd/simd_lane.wast",
+      "blob": "0bbf382c8a3def383d4d5c22e9b95b0c7bc932b1",
+      "source": "test/fixtures/core_spec/core/simd/simd_lane.wast"
+    },
+    {
+      "path": "test/core/simd/simd_linking.wast",
+      "blob": "1a1d16355e9a409768730a8409c316930938cd70",
+      "source": "third_party/wasm-spec-tests/simd_linking.wast"
+    },
+    {
+      "path": "test/core/simd/simd_load.wast",
+      "blob": "2fddd3019e145e41ac5ee4e633dded7eb3ffa3d3",
+      "source": "third_party/wasm-spec-tests/simd_load.wast"
+    },
+    {
+      "path": "test/core/simd/simd_load16_lane.wast",
+      "blob": "8c72a57335a22578eb46d52fc85d0b20301279de",
+      "source": "third_party/wasm-spec-tests/simd_load16_lane.wast"
+    },
+    {
+      "path": "test/core/simd/simd_load32_lane.wast",
+      "blob": "e67690ff98d0c7a40d6d3b98abbc94d55e9e6675",
+      "source": "third_party/wasm-spec-tests/simd_load32_lane.wast"
+    },
+    {
+      "path": "test/core/simd/simd_load64_lane.wast",
+      "blob": "5883a6eaebe639672e12917f3731b3cafada8b75",
+      "source": "third_party/wasm-spec-tests/simd_load64_lane.wast"
+    },
+    {
+      "path": "test/core/simd/simd_load8_lane.wast",
+      "blob": "d0706f535198fe7c839d39520e5c1cec850c8253",
+      "source": "third_party/wasm-spec-tests/simd_load8_lane.wast"
+    },
+    {
+      "path": "test/core/simd/simd_load_extend.wast",
+      "blob": "b9982bbfd0c1224c5c7b0e7a15d65b0c3efb160e",
+      "source": "third_party/wasm-spec-tests/simd_load_extend.wast"
+    },
+    {
+      "path": "test/core/simd/simd_load_splat.wast",
+      "blob": "d9642f8bd67c91a8766517fbcdac17e8426594c7",
+      "source": "third_party/wasm-spec-tests/simd_load_splat.wast"
+    },
+    {
+      "path": "test/core/simd/simd_load_zero.wast",
+      "blob": "6276a68637d8ed037884c2f8e0f9aa52ef71f1a0",
+      "source": "third_party/wasm-spec-tests/simd_load_zero.wast"
+    },
+    {
+      "path": "test/core/simd/simd_memory-multi.wast",
+      "blob": "202f2cd8d07aae91be1dc2162e08718c696fc747",
+      "source": "third_party/wasm-spec-tests/simd_memory-multi.wast"
+    },
+    {
+      "path": "test/core/simd/simd_select.wast",
+      "blob": "e08871e6f6cabff66ec554dc8295cd86fa3382aa",
+      "source": "third_party/wasm-spec-tests/simd_select.wast"
+    },
+    {
+      "path": "test/core/simd/simd_splat.wast",
+      "blob": "4be04ef177908047509a7e4bdde7b6c021126ab9",
+      "source": "third_party/wasm-spec-tests/simd_splat.wast"
+    },
+    {
+      "path": "test/core/simd/simd_store.wast",
+      "blob": "7bba053d8e25e8682eabd204407fd8c1bccbc54e",
+      "source": "third_party/wasm-spec-tests/simd_store.wast"
+    },
+    {
+      "path": "test/core/simd/simd_store16_lane.wast",
+      "blob": "d8ea35c3fa4d4c0032c54b63384fb5ead96c9182",
+      "source": "third_party/wasm-spec-tests/simd_store16_lane.wast"
+    },
+    {
+      "path": "test/core/simd/simd_store32_lane.wast",
+      "blob": "847bab9e6f2dcfe571cfaf810dbe2f596c56c920",
+      "source": "third_party/wasm-spec-tests/simd_store32_lane.wast"
+    },
+    {
+      "path": "test/core/simd/simd_store64_lane.wast",
+      "blob": "2ed1dcd689dad6100f15ddbb5f181db88a35a8d3",
+      "source": "third_party/wasm-spec-tests/simd_store64_lane.wast"
+    },
+    {
+      "path": "test/core/simd/simd_store8_lane.wast",
+      "blob": "b4e4a583f1fd3f4dc0cc44de1318fc4cd471181d",
+      "source": "third_party/wasm-spec-tests/simd_store8_lane.wast"
+    },
+    {
+      "path": "test/core/skip-stack-guard-page.wast",
+      "blob": "a472e681488b66e0fecb565894353921aea962ec",
+      "source": "third_party/wasm-spec-tests/skip-stack-guard-page.wast"
+    },
+    {
+      "path": "test/core/stack.wast",
+      "blob": "5da5043c8e9791170c63e2d72a8df5eacc414d66",
+      "source": "third_party/wasm-spec-tests/stack.wast"
+    },
+    {
+      "path": "test/core/start.wast",
+      "blob": "bf88a6a4a48a9c23dedd82ef28a597f9c0680dda",
+      "source": "third_party/wasm-spec-tests/start.wast"
+    },
+    {
+      "path": "test/core/store.wast",
+      "blob": "01c3a2dd648a5b2a47fb89041a2dd30d3c4b9ff6",
+      "source": "third_party/wasm-spec-tests/store.wast"
+    },
+    {
+      "path": "test/core/switch.wast",
+      "blob": "e9ae24dc1518c6ea86de368d0963ac9a4ced5f2a",
+      "source": "third_party/wasm-spec-tests/switch.wast"
+    },
+    {
+      "path": "test/core/table.wast",
+      "blob": "629e174cf9d2689355f175a0ad5603a175dfdf6a",
+      "source": "third_party/wasm-spec-tests/table.wast"
+    },
+    {
+      "path": "test/core/table_get.wast",
+      "blob": "9cc1dd12cbf2ccf63370f2fcbac3d6c82bb6e9cf",
+      "source": "third_party/wasm-spec-tests/table_get.wast"
+    },
+    {
+      "path": "test/core/table_grow.wast",
+      "blob": "3bed0ab116c7d7f5b29c7e46428fca9cbe4d084a",
+      "source": "third_party/wasm-spec-tests/table_grow.wast"
+    },
+    {
+      "path": "test/core/table_set.wast",
+      "blob": "3362f95673fdd9b5b3f018a24468ad8b1cce25a8",
+      "source": "third_party/wasm-spec-tests/table_set.wast"
+    },
+    {
+      "path": "test/core/table_size.wast",
+      "blob": "83fef02b33c3ae1d4eea44e336f73e63184686ae",
+      "source": "third_party/wasm-spec-tests/table_size.wast"
+    },
+    {
+      "path": "test/core/token.wast",
+      "blob": "44e41f22bcdb01429167462b6e102e7709edf361",
+      "source": "third_party/wasm-spec-tests/token.wast"
+    },
+    {
+      "path": "test/core/traps.wast",
+      "blob": "142fa22b2b971fd676e522933c7f0240025e7875",
+      "source": "third_party/wasm-spec-tests/traps.wast"
+    },
+    {
+      "path": "test/core/type-canon.wast",
+      "blob": "2c723aa392b3ec47b6b594913eef9cb8fa740e11",
+      "source": "third_party/wasm-spec-tests/type-canon.wast"
+    },
+    {
+      "path": "test/core/type-equivalence.wast",
+      "blob": "b3d1151d2278b913aa2d0568f38a9244a6f3999f",
+      "source": "third_party/wasm-spec-tests/type-equivalence.wast"
+    },
+    {
+      "path": "test/core/type-rec.wast",
+      "blob": "d2fc58d612c3d9a9aa4fb8e651405a4d0c038195",
+      "source": "third_party/wasm-spec-tests/type-rec.wast"
+    },
+    {
+      "path": "test/core/type.wast",
+      "blob": "aad40dd16f98e1f970a87ffbb751f5ac98b4e914",
+      "source": "third_party/wasm-spec-tests/type.wast"
+    },
+    {
+      "path": "test/core/unreachable.wast",
+      "blob": "19f661be1db84b0aaceb3474f4a13882ce6d1b82",
+      "source": "third_party/wasm-spec-tests/unreachable.wast"
+    },
+    {
+      "path": "test/core/unreached-invalid.wast",
+      "blob": "1dfcf91f8c5fdadc63eb0bbcbe5f67b2f108e75a",
+      "source": "third_party/wasm-spec-tests/unreached-invalid.wast"
+    },
+    {
+      "path": "test/core/unreached-valid.wast",
+      "blob": "f3feb0f35c9aeef9582e2b7f5ab309c27e6e18ba",
+      "source": "third_party/wasm-spec-tests/unreached-valid.wast"
+    },
+    {
+      "path": "test/core/unwind.wast",
+      "blob": "85db60b595ee12f7a435edd98c1b7ecb06d9fdcd",
+      "source": "third_party/wasm-spec-tests/unwind.wast"
+    },
+    {
+      "path": "test/core/utf8-custom-section-id.wast",
+      "blob": "c3765d9da852c17e34455b2652467ce426324ea6",
+      "source": "third_party/wasm-spec-tests/utf8-custom-section-id.wast"
+    },
+    {
+      "path": "test/core/utf8-import-field.wast",
+      "blob": "330ecf61c8663f7e243cd9e2fd50a96509d87a9e",
+      "source": "third_party/wasm-spec-tests/utf8-import-field.wast"
+    },
+    {
+      "path": "test/core/utf8-import-module.wast",
+      "blob": "8f509159d75fec26e20ebd5ee0660097cfed2c7b",
+      "source": "third_party/wasm-spec-tests/utf8-import-module.wast"
+    },
+    {
+      "path": "test/core/utf8-invalid-encoding.wast",
+      "blob": "cfd596930c99ec3d0e9c1cfe9f1f55b19732b11e",
+      "source": "third_party/wasm-spec-tests/utf8-invalid-encoding.wast"
+    },
+    {
+      "path": "test/custom/custom/custom_annot.wast",
+      "blob": "011a5776fc1a4d72c80d490a4b634685b05ba27b",
+      "source": "third_party/wasm-spec-tests/custom/custom_annot.wast"
+    },
+    {
+      "path": "test/custom/metadata.code.branch_hint/branch_hint.wast",
+      "blob": "f3c63b32b02be1324580052b781031b29c7da45d",
+      "source": "third_party/wasm-spec-tests/custom/branch_hint.wast"
+    },
+    {
+      "path": "test/custom/name/name_annot.wast",
+      "blob": "bf34fd67a18bc5949f0939d2df17b01fcbb807f7",
+      "source": "third_party/wasm-spec-tests/custom/name_annot.wast"
+    }
+  ]
+}

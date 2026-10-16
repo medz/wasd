@@ -72,6 +72,11 @@ including host/guest propagation on Dart VM, Node and browsers. Native modules
 require `CoreFeature.exceptionHandling`. These additions are unreleased and are
 not included in the published `0.6.0-dev.1` preview.
 
+The frozen Core 3.0 gate now checks all `261` official source files, preserving
+their original paths. It also exposed and fixed validation of multiple
+supertypes. See the [standards plan](doc/standards.md) for the `65,336` command
+result and its execution and public API coverage boundaries.
+
 ## Quick Start
 
 Run included examples:
@@ -327,13 +332,15 @@ The frozen Component Model async gate currently records three distinct kinds
 of evidence:
 
 - WASD strict decoding: `37/37` component files decoded.
-- `wasm-tools` validation: `31/31` async WAST files validated.
+- `wasm-tools` `1.254.0` validation: `31/31` async WAST files validated.
 - Wasmtime `48.0.0 (e8ac8c27f)` reference execution: `31/31` async WAST
   files passed.
 
 The `wasm-tools` and Wasmtime results validate the frozen upstream inputs and
 reference behavior. They do not execute those WAST assertions through WASD;
 WASD's result in this gate is the strict decoder result above.
+This frozen draft uses the recorded validator version: newer Core converters
+reject its removed `cancellable` option and cannot replace that legacy check.
 
 ## Compatibility Snapshot
 
