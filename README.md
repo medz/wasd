@@ -327,8 +327,9 @@ The development checkout adds native Preview3 TCP bind/listen on Linux and
 macOS using the same OS socket through bind, listen or connect. Bind assigns
 a local address without starting a listener; address reuse follows the WASI
 contract and platform semantics. This addition is unreleased and is not
-included in published `0.6.0-dev.1`; the fixed official set is checked in native
-CI. Other native platforms still report `not-supported` for explicit TCP bind.
+included in published `0.6.0-dev.1`. Native CI runs the fixed official set through
+one compiled AOT runtime and runs host unit regressions on the JIT VM. Other
+native platforms still report `not-supported` for explicit TCP bind.
 
 The frozen Component Model async gate currently records three distinct kinds
 of evidence:

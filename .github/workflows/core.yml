@@ -112,9 +112,17 @@ jobs:
           persist-credentials: false
       - run: python3 -m venv build/wasi-testsuite-venv
       - run: 'build/wasi-testsuite-venv/bin/python -m pip install --only-binary=:all: -r third_party/wasi-testsuite-source/test-runner/requirements.txt'
-      - run: env DART=dart dart run tool/wasi_testsuite_preview3_runner.dart --testsuite-dir third_party/wasi-testsuite-fixtures --runner-dir third_party/wasi-testsuite-source/test-runner --python build/wasi-testsuite-venv/bin/python --json build/wasi-preview3.json --markdown build/wasi-preview3.md
+      # Reuse native AOT code across all 45 fixture processes; keep the
+      # adapter's existing 30-second per-fixture timeout.
+      - name: Compile Preview3 runner (native AOT)
+        run: dart compile exe tool/wasi_testsuite_preview3_component_runner.dart -o "$GITHUB_WORKSPACE/build/wasi-preview3-runner"
+      - name: Run official Preview3 tests (native AOT)
+        env:
+          DART: dart
+          WASD_PREVIEW3_RUNNER: "${{ github.workspace }}/build/wasi-preview3-runner"
+        run: dart run tool/wasi_testsuite_preview3_runner.dart --testsuite-dir third_party/wasi-testsuite-fixtures --runner-dir third_party/wasi-testsuite-source/test-runner --python build/wasi-testsuite-venv/bin/python --json build/wasi-preview3.json --markdown build/wasi-preview3.md
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: wasi-preview3-${{ matrix.os }}
+          name: wasi-preview3-native-aot-${{ matrix.os }}
           path: build/wasi-preview3.*

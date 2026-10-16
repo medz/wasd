@@ -58,9 +58,10 @@ def compute_argv(
         )
 
     args, env, root = args_env_root
-    argv: List[str] = []
-    argv += DART
-    argv += [str(_runner_for(wasi_version))]
+    native_runner = (
+        os.getenv("WASD_PREVIEW3_RUNNER") if wasi_version == "wasm32-wasip3" else None
+    )
+    argv = [native_runner] if native_runner else [*DART, str(_runner_for(wasi_version))]
     if wasi_version == "wasm32-wasip3":
         argv += ["--world", wasi_world]
         for proposal in proposals:
