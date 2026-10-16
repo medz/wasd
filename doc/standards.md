@@ -77,6 +77,25 @@ labels and resource identities. These checks do not establish general
 Component composition, executable direct world functions or complete WASI
 `0.3.1` adoption.
 
+The first unreleased WASD Component execution gate runs the complete official
+`test/values/strings.wast` at source
+`0220da84209397d9067c19cac83dae969aa85a7b`, Git blob
+`e96f54e97689a32ba70b05e12226e01b8dea024b`. It executes `17/17` commands:
+eight component instantiations, five exact string return assertions and four
+invocation trap assertions, with zero skips. The runner verifies the source
+hash, freshly converts it with pinned `wasm-tools` `1.262.0`, and executes the
+result through WASD's existing Dart interpreter and Canonical ABI adapters.
+The converter supplies inputs; it is not the execution engine.
+
+```sh
+dart run tool/component_spec_runner.dart --output-json=build/component-strings.json
+```
+
+Core CI runs this selected-file gate on both Dart SDKs. It remains separate
+from the historical decode, external validation and reference-runtime results.
+General Component execution, nested executable composition, broader value
+codecs and a portable public instance API remain open requirements.
+
 ## Implementation and evidence matrix
 
 | Area | Implementation in 0.5.0 | Evidence and remaining work |

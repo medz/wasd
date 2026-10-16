@@ -84,32 +84,54 @@ final class WASIPreview2ComponentExecutionException implements Exception {
   String toString() => message;
 }
 
-/// Native Component Model executor shared by fixed-version WASI runners.
+/// Native Component Model executor shared by component and WASI runners.
 final class WASIComponentNativeRuntime {
+  /// Creates a component executor without a fixed WASI version profile.
+  ///
+  /// The caller owns the allocation scope for this instance and its calls.
+  WASIComponentNativeRuntime.component({
+    required this.component,
+    required WASIComponentHost host,
+    Map<String, WASIComponentWitAdapterCallback> imports = const {},
+  }) : _genericHost = host,
+       _genericImports = Map.unmodifiable(imports),
+       _preview2Host = null,
+       _preview3Host = null;
+
   /// Creates a native executor for a Preview2 [host].
   WASIComponentNativeRuntime.preview2({
     required this.component,
     required WASIPreview2ComponentHost host,
-  }) : _preview2Host = host,
+  }) : _genericHost = null,
+       _genericImports = const {},
+       _preview2Host = host,
        _preview3Host = null;
 
   /// Creates a native executor for a Preview3 [host].
   WASIComponentNativeRuntime.preview3({
     required this.component,
     required WASIPreview3ComponentHost host,
-  }) : _preview2Host = null,
+  }) : _genericHost = null,
+       _genericImports = const {},
+       _preview2Host = null,
        _preview3Host = host;
 
   /// Component decoded for this execution.
   final WasmComponent component;
+  final WASIComponentHost? _genericHost;
+  final Map<String, WASIComponentWitAdapterCallback> _genericImports;
   final WASIPreview2ComponentHost? _preview2Host;
   final WASIPreview3ComponentHost? _preview3Host;
 
   WASIComponentHost get _componentHost =>
-      _preview2Host?.componentHost ?? _preview3Host!.componentHost;
+      _genericHost ??
+      _preview2Host?.componentHost ??
+      _preview3Host!.componentHost;
 
   Map<String, WASIComponentWitAdapterCallback> get _standardImports =>
-      _preview2Host?.standardImports ?? _preview3Host!.standardImports;
+      _preview2Host?.standardImports ??
+      _preview3Host?.standardImports ??
+      _genericImports;
 
   final List<ir_module.WasmModule> _coreModules = <ir_module.WasmModule>[];
   final List<_CoreFunction> _coreFunctions = <_CoreFunction>[];
@@ -146,6 +168,24 @@ final class WASIComponentNativeRuntime {
   late final WASIComponentCanonicalAdapterProgram _synchronousAdapterProgram;
   var _decodedTypeDefinitionCount = 0;
   var _initialized = false;
+
+  /// Instantiates this component once, retaining its state for later calls.
+  void initialize() => _initialize();
+
+  /// Invokes a named synchronous component function export.
+  ///
+  /// Initializes the instance on its first call. Resource lifetime belongs to
+  /// the caller's allocation scope, which may span several invocations.
+  Object? invokeExportSynchronously(String name, List<Object?> args) {
+    _initialize();
+    final function = _exportedFunctions[name];
+    if (function == null) {
+      throw WASIPreview2ComponentExecutionException(
+        'Component function export `$name` not found.',
+      );
+    }
+    return function.invokeSynchronously(args);
+  }
 
   /// Executes the Preview2 command export.
   Future<int> runCommand() => _componentHost.table.runScoped(() async {
@@ -281,6 +321,19 @@ final class WASIComponentNativeRuntime {
           'wasd-preview2-runner validation failed',
           validationErrors,
         ),
+      );
+    }
+    final genericHost = _genericHost;
+    if (genericHost != null) {
+      final plan = genericHost.prepareComponent(component, validate: false);
+      if (plan.canBindWithAdapters) {
+        return plan;
+      }
+      throw WASIPreview2ComponentExecutionException(
+        _formatErrors('wasd-component-runtime bind preflight failed', [
+          ...plan.unsupportedDefinitions,
+          ...plan.bindingErrors,
+        ]),
       );
     }
     final plan =
