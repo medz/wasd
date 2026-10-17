@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:wasd/src/wasi/component/execution.dart';
 import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/unicode_scalar.dart';
 import 'package:wasd/src/wasi/component/value_memory.dart';
@@ -342,8 +343,11 @@ Future<Map<String, Object?>> executeComponentSpecScript(
   final definitions = <String, WasmComponent>{};
   final failedDefinitions = <String, int>{};
   final runtimes = <WASIComponentNativeRuntime>[];
-  final observedFailures = Set<Object>.identity();
-  final lastCommands = <WASIComponentNativeRuntime, Map<String, Object?>>{};
+  final observedFailures = Map<Map<String, Object?>, Set<Object>>.identity();
+  final unownedFailures = Set<Object>.identity();
+  final settlementFailures = <Map<String, Object?>>[];
+  bool observe(Map<String, Object?> record, Object error) =>
+      (observedFailures[record] ??= Set<Object>.identity()).add(error);
   WASIComponentNativeRuntime? current;
   int? failedCurrent;
   final commands = script['commands'];
@@ -428,9 +432,11 @@ Future<Map<String, Object?>> executeComponentSpecScript(
                 host: host,
               );
               runtimes.add(runtime);
-              lastCommands[runtime] = record;
               record['phase'] = 'initialize';
-              await runtime.initialize();
+              await WASIComponentGuestStore.withOwner(
+                record,
+                runtime.initialize,
+              );
               current = runtime;
               failedCurrent = null;
             }
@@ -464,9 +470,8 @@ Future<Map<String, Object?>> executeComponentSpecScript(
               host: host,
             );
             runtimes.add(runtime);
-            lastCommands[runtime] = record;
             record['phase'] = 'initialize';
-            await runtime.initialize();
+            await WASIComponentGuestStore.withOwner(record, runtime.initialize);
             current = runtime;
             failedCurrent = null;
             record['definition'] = name;
@@ -642,7 +647,6 @@ Future<Map<String, Object?>> executeComponentSpecScript(
               }
               throw StateError('No initialized component.');
             }
-            lastCommands[runtime] = record;
             final name = action['field'] as String;
             final context = _exportType(runtime.component, name);
             final params = context.functionType.params;
@@ -661,10 +665,30 @@ Future<Map<String, Object?>> executeComponentSpecScript(
                   allowList: true,
                 ),
             ];
+            Future<Object?> invoke() async {
+              final priorOwner = runtime.failureOwner;
+              try {
+                return await WASIComponentGuestStore.withOwner(
+                  record,
+                  () => runtime.invokeExport(name, args),
+                );
+              } catch (_) {
+                final owner = runtime.failureOwner;
+                if (owner is Map<String, Object?> &&
+                    !identical(owner, record)) {
+                  record['dependency_index'] = owner['index'];
+                  if (identical(owner, priorOwner)) {
+                    record['status'] = 'not_executed';
+                  }
+                }
+                rethrow;
+              }
+            }
+
             record['export'] = name;
             if (type == 'action') {
               record['phase'] = 'invoke';
-              await runtime.invokeExport(name, args);
+              await invoke();
             } else if (type == 'assert_return') {
               final expected = raw['expected'];
               final resultType = context.functionType.result;
@@ -678,7 +702,7 @@ Future<Map<String, Object?>> executeComponentSpecScript(
                   ? null
                   : _decodeValue(expected.single, resultType, context);
               record['phase'] = 'invoke';
-              final actual = await runtime.invokeExport(name, args);
+              final actual = await invoke();
               record['expected'] = _reportValue(value);
               record['actual'] = _reportValue(actual);
               if (resultType == null
@@ -705,13 +729,18 @@ Future<Map<String, Object?>> executeComponentSpecScript(
               Object? invocationError;
               record['phase'] = 'invoke';
               try {
-                await runtime.invokeExport(name, args);
+                await invoke();
               } catch (error) {
                 invocationError = error;
-                observedFailures.add(error);
+                observe(record, error);
               }
               if (invocationError == null) {
                 throw StateError('Invocation did not trap.');
+              }
+              // A poisoned store can rethrow another command's trap before
+              // this invocation starts. It cannot satisfy this assertion.
+              if (record.containsKey('dependency_index')) {
+                throw invocationError;
               }
               final matches = expected == 'invalid `char` bit pattern'
                   ? matchesComponentCharTrap(invocationError)
@@ -739,7 +768,7 @@ Future<Map<String, Object?>> executeComponentSpecScript(
         record['passed'] = true;
         record['status'] = 'passed';
       } catch (error) {
-        observedFailures.add(error);
+        observe(record, error);
         if (error is UnsupportedError && record['status'] == 'failed') {
           record['status'] = 'unsupported';
           record['failure_kind'] = 'unsupported_feature';
@@ -749,37 +778,48 @@ Future<Map<String, Object?>> executeComponentSpecScript(
       }
     }
     for (final runtime in runtimes) {
-      void recordFailure(Object error) {
-        if (!observedFailures.add(error)) return;
-        final command = lastCommands[runtime]!;
-        command.addAll({
-          'passed': false,
-          'status': 'failed',
-          'phase': 'settle',
+      void recordFailure(Object error, String phase) {
+        final failure = <String, Object?>{
+          'phase': phase,
           'error': error.toString(),
           'error_type': error.runtimeType.toString(),
-        });
+        };
+        final command = runtime.failureOwner;
+        if (command is! Map<String, Object?> || !records.contains(command)) {
+          if (unownedFailures.add(error)) settlementFailures.add(failure);
+          return;
+        }
+        if (!observe(command, error)) return;
+        if (command['passed'] != true) {
+          command['settlement_failure'] = failure;
+          return;
+        }
+        command.addAll({'passed': false, 'status': 'failed', ...failure});
       }
 
       try {
         await runtime.settle();
       } catch (error) {
-        recordFailure(error);
+        recordFailure(error, 'settle');
       } finally {
         try {
           await runtime.dispose();
         } catch (error) {
-          recordFailure(error);
+          recordFailure(error, 'dispose');
         }
       }
     }
   });
   return {
-    'status': records.every((record) => record['passed'] == true)
+    'status':
+        settlementFailures.isEmpty &&
+            records.every((record) => record['passed'] == true)
         ? 'passed'
         : 'failed',
     'commands': records,
     'totals': _totals(records),
+    if (settlementFailures.isNotEmpty)
+      'settlement_failures': settlementFailures,
   };
 }
 
