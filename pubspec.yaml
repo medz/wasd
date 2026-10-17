@@ -1,6 +1,6 @@
 name: wasd
 description: A pure Dart WebAssembly runtime for Dart and Flutter, with WASI Preview1 and VM runners for WASI 0.2.12 command/proxy and 0.3.0/0.3.1 command/service.
-version: 0.6.0
+version: 0.6.1
 repository: https://github.com/medz/wasd
 
 environment:
