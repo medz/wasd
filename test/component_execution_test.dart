@@ -13,6 +13,340 @@ import 'package:wasd/wasi.dart';
 import 'package:wasd/wasm.dart' hide Exception;
 
 void main() {
+  for (final kind in ['stream', 'future']) {
+    test(
+      'fresh child resource identities reject foreign $kind endpoints',
+      () async {
+        final component = await _encodeComponent('''
+(component
+  (component \$C (type \$R (resource (rep i32))) (export "r" (type \$R)))
+  (instance \$a (instantiate \$C))
+  (instance \$b (instantiate \$C))
+  (alias export \$a "r" (type \$R1))
+  (alias export \$b "r" (type \$R2))
+  (type \$OA (own \$R1))
+  (type \$OB (own \$R2))
+  (type \$SA ($kind \$OA))
+  (type \$SB ($kind \$OB))
+  (core func \$new (canon $kind.new \$SA))
+  (core func \$drop (canon $kind.drop-readable \$SB))
+  (core module \$m
+    (import "h" "new" (func \$new (result i64)))
+    (import "h" "drop" (func \$drop (param i32)))
+    (func (export "run") (result i32) call \$new i32.wrap_i64 call \$drop i32.const 42))
+  (core instance \$h (export "new" (func \$new)) (export "drop" (func \$drop)))
+  (core instance \$m (instantiate \$m (with "h" (instance \$h))))
+  (func (export "run") (result u32) (canon lift (core func \$m "run"))))
+''');
+        expect(component.validate(), isEmpty);
+        final definitions = component.componentTypeIndexDefinitions;
+        // A shared model definition is not proof of fresh instance identity.
+        expect(identical(definitions[0], definitions[1]), isTrue);
+        final host = WASIComponentHost();
+        await expectLater(
+          host.table.runScoped(() async {
+            final runtime = WASIComponentNativeRuntime.component(
+              component: component,
+              host: host,
+            );
+            await runtime.invokeExport('run', []);
+          }),
+          throwsA(
+            isA<WasmExecutionErrorContext>().having(
+              (error) => error.cause,
+              'cause',
+              isA<StateError>().having(
+                (error) => error.message,
+                'message',
+                contains('does not contain'),
+              ),
+            ),
+          ),
+        );
+        expect(host.table.activeCount, 0);
+      },
+    );
+  }
+
+  test('pure structural payloads retain equivalent backing', () async {
+    final component = await _encodeComponent(r'''
+(component
+  (type $item (record (field "x" u32)))
+  (type $a (stream $item))
+  (type $b (stream $item))
+  (core func $new (canon stream.new $a))
+  (core func $drop (canon stream.drop-readable $b))
+  (core module $m
+    (import "h" "new" (func $new (result i64)))
+    (import "h" "drop" (func $drop (param i32)))
+    (func (export "run") (result i32) call $new i32.wrap_i64 call $drop i32.const 42))
+  (core instance $h (export "new" (func $new)) (export "drop" (func $drop)))
+  (core instance $m (instantiate $m (with "h" (instance $h))))
+  (func (export "run") (result u32) (canon lift (core func $m "run"))))
+''');
+    expect(component.validate(), isEmpty);
+    final host = WASIComponentHost();
+    await host.table.runScoped(() async {
+      final runtime = WASIComponentNativeRuntime.component(
+        component: component,
+        host: host,
+      );
+      expect(await runtime.invokeExport('run', []), 42);
+    });
+    expect(host.table.activeCount, 0);
+  });
+
+  for (final kind in ['stream', 'future']) {
+    test(
+      'nested $kind transfer accepts equivalent inline result types',
+      () async {
+        final component = await _encodeComponent('''
+(component
+  (component \$producer
+    (type \$value ($kind u32))
+    (core func \$new (canon $kind.new \$value))
+    (core module \$m
+      (import "host" "new" (func \$new (result i64)))
+      (func (export "make") (result i32) call \$new i32.wrap_i64))
+    (core instance \$host (export "new" (func \$new)))
+    (core instance \$m (instantiate \$m (with "host" (instance \$host))))
+    (func (export "make") (result ($kind u32)) (canon lift (core func \$m "make"))))
+  (component \$consumer
+    (import "producer" (instance \$producer
+      (export "make" (func (result ($kind u32))))))
+    (type \$value ($kind u32))
+    (core func \$drop (canon $kind.drop-readable \$value))
+    (core func \$make (canon lower (func \$producer "make")))
+    (core module \$m
+      (import "host" "make" (func \$make (result i32)))
+      (import "host" "drop" (func \$drop (param i32)))
+      (func (export "run") (result i32) call \$make call \$drop i32.const 42))
+    (core instance \$host (export "make" (func \$make)) (export "drop" (func \$drop)))
+    (core instance \$m (instantiate \$m (with "host" (instance \$host))))
+    (func (export "run") (result u32) (canon lift (core func \$m "run"))))
+  (instance \$producer (instantiate \$producer))
+  (instance \$consumer (instantiate \$consumer (with "producer" (instance \$producer))))
+  (func (export "run") (alias export \$consumer "run")))
+''');
+        expect(component.validate(), isEmpty);
+        final host = WASIComponentHost();
+        await host.table.runScoped(() async {
+          final runtime = WASIComponentNativeRuntime.component(
+            component: component,
+            host: host,
+          );
+          expect(await runtime.invokeExport('run', []), 42);
+        });
+        expect(host.table.activeCount, 0);
+      },
+    );
+  }
+
+  for (final kind in ['stream', 'future']) {
+    test(
+      'instance-local $kind adapter observes delayed callback failures',
+      () async {
+        final component = await _encodeComponent('''
+(component
+  (type \$value ($kind u32))
+  (import "source" (func \$source (result \$value)))
+  (core func \$source (canon lower (func \$source)))
+  (core module \$m
+    (import "host" "source" (func \$source (result i32)))
+    (func (export "call") (result i32) call \$source))
+  (core instance \$host (export "source" (func \$source)))
+  (core instance \$m (instantiate \$m (with "host" (instance \$host))))
+  (func (export "call") (result \$value) (canon lift (core func \$m "call"))))
+''');
+        final host = WASIComponentHost();
+        final unhandled = <Object>[];
+        final failure = StateError('endpoint callback failed');
+        var calls = 0;
+        await runZonedGuarded(
+          () async {
+            for (var i = 0; i < 2; i++) {
+              final completion = Completer<Object?>();
+              final runtime = WASIComponentNativeRuntime.component(
+                component: component,
+                host: host,
+                imports: {
+                  'source': (_) {
+                    calls++;
+                    return completion.future;
+                  },
+                },
+              );
+              final observed = expectLater(
+                runtime.invokeExport('call', []),
+                throwsA(
+                  isA<WasmExecutionErrorContext>().having(
+                    (error) => error.cause,
+                    'cause',
+                    same(failure),
+                  ),
+                ),
+              );
+              await Future<void>.delayed(Duration.zero);
+              completion.completeError(failure);
+              await observed;
+              expect(host.table.activeCount, 0);
+            }
+            await Future<void>.delayed(Duration.zero);
+          },
+          (error, _) {
+            unhandled.add(error);
+          },
+        );
+        expect(calls, 2);
+        expect(unhandled, isEmpty);
+      },
+    );
+  }
+
+  test(
+    'fresh async runtimes initialize concurrently on the same host',
+    () async {
+      final component = await _encodeComponent(r'''
+(component
+  (type $value (stream u32))
+  (core func (canon stream.new $value)))
+''');
+      final host = WASIComponentHost();
+      await Future.wait([
+        for (var i = 0; i < 3; i++)
+          WASIComponentNativeRuntime.component(
+            component: component,
+            host: host,
+          ).initialize(),
+      ]);
+      expect(host.table.activeCount, 0);
+    },
+  );
+
+  for (final kind in ['stream', 'future']) {
+    for (final delayed in [false, true]) {
+      test(
+        'instance-local $kind adapters transfer through Core delayed=$delayed',
+        () async {
+          final component = await _encodeComponent('''
+(component
+  (type \$value ($kind u32))
+  (import "source" (func \$source (result \$value)))
+  (core func \$source (canon lower (func \$source)))
+  (core module \$m
+    (import "host" "source" (func \$source (result i32)))
+    (func (export "call") (result i32) call \$source))
+  (core instance \$host (export "source" (func \$source)))
+  (core instance \$m (instantiate \$m (with "host" (instance \$host))))
+  (func (export "call") (result \$value) (canon lift (core func \$m "call"))))
+''');
+          expect(component.validate(), isEmpty);
+          final host = WASIComponentHost();
+          for (var i = 0; i < 2; i++) {
+            final Object value = kind == 'stream'
+                ? WASIComponentStream<Object?>('host')
+                : WASIComponentFuture<Object?>('host');
+            final Object endpoint = value is WASIComponentStream<Object?>
+                ? value.readable
+                : (value as WASIComponentFuture<Object?>).readable;
+            var calls = 0;
+            final runtime = WASIComponentNativeRuntime.component(
+              component: component,
+              host: host,
+              imports: {
+                'source': (_) {
+                  calls++;
+                  return delayed
+                      ? Future<Object>.delayed(Duration.zero, () => endpoint)
+                      : endpoint;
+                },
+              },
+            );
+            expect(await runtime.invokeExport('call', []), same(endpoint));
+            expect(calls, 1);
+            expect(host.table.activeCount, 0);
+            if (value is WASIComponentStream<Object?>) {
+              value.writable.write(42);
+              expect(value.readable.read(1), [42]);
+              value.readable.drop();
+              value.writable.drop();
+            } else {
+              final future = value as WASIComponentFuture<Object?>;
+              future.writable.completeForCopy(42);
+              expect(future.readable.read(), 42);
+              future.readable.drop();
+              future.writable.drop();
+            }
+          }
+        },
+      );
+    }
+  }
+
+  for (final kind in ['stream', 'future']) {
+    test('fresh top-level $kind registries coexist on one host', () async {
+      final component = await _encodeComponent('''
+(component
+  (type \$value ($kind))
+  (core func (canon $kind.new \$value))
+  (core func (canon $kind.drop-readable \$value))
+  (core func (canon $kind.drop-writable \$value)))
+''');
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentHost();
+      final one = WASIComponentNativeRuntime.component(
+        component: component,
+        host: host,
+      );
+      final two = WASIComponentNativeRuntime.component(
+        component: component,
+        host: host,
+      );
+      await one.initialize();
+      await two.initialize();
+      expect(host.table.activeCount, 0);
+    });
+  }
+
+  test('sibling async registries retain index zero independently', () async {
+    final component = await _encodeComponent(r'''
+(component
+  (component $child
+    (type $value (stream))
+    (core func (canon stream.new $value))
+    (core func (canon stream.drop-readable $value))
+    (core func (canon stream.drop-writable $value)))
+  (instance (instantiate $child))
+  (instance (instantiate $child)))
+''');
+    expect(component.validate(), isEmpty);
+    final host = WASIComponentHost();
+    await WASIComponentNativeRuntime.component(
+      component: component,
+      host: host,
+    ).initialize();
+    expect(host.table.activeCount, 0);
+  });
+
+  test('stream and future with the same local index coexist', () async {
+    final host = WASIComponentHost();
+    for (final kind in ['stream', 'future']) {
+      final component = await _encodeComponent('''
+(component
+  (type \$value ($kind))
+  (core func (canon $kind.new \$value))
+  (core func (canon $kind.drop-readable \$value))
+  (core func (canon $kind.drop-writable \$value)))
+''');
+      expect(component.validate(), isEmpty);
+      await WASIComponentNativeRuntime.component(
+        component: component,
+        host: host,
+      ).initialize();
+    }
+    expect(host.table.activeCount, 0);
+  });
+
   group('nested Component execution', () {
     test('keeps each child Core instance state independent', () async {
       final component = await _encodeComponent('''

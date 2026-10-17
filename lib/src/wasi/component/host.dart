@@ -105,6 +105,7 @@ final class WASIComponentHostBindingPlan {
 
   final WASIComponentHost _host;
   bool _isBound = false;
+  WASIComponentAsyncValueBindingSet? _instanceAsyncBindings;
 
   /// Prepared canonical binding plan for the same component.
   final WASIComponentCanonicalBindingPlan canonicalPlan;
@@ -153,13 +154,18 @@ final class WASIComponentHostBindingPlan {
     }
     return _host.canonicalHost.adapterHost.bindAdapterPlans(
       adapterPlans,
+      asyncValueBindingSet: _instanceAsyncBindings,
       coreFunctions: coreFunctions,
       componentFunctions: componentFunctions,
     );
   }
 
   /// Defines component resources and binds the canonical builtin program.
+  ///
+  /// [instanceLocalAsyncValues] keeps decoded async type indexes private to
+  /// this binding. The default retains the host's explicit low-level registry.
   WASIComponentHostBinding bind({
+    bool instanceLocalAsyncValues = false,
     Map<int, WASIComponentCanonicalAdapterCallback> coreFunctions =
         const <int, WASIComponentCanonicalAdapterCallback>{},
     Map<int, WASIComponentCanonicalAdapterCallback> componentFunctions =
@@ -187,34 +193,57 @@ final class WASIComponentHostBindingPlan {
       throw StateError('WASI component host binding plan was already bound.');
     }
     _isBound = true;
+    final asyncHost = _host.canonicalHost.asyncHost;
+    if (instanceLocalAsyncValues && asyncValueBindings.isNotEmpty) {
+      _host.canonicalHost.adapterHost.checkAdapterCallbacks(
+        adapterPlans,
+        coreFunctions: coreFunctions,
+        componentFunctions: componentFunctions,
+      );
+    }
+    final asyncValueBindingSet =
+        instanceLocalAsyncValues && asyncValueBindings.isNotEmpty
+        ? asyncHost.createAsyncValueBindingSet<Object?>(
+            asyncValueBindings,
+            nameForBinding: asyncValueName,
+            maxBufferedElementsForStream: maxBufferedElementsForStream,
+            onDrop: onAsyncValueDrop,
+          )
+        : null;
     final adapterProgram = _host.canonicalHost.adapterHost.bindAdapterPlans(
       adapterPlans,
+      asyncValueBindingSet: asyncValueBindingSet,
       coreFunctions: coreFunctions,
       componentFunctions: componentFunctions,
     );
-    _host.canonicalHost.asyncHost.checkAsyncValueBindingsAvailable(
-      asyncValueBindings,
-    );
+    if (!instanceLocalAsyncValues) {
+      asyncHost.checkAsyncValueBindingsAvailable(asyncValueBindings);
+    }
     final resourceBindingSet = _host.canonicalHost.resourceHost
         .createResourceBindingSet<Object>(
           resourceBindings,
           nameForBinding: resourceName,
           onDrop: onResourceDrop,
         );
-    _host.canonicalHost.asyncHost.defineAsyncValueBindings<Object?>(
-      asyncValueBindings,
-      nameForBinding: asyncValueName,
-      maxBufferedElementsForStream: maxBufferedElementsForStream,
-      onDrop: onAsyncValueDrop,
+    if (!instanceLocalAsyncValues) {
+      asyncHost.defineAsyncValueBindings<Object?>(
+        asyncValueBindings,
+        nameForBinding: asyncValueName,
+        maxBufferedElementsForStream: maxBufferedElementsForStream,
+        onDrop: onAsyncValueDrop,
+      );
+    }
+    final program = canonicalPlan.bindWithAdapterOperations(
+      adapterProgram.operations,
+      resourceBindingSet: resourceBindingSet,
+      asyncValueBindingSet: asyncValueBindingSet,
     );
+    _instanceAsyncBindings = asyncValueBindingSet;
     return WASIComponentHostBinding._(
       host: _host,
       resourceTypes: resourceBindingSet.resourceTypes,
       asyncValueBindings: asyncValueBindings,
-      program: canonicalPlan.bindWithAdapterOperations(
-        adapterProgram.operations,
-        resourceBindingSet: resourceBindingSet,
-      ),
+      program: program,
     );
   }
 }

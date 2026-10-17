@@ -12,12 +12,48 @@ import 'unicode_scalar.dart';
 import 'value_memory.dart';
 import 'waitable_set.dart';
 
+/// Endpoint transfer operations used by canonical value adapters.
+abstract interface class WASIComponentAsyncEndpointBindings {
+  /// Lowers a host readable endpoint into this registry.
+  int lowerReadableEndpoint(int componentTypeIndex, Object value);
+
+  /// Lifts and transfers a readable endpoint out of this registry.
+  Object liftReadableEndpoint(int componentTypeIndex, int handle);
+}
+
+/// One component instance's async type indexes, sharing its host's backing state.
+final class WASIComponentAsyncValueBindingSet
+    implements WASIComponentAsyncEndpointBindings {
+  const WASIComponentAsyncValueBindingSet._(this._host, this._valueTypes);
+
+  final WASIComponentAsyncHost _host;
+  final Map<int, _RegisteredAsyncValueType> _valueTypes;
+
+  /// Binds a canonical operation against this instance's type indexes.
+  WASIComponentCanonicalAsyncOperation bindCanonicalDefinition(
+    WasmComponentCanonicalDefinition definition,
+  ) => _host._bindCanonicalDefinition(definition, _valueTypes);
+
+  _RegisteredAsyncValueType _type(int index) =>
+      _valueTypes[index] ??
+      (throw StateError('Unknown WASI component async type index: $index.'));
+
+  @override
+  int lowerReadableEndpoint(int componentTypeIndex, Object value) =>
+      _type(componentTypeIndex).lowerReadableEndpoint(value);
+
+  @override
+  Object liftReadableEndpoint(int componentTypeIndex, int handle) =>
+      _type(componentTypeIndex).liftReadableEndpoint(handle);
+}
+
 /// Binds decoded canonical stream/future definitions to executable primitives.
 ///
 /// This host layer binds validated `stream.*` and `future.*` definitions to
 /// typed Dart endpoint primitives, including primitive, owned-resource-handle,
 /// composite, and dynamic string/list stream/future memory copies.
-final class WASIComponentAsyncHost {
+final class WASIComponentAsyncHost
+    implements WASIComponentAsyncEndpointBindings {
   /// Creates an async host backed by [table] or a new resource table.
   WASIComponentAsyncHost({
     WASIComponentResourceTable? table,
@@ -82,6 +118,9 @@ final class WASIComponentAsyncHost {
 
   /// Resolves a handle-backed async endpoint to its waitable state.
   WASIComponentWaitable? waitableForHandle(int handle) {
+    if (!table.contains(handle)) return null;
+    final registered = _endpointWaitables.find(handle);
+    if (registered != null) return registered;
     for (final valueType in _valueTypes.values) {
       final waitable = valueType.waitableForHandle(handle);
       if (waitable != null) {
@@ -92,6 +131,7 @@ final class WASIComponentAsyncHost {
   }
 
   /// Lowers a host stream or future readable endpoint to a canonical handle.
+  @override
   int lowerReadableEndpoint(int componentTypeIndex, Object value) {
     final valueType = _valueTypes[componentTypeIndex];
     if (valueType == null) {
@@ -104,6 +144,7 @@ final class WASIComponentAsyncHost {
 
   /// Lifts a canonical stream or future handle by transferring its endpoint
   /// out of the component resource table.
+  @override
   Object liftReadableEndpoint(int componentTypeIndex, int handle) {
     final valueType = _valueTypes[componentTypeIndex];
     if (valueType == null) {
@@ -201,6 +242,8 @@ final class WASIComponentAsyncHost {
           name: '${kind.name}[$componentTypeIndex]',
           kind: kind,
           valueValidator: validator,
+          elementType: definedValue.elementType,
+          referenceDefinitions: definitions,
         ),
       );
     }
@@ -218,10 +261,98 @@ final class WASIComponentAsyncHost {
           name: '${scopedType.kind.name}[${scopedType.componentTypeIndex}]',
           kind: scopedType.kind,
           valueValidator: validator,
+          elementType: scopedType.definedValue.elementType,
+          referenceDefinitions: scopedType.referenceDefinitions,
         ),
       );
     }
     return List<WASIComponentAsyncValueBinding>.unmodifiable(bindings);
+  }
+
+  /// Creates an instance-local registry backed by this host's shared state.
+  WASIComponentAsyncValueBindingSet createAsyncValueBindingSet<T>(
+    Iterable<WASIComponentAsyncValueBinding> bindings, {
+    String Function(WASIComponentAsyncValueBinding binding)? nameForBinding,
+    int? Function(WASIComponentAsyncValueBinding binding)?
+    maxBufferedElementsForStream,
+    void Function(WASIComponentAsyncValueBinding binding)? onDrop,
+    void Function(WASIComponentAsyncValueBinding binding, T value)? onDiscard,
+  }) {
+    final bindingList = bindings.toList(growable: false);
+    final seen = <int>{};
+    for (final binding in bindingList) {
+      final index = binding.componentTypeIndex;
+      if (index < 0 || !seen.add(index)) {
+        throw StateError(
+          'Invalid or duplicate WASI component async type index: $index.',
+        );
+      }
+    }
+    // Resolve caller metadata before allocating any nominal endpoint types.
+    final prepared = [
+      for (final binding in bindingList)
+        (
+          binding: binding,
+          shareable:
+              binding._elementType == null ||
+              WASIComponentCanonicalValueMemoryCodec.fromValueType(
+                    binding._elementType,
+                    binding._referenceDefinitions,
+                  ) !=
+                  null,
+          name: nameForBinding?.call(binding) ?? binding.name,
+          max: binding.kind == WASIComponentAsyncValueBindingKind.stream
+              ? maxBufferedElementsForStream?.call(binding)
+              : null,
+        ),
+    ];
+    for (final entry in prepared) {
+      final max = entry.max;
+      if (max != null && max < 0) {
+        throw RangeError.range(max, 0, null, 'maxBufferedElements');
+      }
+    }
+    final valueTypes = <int, _RegisteredAsyncValueType<T>>{};
+    for (final entry in prepared) {
+      final binding = entry.binding;
+      _RegisteredAsyncValueType<T>? equivalentType;
+      // Shared resource model definitions do not prove fresh instance identity.
+      // Keep resource-bearing payloads isolated by index until that provenance
+      // is available; only ordinary value codecs prove backing can be shared.
+      if (entry.shareable) {
+        for (final previous in prepared) {
+          final registered = valueTypes[previous.binding.componentTypeIndex];
+          if (previous.shareable &&
+              registered != null &&
+              binding._equivalentTo(previous.binding)) {
+            equivalentType = registered;
+            break;
+          }
+        }
+      }
+      valueTypes[binding.componentTypeIndex] = _RegisteredAsyncValueType<T>(
+        equivalentType: equivalentType,
+        table: table,
+        name: entry.name,
+        kind: switch (binding.kind) {
+          WASIComponentAsyncValueBindingKind.stream =>
+            _WASIComponentAsyncValueKind.stream,
+          WASIComponentAsyncValueBindingKind.future =>
+            _WASIComponentAsyncValueKind.future,
+        },
+        valueValidator: binding._valueValidator,
+        maxBufferedElements: entry.max,
+        onDrop: onDrop == null ? null : () => onDrop(binding),
+        onDiscard: onDiscard == null
+            ? null
+            : (value) => onDiscard(binding, value),
+        endpointWaitables: _endpointWaitables,
+      );
+    }
+    return WASIComponentAsyncValueBindingSet._(
+      this,
+      Map.unmodifiable(valueTypes),
+    );
   }
 
   /// Defines async value types from a prepared component async binding list.
@@ -314,6 +445,11 @@ final class WASIComponentAsyncHost {
   /// Binds a decoded canonical stream/future definition.
   WASIComponentCanonicalAsyncOperation bindCanonicalDefinition(
     WasmComponentCanonicalDefinition definition,
+  ) => _bindCanonicalDefinition(definition, _valueTypes);
+
+  WASIComponentCanonicalAsyncOperation _bindCanonicalDefinition(
+    WasmComponentCanonicalDefinition definition,
+    Map<int, _RegisteredAsyncValueType> valueTypes,
   ) {
     if (_canonicalDefinitionUsesBackpressure(definition.kind)) {
       if (definition.typeIndex != null) {
@@ -335,7 +471,7 @@ final class WASIComponentAsyncHost {
     }
 
     final typeIndex = definition.typeIndex;
-    final valueType = typeIndex == null ? null : _valueTypes[typeIndex];
+    final valueType = typeIndex == null ? null : valueTypes[typeIndex];
     if (typeIndex == null || valueType == null) {
       throw StateError('Unknown WASI component async type index: $typeIndex.');
     }
@@ -772,8 +908,25 @@ final class WASIComponentAsyncValueBinding {
     required this.name,
     required this.kind,
     required _WASIComponentAsyncValueValidator valueValidator,
-  }) : _valueValidator = valueValidator,
+    required WasmComponentValueType? elementType,
+    required List<WasmComponentTypeDefinition> referenceDefinitions,
+  }) : _elementType = elementType,
+       _referenceDefinitions = referenceDefinitions,
+       _valueValidator = valueValidator,
        memoryLayout = _memoryLayoutFor(valueValidator);
+
+  final WasmComponentValueType? _elementType;
+  final List<WasmComponentTypeDefinition> _referenceDefinitions;
+
+  bool _equivalentTo(WASIComponentAsyncValueBinding other) =>
+      kind == other.kind &&
+      _asyncBindingValueTypesEquivalent(
+        _elementType,
+        _referenceDefinitions,
+        other._elementType,
+        other._referenceDefinitions,
+        <(WasmComponentTypeDefinition, WasmComponentTypeDefinition)>{},
+      );
 
   final _WASIComponentAsyncValueValidator _valueValidator;
 
@@ -2237,21 +2390,33 @@ enum _WASIComponentAsyncValueShape {
 final class _WASIComponentEndpointWaitables {
   final Map<int, WASIComponentWaitable> _waitables =
       <int, WASIComponentWaitable>{};
-  final Map<int, Object> _endpoints = <int, Object>{};
+  final Map<int, ({Object endpoint, String name})> _endpoints = {};
   final Map<Object, Set<int>> _handlesByEndpoint =
       HashMap<Object, Set<int>>.identity();
 
   WASIComponentWaitable? operator [](int handle) => _waitables[handle];
 
-  WASIComponentWaitable forEndpoint(int handle, Object endpoint, String name) {
-    final existingEndpoint = _endpoints[handle];
+  WASIComponentWaitable? find(int handle) {
+    final entry = _endpoints[handle];
+    return entry == null
+        ? null
+        : forEndpoint(handle, entry.endpoint, entry.name);
+  }
+
+  void register(int handle, Object endpoint, String name) {
+    final existingEndpoint = _endpoints[handle]?.endpoint;
     if (existingEndpoint != null && !identical(existingEndpoint, endpoint)) {
       throw StateError(
         'WASI component async endpoint handle $handle changed identity.',
       );
     }
-    _endpoints[handle] = endpoint;
+    if (existingEndpoint != null) return;
+    _endpoints[handle] = (endpoint: endpoint, name: name);
     (_handlesByEndpoint[endpoint] ??= <int>{}).add(handle);
+  }
+
+  WASIComponentWaitable forEndpoint(int handle, Object endpoint, String name) {
+    register(handle, endpoint, name);
     return _waitables.putIfAbsent(handle, () => WASIComponentWaitable(name));
   }
 
@@ -2273,7 +2438,7 @@ final class _WASIComponentEndpointWaitables {
 
   void _removeHandle(int handle) {
     _waitables.remove(handle);
-    final endpoint = _endpoints.remove(handle);
+    final endpoint = _endpoints.remove(handle)?.endpoint;
     if (endpoint == null) {
       return;
     }
@@ -2292,44 +2457,49 @@ final class _RegisteredAsyncValueType<T> {
     required this.kind,
     required this.valueValidator,
     required this.endpointWaitables,
+    _RegisteredAsyncValueType<T>? equivalentType,
     this.maxBufferedElements,
     this.onDrop,
     this.onDiscard,
   }) : readableStreamType = kind == _WASIComponentAsyncValueKind.stream
-           ? table.defineType<WASIComponentReadableStream<T>>(
-               '$name.readable',
-               onDrop: (endpoint) {
-                 endpointWaitables.disposeEndpoint(endpoint);
-                 endpoint.dispose();
-               },
-             )
+           ? equivalentType?.readableStreamType ??
+                 table.defineType<WASIComponentReadableStream<T>>(
+                   '$name.readable',
+                   onDrop: (endpoint) {
+                     endpointWaitables.disposeEndpoint(endpoint);
+                     endpoint.dispose();
+                   },
+                 )
            : null,
        writableStreamType = kind == _WASIComponentAsyncValueKind.stream
-           ? table.defineType<WASIComponentWritableStream<T>>(
-               '$name.writable',
-               onDrop: (endpoint) {
-                 endpointWaitables.disposeEndpoint(endpoint);
-                 endpoint.dispose();
-               },
-             )
+           ? equivalentType?.writableStreamType ??
+                 table.defineType<WASIComponentWritableStream<T>>(
+                   '$name.writable',
+                   onDrop: (endpoint) {
+                     endpointWaitables.disposeEndpoint(endpoint);
+                     endpoint.dispose();
+                   },
+                 )
            : null,
        readableFutureType = kind == _WASIComponentAsyncValueKind.future
-           ? table.defineType<WASIComponentReadableFuture<T>>(
-               '$name.readable',
-               onDrop: (endpoint) {
-                 endpointWaitables.disposeEndpoint(endpoint);
-                 endpoint.dispose();
-               },
-             )
+           ? equivalentType?.readableFutureType ??
+                 table.defineType<WASIComponentReadableFuture<T>>(
+                   '$name.readable',
+                   onDrop: (endpoint) {
+                     endpointWaitables.disposeEndpoint(endpoint);
+                     endpoint.dispose();
+                   },
+                 )
            : null,
        writableFutureType = kind == _WASIComponentAsyncValueKind.future
-           ? table.defineType<WASIComponentWritableFuture<T>>(
-               '$name.writable',
-               onDrop: (endpoint) {
-                 endpointWaitables.disposeEndpoint(endpoint);
-                 endpoint.dispose();
-               },
-             )
+           ? equivalentType?.writableFutureType ??
+                 table.defineType<WASIComponentWritableFuture<T>>(
+                   '$name.writable',
+                   onDrop: (endpoint) {
+                     endpointWaitables.disposeEndpoint(endpoint);
+                     endpoint.dispose();
+                   },
+                 )
            : null;
 
   final WASIComponentResourceTable table;
@@ -2369,6 +2539,16 @@ final class _RegisteredAsyncValueType<T> {
       writableStreamType!,
       stream.writable,
     );
+    endpointWaitables.register(
+      readable,
+      stream.readable,
+      '$name.readable#$readable',
+    );
+    endpointWaitables.register(
+      writable,
+      stream.writable,
+      '$name.writable#$writable',
+    );
     return WASIComponentAsyncEndpointHandles(
       readable: readable,
       writable: writable,
@@ -2385,10 +2565,12 @@ final class _RegisteredAsyncValueType<T> {
             'WASI component async type $name expected a readable stream.',
           ),
         };
-        return table.insert<WASIComponentReadableStream<T>>(
+        final handle = table.insert<WASIComponentReadableStream<T>>(
           readableStreamType!,
           endpoint,
         );
+        endpointWaitables.register(handle, endpoint, '$name.readable#$handle');
+        return handle;
       case _WASIComponentAsyncValueKind.future:
         final endpoint = switch (value) {
           WASIComponentFuture<T>() => value.readable,
@@ -2397,10 +2579,12 @@ final class _RegisteredAsyncValueType<T> {
             'WASI component async type $name expected a readable future.',
           ),
         };
-        return table.insert<WASIComponentReadableFuture<T>>(
+        final handle = table.insert<WASIComponentReadableFuture<T>>(
           readableFutureType!,
           endpoint,
         );
+        endpointWaitables.register(handle, endpoint, '$name.readable#$handle');
+        return handle;
     }
   }
 
@@ -3149,6 +3333,16 @@ final class _RegisteredAsyncValueType<T> {
     final writable = table.insert<WASIComponentWritableFuture<T>>(
       writableFutureType!,
       future.writable,
+    );
+    endpointWaitables.register(
+      readable,
+      future.readable,
+      '$name.readable#$readable',
+    );
+    endpointWaitables.register(
+      writable,
+      future.writable,
+      '$name.writable#$writable',
     );
     return WASIComponentAsyncEndpointHandles(
       readable: readable,
