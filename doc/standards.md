@@ -145,7 +145,10 @@ stream equivalent has actual cross-instance controls. Unreleased main permits
 a synchronous stream copy after `task.return` to suspend while the caller
 continues. Typed results are captured at return; callee thread state and
 scopes survive until body exit. Real guest blocking, yield and exit control
-handoff; ordinary implementation awaits do not. See
+handoff; ordinary implementation awaits do not. Clean allocation-scope
+cleanup runs guest destructors; aborted or trapped stores skip them.
+Session settlement preserves late WASI exit status and attributes
+delayed specification failures to the command that started the work. See
 [#156](https://github.com/medz/wasd/issues/156). Released `0.6.1` retains
 the blocking-copy guard. Top-level
 equality-bound component type imports remain unsupported and are tracked in

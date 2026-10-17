@@ -7,6 +7,10 @@
 - Propagate fatal Component-store failures to the invocation owner and
   retain opaque host callback borrows until settlement. Reject invalid
   host API arguments before entering the guest without poisoning the store.
+- Run guest destructors during clean disposal, preserve late WASI exit
+  status, and publish actual subtask states for async functions with a
+  synchronous lift ABI. Attribute delayed specification failures to
+  their originating command.
 - Add `settle()` and `dispose()` to the Preview3 service runner so callers
   can observe and finish work after response delivery. Preview2 proxy
   calls automatically dispose their completed synchronous runtime.
