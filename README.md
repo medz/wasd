@@ -76,6 +76,12 @@ Native Linux/macOS results and Node/browser regressions remain separate
 acceptance profiles. These gates do not establish full Core, Component Model
 or WASI conformance; see the [standards and acceptance plan](doc/standards.md).
 
+**Unreleased main:** Component callers can continue after `task.return`
+while the callee remains suspended in a synchronous stream copy. The
+complete frozen `async/sync-streams.wast` file extends the main-branch
+gate to four files / `61/61` commands. Released `0.6.1` retains the
+three-file gate and its blocking-copy guard.
+
 ## Quick Start
 
 Run included examples:
@@ -253,20 +259,23 @@ Future<void> main() async {
 
 `WASIPreview3ServiceRunner` executes stable `wasi:http/service` components.
 Each request is passed directly to the component handler; integrating it with
-an HTTP server remains an application concern.
+an HTTP server remains an application concern. The service example below
+targets unreleased main, which adds `settle()` and `dispose()`. For the
+released API, use the [0.6.1 README](https://github.com/medz/wasd/blob/v0.6.1/README.md).
 
 ```dart
 final serviceComponent = WasmComponent.decode(
   await File('service.component.wasm').readAsBytes(),
 );
 final serviceHost = WASI.preview3();
+final serviceRunner = WASIPreview3ServiceRunner(serviceHost);
 try {
   final request = WASIPreview3HttpRequest.noTrailers(
     headers: WASIPreview3HttpFields(),
   )
     ..method = const WASIPreview3HttpMethod.standard('get')
     ..pathWithQuery = '/';
-  final result = await WASIPreview3ServiceRunner(serviceHost).handle(
+  final result = await serviceRunner.handle(
     serviceComponent,
     request,
   );
@@ -284,15 +293,22 @@ try {
   await response.completeTransmission(
     const WASIPreview3HttpResult<void>.ok(null),
   );
+  await serviceRunner.settle();
 } finally {
-  serviceHost.close(force: true);
+  try {
+    await serviceRunner.dispose();
+  } finally {
+    serviceHost.close(force: true);
+  }
 }
 ```
 
 Each successful service response retains its component resource scope while
 its body and trailers are in flight. Call `completeTransmission` after the
 client observes the response, or `cancel` when abandoning it, so that scope is
-released deterministically.
+released deterministically. On unreleased main, `settle()` observes guest
+continuation failures after transmission, and `dispose()` finishes
+retained work before the host closes.
 
 The frozen Preview3 contract covers the six stable `random`, `clocks`,
 `filesystem`, `sockets`, `cli`, and `http` packages and eight import/execution

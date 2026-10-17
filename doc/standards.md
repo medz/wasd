@@ -2,10 +2,10 @@
 
 This implementation and acceptance plan retains the historical `0.5.0`
 (`528b2b828f979d08ba1798f7e8e955e892ab052d`) baseline checked on 2026-10-01.
-Current evidence describes `0.6.1`, retaining the `0.6.0` frozen gates and
-adding Component handle ownership, local destructors, stricter assertions and
-JavaScript asynchronous host callbacks. Historical results retain their
-original versions and scope.
+Current main retains the released `0.6.1` changes and adds Component
+caller-continuation scheduling. Its four-file execution gate is unreleased;
+`0.6.1` retains its three-file gate. Historical results keep their original
+versions and scope.
 A target in this document is not a support claim. Release support must be backed
 by WASD execution, validation, and host tests at the exact release commit.
 
@@ -91,7 +91,7 @@ Linux/macOS gate still uses `0.3.0` guests; it is compatibility evidence for
 that version, not an official `0.3.1` suite. General Component/async assertion
 execution and full package/world/platform acceptance remain open.
 
-The `0.6.0` WASD Component execution gate covers three complete official
+The unreleased main WASD Component execution gate covers four complete official
 files at source `0220da84209397d9067c19cac83dae969aa85a7b`:
 
 | File | Frozen Git blob | Commands |
@@ -99,10 +99,14 @@ files at source `0220da84209397d9067c19cac83dae969aa85a7b`:
 | `test/values/strings.wast` | `e96f54e97689a32ba70b05e12226e01b8dea024b` | 17 |
 | `test/values/numerics.wast` | `99fcbc03b0b352b29db247c90085ad0febbd3fe5` | 26 |
 | `test/values/realloc.wast` | `7706e03b2a1e941d2785f580f399cd2b65b08beb` | 16 |
+| `test/async/sync-streams.wast` | `5eb1b7a02aaa0b8a94436c4fbc4573ae31530d7b` | 2 |
 
-The combined gate executes `59/59` commands: 23 actual component
-initializations, five definition registrations, 19 exact return assertions and
-12 invocation trap assertions. The earlier `0.6.0-dev.3` two-file gate remains
+The combined gate executes `61/61` commands: 24 actual component
+initializations, five definition registrations, 20 exact return assertions and
+12 invocation trap assertions. The new async file returns `u32 42` after its
+unchanged read/write rendezvous and subtask assertions. Released `0.6.1`
+retains the first three files / `59/59` commands. The earlier
+`0.6.0-dev.3` two-file gate remains
 `43/43` historical evidence: 17 initializations, one definition, 18 returns and
 seven traps.
 
@@ -137,17 +141,20 @@ ownership and local resource destructors have focused regressions. Async
 borrowed-resource, error-context and nested stream/future payload codecs remain
 unsupported. The named exported stream-alias result shape tracked in
 [#162](https://github.com/medz/wasd/issues/162) remains unsupported; its inline
-stream equivalent has actual cross-instance controls. A blocking synchronous
-stream copy after `task.return` reports the missing caller-continuation
-capability before registering a pending copy; full continuation scheduling
-remains tracked in [#156](https://github.com/medz/wasd/issues/156). Top-level
+stream equivalent has actual cross-instance controls. Unreleased main permits
+a synchronous stream copy after `task.return` to suspend while the caller
+continues. Typed results are captured at return; callee thread state and
+scopes survive until body exit. Real guest blocking, yield and exit control
+handoff; ordinary implementation awaits do not. See
+[#156](https://github.com/medz/wasd/issues/156). Released `0.6.1` retains
+the blocking-copy guard. Top-level
 equality-bound component type imports remain unsupported and are tracked in
 [#163](https://github.com/medz/wasd/issues/163).
 Shared canonical-memory regressions also run on Node and Chrome. This does not
 establish JavaScript u64 memory access or general Component execution there.
 
-The frozen Component source contains 74 WAST files. The three complete files
-above leave 71 without equivalent complete WASD acceptance: 45 async,
+The frozen Component source contains 74 WAST files. The four complete files
+above leave 70 without equivalent complete WASD acceptance: 44 async,
 13 validation, four linking, three resource, five other value and one binary
 file. Existing implementation and focused tests do not replace those gates.
 These are file coverage counts, not a percentage of feature completion.
