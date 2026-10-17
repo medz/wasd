@@ -446,6 +446,87 @@ void main() {
     },
   );
 
+  for (final nested in [false, true]) {
+    test(
+      'continuation invalid host error-context token is recoverable nested=$nested',
+      () async {
+        final component = await _encodeComponent('''
+(component
+  (type \$context error-context)
+  (type \$errors (tuple \$context))
+  (core func \$drop (canon error-context.drop))
+  (core module \$m
+    (import "h" "drop" (func \$drop (param i32)))
+    (global \$entries (mut i32) (i32.const 0))
+    (func (export "use") (param i32) (result i32)
+      global.get \$entries i32.const 1 i32.add global.set \$entries
+      local.get 0 call \$drop i32.const 42)
+    (func (export "ping") (result i32) i32.const 42)
+    (func (export "entries") (result i32) global.get \$entries))
+  (core instance \$h (export "drop" (func \$drop)))
+  (core instance \$m (instantiate \$m (with "h" (instance \$h))))
+  (func (export "use") (param "error" ${nested ? r'$errors' : 'error-context'}) (result u32)
+    (canon lift (core func \$m "use")))
+  (func (export "ping") (result u32) (canon lift (core func \$m "ping")))
+  (func (export "entries") (result u32) (canon lift (core func \$m "entries"))))
+''', validate: true);
+        final host = WASIComponentHost();
+        final errors = host.canonicalHost.errorContextHost;
+        await host.table.runScoped(() async {
+          final kept = errors.create('kept');
+          final stale = errors.create('stale');
+          errors.drop(stale);
+          final runtime = WASIComponentNativeRuntime.component(
+            component: component,
+            host: host,
+          );
+          List<Object?> args(int handle) => [
+            nested
+                ? WasmComponentValueData(
+                    kind: WasmComponentValueDataKind.tuple,
+                    rawBytes: Uint8List(0),
+                    items: [
+                      WasmComponentValueData(
+                        kind: WasmComponentValueDataKind.integer,
+                        rawBytes: Uint8List(0),
+                        integer: handle,
+                      ),
+                    ],
+                  )
+                : handle,
+          ];
+          expect(await runtime.invokeExport('use', args(kept)), 42);
+          expect(await runtime.invokeExport('entries', []), 1);
+          for (final invalid in [0, stale]) {
+            await expectLater(
+              runtime.invokeExport('use', args(invalid)),
+              throwsA(isA<StateError>()),
+            );
+            expect(await runtime.invokeExport('ping', []), 42);
+            expect(
+              await runtime.invokeExport('entries', []),
+              1,
+              reason: 'invalid host tokens never enter the guest',
+            );
+            expect(errors.debugMessage(kept), 'kept');
+            expect(
+              host.table.activeCount,
+              1,
+              reason: 'preflight neither copies nor consumes error references',
+            );
+          }
+          expect(await runtime.invokeExport('use', args(kept)), 42);
+          expect(await runtime.invokeExport('entries', []), 2);
+          expect(errors.debugMessage(kept), 'kept');
+          expect(host.table.activeCount, 1);
+          await runtime.dispose();
+          errors.drop(kept);
+        });
+        expect(host.table.activeCount, 0);
+      },
+    );
+  }
+
   test(
     'continuation embedding argument error leaves the instance callable',
     () async {

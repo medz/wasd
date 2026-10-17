@@ -242,7 +242,12 @@ final class WASIComponentCanonicalHandles
     );
     for (var index = 0; index < plan.params.length; index++) {
       final param = plan.params[index];
-      if (param.resourceUses.isEmpty) continue;
+      if (param.resourceUses.isEmpty &&
+          !WASIComponentCanonicalLowerExecution.containsErrorContext(
+            param.flatLayout,
+          )) {
+        continue;
+      }
       lowerWASIComponentCanonicalMemoryHandles(
         param.flatLayout!,
         args[index],

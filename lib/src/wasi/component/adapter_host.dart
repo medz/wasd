@@ -4451,6 +4451,11 @@ abstract interface class WASIComponentCanonicalValueDiscard {
 /// Deferred argument conversion for the runtime's actual callee entry.
 extension WASIComponentCanonicalLowerExecution
     on WASIComponentCanonicalAdapterProgram {
+  /// Whether this parameter contains an error reference outside async leaves.
+  static bool containsErrorContext(
+    WASIComponentCanonicalAdapterFlatValuePlan? layout,
+  ) => _flatLayoutContainsErrorContext(layout);
+
   /// Validates embedding values before any guest activation or allocation.
   void validateCanonicalArguments(int canonicalIndex, List<Object?> args) {
     _operationsByCanonicalIndex[canonicalIndex]!._validateDirectArgs(args);
