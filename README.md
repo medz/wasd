@@ -139,6 +139,15 @@ Future<void> main() async {
 Uint8List loadYourModuleBytes() => throw UnimplementedError();
 ```
 
+If a module imports a callback with a `Future` return type, its function exports
+return Futures too: use `await usePlus.ref([4, 5])`. Instances with only synchronous
+imports keep synchronous exports. A callback declared as `Object?` or
+`FutureOr<Object?>` that produces a Future is rejected without replaying the guest;
+adapt it with
+`(args) async => await callback(args)`. On JavaScript, asynchronous imports require
+the engine's `WebAssembly.Suspending`, `WebAssembly.promising`, and
+`WebAssembly.JSTag` APIs. Core start functions cannot await host callbacks.
+
 ## WASI Preview1
 
 Use `WASI` and call `_start` through `wasi.start(instance)`.

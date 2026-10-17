@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -17,6 +18,7 @@ import 'package:wasd/src/wasm/backend/native/interpreter/validator.dart'
 import 'package:wasd/src/wasm/backend/native/interpreter/vm.dart' as native_vm;
 import 'package:wasd/src/wasm/host_control_flow.dart';
 import 'package:wasd/wasm.dart';
+import 'support/host_exception_fixtures.dart';
 import 'support/wasm_fixtures.dart';
 
 final _wasmBytes = simpleAddModuleBytes();
@@ -27,6 +29,20 @@ final _importedAndLocalGlobalBytes = importedAndLocalGlobalModuleBytes();
 final _loopBackWithoutFunctionResultBytes =
     loopBackWithoutFunctionResultModuleBytes();
 final _wasiStartBytes = wasiStartModuleBytes();
+// run increments entries, calls host.op(41), then increments tail and adds one
+// to the host result. Counters distinguish suspension from guest replay.
+final _asyncHostValueBytes = base64Decode(
+  'AGFzbQEAAAABCgJgAX8Bf2AAAX8CCwEEaG9zdAJvcAAAAwQDAQEBBgsCfwFBAAt/AUEACwcYAwNydW4AAQdlbnRyaWVzAAIEdGFpbAADCikDHQEBfyMAQQFqJABBKRAAIQAjAUEBaiQBIABBAWoLBAAjAAsEACMBCwArBG5hbWUBBQEAAm9wAgsBAQEABnJlc3VsdAcQAgAHZW50cmllcwEEdGFpbA==',
+);
+// run calls pause then op, before calls op then pause, ordinary only calls op.
+// Each export increments tail only after both host calls return.
+final _asyncHostMixedBytes = base64Decode(
+  'AGFzbQEAAAABDANgAABgAX8AYAABfwIYAgRob3N0BXBhdXNlAAAEaG9zdAJvcAABAwYFAAAAAAIGBgF/AUEACwciBANydW4AAwZiZWZvcmUABAhvcmRpbmFyeQAFBHRhaWwABgovBQkAIwBBAWokAAsKABAAQSkQARACCwoAQSkQARAAEAILCABBKRABEAILBAAjAAsAJARuYW1lARQDAAVwYXVzZQECb3ACBmZpbmlzaAcHAQAEdGFpbA==',
+);
+// The core start calls ordinary h.op; the declared async h.pause stays unused.
+final _syncStartWithAsyncImportBytes = base64Decode(
+  'AGFzbQEAAAABCAJgAABgAAF/AhICAWgFcGF1c2UAAAFoAm9wAAADAwIAAQcKAQZhbnN3ZXIAAwgBAgoLAgQAEAELBABBKgsAGgRuYW1lARMDAAVwYXVzZQECb3ACBXN0YXJ0',
+);
 final _invalidBranchHintCustomSectionBytes = Uint8List.fromList(const <int>[
   0x00,
   0x61,
@@ -459,6 +475,324 @@ void main() {
   });
 
   group('Host control flow', () {
+    WasmFunction function(Instance instance, String name) =>
+        (instance.exports[name]! as FunctionImportExportValue).ref;
+
+    for (final creation in ['Instance', 'bytes', 'module', 'streaming']) {
+      test('awaits pending typed host results through $creation', () async {
+        final pending = Completer<int>();
+        addTearDown(() {
+          if (!pending.isCompleted) pending.complete(41);
+        });
+        var calls = 0;
+        final imports = {
+          'host': {
+            'op': ImportExportKind.function((args) async {
+              calls++;
+              expect(args, [41]);
+              return await pending.future;
+            }),
+          },
+        };
+        final bytes = _asyncHostValueBytes;
+        final instance = switch (creation) {
+          'Instance' => Instance(Module(bytes.buffer), imports),
+          'module' => await WebAssembly.instantiateModule(
+            await WebAssembly.compile(bytes.buffer),
+            imports,
+          ),
+          'streaming' => (await WebAssembly.instantiateStreaming(
+            Stream.fromIterable([bytes.sublist(0, 11), bytes.sublist(11)]),
+            imports,
+          )).instance,
+          _ => (await WebAssembly.instantiate(bytes.buffer, imports)).instance,
+        };
+        final result = function(instance, 'run')(const []);
+        expect(result, isA<Future<Object?>>());
+        await Future<void>.delayed(Duration.zero);
+        expect(calls, 1);
+        expect(
+          await (function(instance, 'entries')(const []) as Future<Object?>),
+          1,
+        );
+        expect(
+          await (function(instance, 'tail')(const []) as Future<Object?>),
+          0,
+        );
+        pending.complete(41);
+        expect(await (result as Future<Object?>), 42);
+        expect(calls, 1);
+        expect(
+          await (function(instance, 'entries')(const []) as Future<Object?>),
+          1,
+        );
+        expect(
+          await (function(instance, 'tail')(const []) as Future<Object?>),
+          1,
+        );
+      });
+    }
+
+    test('keeps ordinary synchronous host results synchronous', () {
+      final instance = Instance(Module(_asyncHostValueBytes.buffer), {
+        'host': {'op': ImportExportKind.function((args) => args.single)},
+      });
+      expect(function(instance, 'run')(const []), 42);
+      expect(function(instance, 'entries')(const []), 1);
+      expect(function(instance, 'tail')(const []), 1);
+    });
+
+    test('unused async bindings do not change synchronous exports', () async {
+      final instance = (await WebAssembly.instantiate(_wasmBytes.buffer, {
+        'unused': {'callback': ImportExportKind.function((_) async => 1)},
+      })).instance;
+      expect(function(instance, 'add')([20, 22]), 42);
+    });
+
+    test('start cannot launch an asynchronous host callback', () async {
+      var calls = 0;
+      final bytes = hostExceptionFixture('host_start');
+      final module = Module(bytes.buffer);
+      final imports = {
+        'host': {
+          'tick': ImportExportKind.function((_) async {
+            calls++;
+            return null;
+          }),
+        },
+      };
+      for (final create in <Object? Function()>[
+        () => Instance(module, imports),
+        () => WebAssembly.instantiateModule(module, imports),
+        () => WebAssembly.instantiate(bytes.buffer, imports),
+        () => WebAssembly.instantiateStreaming(Stream.value(bytes), imports),
+      ]) {
+        await expectLater(Future<Object?>.sync(create), throwsA(anything));
+        expect(calls, 0);
+      }
+    });
+
+    for (final controlFlow in [false, true]) {
+      test(
+        'synchronous start retains host error controlFlow=$controlFlow',
+        () async {
+          final bytes = _syncStartWithAsyncImportBytes;
+          final module = Module(bytes.buffer);
+          var calls = 0;
+          var asyncCalls = 0;
+          final marker = controlFlow
+              ? _TestHostControlFlowException()
+              : StateError('synchronous start host marker');
+          final stack = StackTrace.fromString('synchronous-start-host-stack');
+          Never failStart(List<Object?> _) {
+            calls++;
+            Error.throwWithStackTrace(marker, stack);
+          }
+
+          final imports = {
+            'h': {
+              'pause': ImportExportKind.function((_) async {
+                asyncCalls++;
+                return null;
+              }),
+              'op': ImportExportKind.function(failStart),
+            },
+          };
+          for (final create in <Object? Function()>[
+            () => Instance(module, imports),
+            () => WebAssembly.instantiateModule(module, imports),
+            () => WebAssembly.instantiate(bytes.buffer, imports),
+            () =>
+                WebAssembly.instantiateStreaming(Stream.value(bytes), imports),
+          ]) {
+            calls = 0;
+            try {
+              await Future<Object?>.sync(create);
+              fail('Expected the original start host error.');
+            } catch (error, sourceStack) {
+              expect(error, same(marker));
+              expect('$sourceStack', contains('synchronous-start-host-stack'));
+            }
+            expect(calls, 1);
+            expect(asyncCalls, 0);
+          }
+        },
+      );
+    }
+
+    for (final futureOr in [false, true]) {
+      test('rejects erased Future without replay futureOr=$futureOr', () async {
+        var calls = 0;
+        final pending = Completer<Object?>();
+        addTearDown(() {
+          if (!pending.isCompleted) pending.complete(null);
+        });
+        Object? erased(List<Object?> _) {
+          calls++;
+          return pending.future;
+        }
+
+        FutureOr<Object?> union(List<Object?> _) => erased(const []);
+        final instance = Instance(Module(_asyncHostValueBytes.buffer), {
+          'host': {'op': ImportExportKind.function(futureOr ? union : erased)},
+        });
+        final failure = expectLater(
+          Future<Object?>.sync(() => function(instance, 'run')(const [])),
+          throwsA(
+            isA<UnsupportedError>().having(
+              (error) => error.message,
+              'message',
+              contains('async => await'),
+            ),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        pending.completeError(StateError('observed erased Future'));
+        await failure;
+        expect(calls, 1);
+        expect(function(instance, 'entries')(const []), 1);
+        expect(function(instance, 'tail')(const []), 0);
+      });
+    }
+
+    for (final name in ['run', 'before', 'ordinary']) {
+      test('rejects erased Future in async instance export $name', () async {
+        var calls = 0;
+        final pending = Completer<Object?>();
+        addTearDown(() {
+          if (!pending.isCompleted) pending.complete(null);
+        });
+        Object? erased(List<Object?> _) {
+          calls++;
+          return pending.future;
+        }
+
+        final instance = Instance(Module(_asyncHostMixedBytes.buffer), {
+          'host': {
+            'pause': ImportExportKind.function((_) async => null),
+            'op': ImportExportKind.function(erased),
+          },
+        });
+        final failure = expectLater(
+          Future<Object?>.sync(() => function(instance, name)(const [])),
+          throwsA(isA<UnsupportedError>()),
+        );
+        await Future<void>.delayed(Duration.zero);
+        pending.completeError(StateError('observed mixed erased Future'));
+        await failure;
+        expect(calls, 1);
+        expect(
+          await (function(instance, 'tail')(const []) as Future<Object?>),
+          0,
+        );
+      });
+    }
+
+    test('preserves a synchronous host failure after suspension', () async {
+      final marker = _TestHostControlFlowException();
+      final pause = Completer<void>();
+      addTearDown(() {
+        if (!pause.isCompleted) pause.complete();
+      });
+      var calls = 0;
+      final instance = Instance(Module(_asyncHostMixedBytes.buffer), {
+        'host': {
+          'pause': ImportExportKind.function((_) => pause.future),
+          'op': ImportExportKind.function((_) {
+            calls++;
+            throw marker;
+          }),
+        },
+      });
+      final failure = expectLater(
+        Future<Object?>.sync(() => function(instance, 'run')(const [])),
+        throwsA(same(marker)),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(calls, 0);
+      expect(
+        await (function(instance, 'tail')(const []) as Future<Object?>),
+        0,
+      );
+      pause.complete();
+      await failure;
+      expect(calls, 1);
+      expect(
+        await (function(instance, 'tail')(const []) as Future<Object?>),
+        0,
+      );
+    });
+
+    for (final name in ['run', 'before', 'ordinary']) {
+      test('preserves host error and stack in async export $name', () async {
+        final marker = StateError('ordinary synchronous host error');
+        final stack = StackTrace.fromString('original-host-stack-$name');
+        var calls = 0;
+        final instance = Instance(Module(_asyncHostMixedBytes.buffer), {
+          'host': {
+            'pause': ImportExportKind.function((_) async => null),
+            'op': ImportExportKind.function((_) {
+              calls++;
+              Error.throwWithStackTrace(marker, stack);
+            }),
+          },
+        });
+        try {
+          await (function(instance, name)(const []) as Future<Object?>);
+          fail('Expected the original host error.');
+        } catch (error, sourceStack) {
+          expect(error, same(marker));
+          expect('$sourceStack', contains('original-host-stack-$name'));
+        }
+        expect(calls, 1);
+        expect(
+          await (function(instance, 'tail')(const []) as Future<Object?>),
+          0,
+        );
+      });
+    }
+
+    test('keeps concurrent asynchronous failure identities separate', () async {
+      final first = Completer<int>();
+      final second = Completer<int>();
+      addTearDown(() {
+        if (!first.isCompleted) first.complete(41);
+        if (!second.isCompleted) second.complete(41);
+      });
+      var calls = 0;
+      final instance = Instance(Module(_asyncHostValueBytes.buffer), {
+        'host': {
+          'op': ImportExportKind.function(
+            (_) => (++calls == 1 ? first : second).future,
+          ),
+        },
+      });
+      final a = StateError('first asynchronous call');
+      final b = _TestHostControlFlowException();
+      final one = expectLater(
+        Future<Object?>.sync(() => function(instance, 'run')(const [])),
+        throwsA(same(a)),
+      );
+      final two = expectLater(
+        Future<Object?>.sync(() => function(instance, 'run')(const [])),
+        throwsA(same(b)),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(calls, 2);
+      second.completeError(b);
+      await two;
+      first.completeError(a);
+      await one;
+      expect(
+        await (function(instance, 'entries')(const []) as Future<Object?>),
+        2,
+      );
+      expect(
+        await (function(instance, 'tail')(const []) as Future<Object?>),
+        0,
+      );
+    });
+
     test('preserves synchronous host control-flow exceptions', () async {
       final marker = _TestHostControlFlowException();
       final result = await WebAssembly.instantiate(_wasiStartBytes.buffer, {

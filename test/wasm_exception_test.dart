@@ -269,7 +269,7 @@ void main() {
     );
   });
 
-  for (final asyncHost in hasDartIoRuntime ? [false, true] : [false]) {
+  for (final asyncHost in [false, true]) {
     for (final entry in <String, List<ValueKind>>{
       'empty': [],
       'mixed': _mixedKinds,
@@ -366,8 +366,8 @@ void main() {
     );
   }
 
-  for (final calleeAsync in hasDartIoRuntime ? [false, true] : [false]) {
-    for (final catcherAsync in hasDartIoRuntime ? [false, true] : [false]) {
+  for (final calleeAsync in [false, true]) {
+    for (final catcherAsync in [false, true]) {
       test(
         'Dart rethrows guest exception across instances $calleeAsync/$catcherAsync',
         () async {
@@ -520,7 +520,7 @@ void main() {
     },
   );
 
-  for (final asyncHost in hasDartIoRuntime ? [false, true] : [false]) {
+  for (final asyncHost in [false, true]) {
     test(
       'ordinary host failures stay outside Wasm exception matching async=$asyncHost',
       () async {

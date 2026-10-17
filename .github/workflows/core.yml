@@ -70,7 +70,12 @@ jobs:
       - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1
         with:
           sdk: '3.13.4'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '26.11.1'
       - run: dart pub get
+      - run: dart test -p node test/wasm_test.dart test/wasm_async_host_js_test.dart
+      - run: dart test -p chrome test/wasm_test.dart test/wasm_async_host_js_test.dart
       - run: dart test -p node test/wasm_core_features_test.dart
       - run: dart test -p chrome test/wasm_core_features_test.dart
       - run: dart test -p node test/wasm_host_globals_test.dart

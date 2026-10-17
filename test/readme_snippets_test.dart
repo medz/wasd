@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -121,6 +122,24 @@ void main() {
         expect((usePlus as FunctionImportExportValue).ref([4, 5]), 9);
       },
     );
+
+    test('async host adapter awaits a FutureOr callback', () async {
+      FutureOr<int> callback(List<Object?> args) =>
+          Future.value((args[0] as int) + (args[1] as int));
+      final runtime = await WebAssembly.instantiate(
+        _hostImportModuleBytes.buffer,
+        {
+          'env': {
+            'plus': ImportExportKind.function(
+              (args) async => await callback(args),
+            ),
+          },
+        },
+      );
+      final usePlus =
+          runtime.instance.exports['use_plus']! as FunctionImportExportValue;
+      expect(await (usePlus.ref([4, 5]) as Future<Object?>), 9);
+    });
 
     test('module metadata snippet compiles and lists descriptors', () async {
       final module = await WebAssembly.compile(_hostImportModuleBytes.buffer);

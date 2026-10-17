@@ -1,6 +1,7 @@
 @JS()
 library;
 
+import 'dart:async';
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
@@ -21,20 +22,31 @@ import 'tag.dart' as js_tag;
 import 'value_codec.dart' as codec;
 
 class Instance implements wasm.Instance {
-  Instance(wasm.Module module, [wasm.Imports imports = const {}])
-    : _module = module,
-      host = _instantiate(
+  factory Instance(wasm.Module module, [wasm.Imports imports = const {}]) {
+    final asynchronous = hasAsyncHostImports(module, imports);
+    return Instance.fromHost(
+      module,
+      _instantiate(
         (module as js_module.Module).host,
-        createImportObject(imports),
-      );
+        createImportObject(imports, asynchronous: asynchronous),
+      ),
+      asynchronous: asynchronous,
+    );
+  }
 
-  Instance.fromHost(this._module, this.host);
+  Instance.fromHost(this._module, this.host, {bool asynchronous = false})
+    : _asynchronous = asynchronous;
 
   final wasm.Module _module;
+  final bool _asynchronous;
   final JSImportInstance host;
 
   @override
-  late final wasm.Exports exports = _createExports(_module, host.exports);
+  late final wasm.Exports exports = _createExports(
+    _module,
+    host.exports,
+    _asynchronous,
+  );
 
   static JSImportInstance _instantiate(
     js_module.JSImportModule jsModule,
@@ -43,12 +55,16 @@ class Instance implements wasm.Instance {
     try {
       return JSImportInstance(jsModule, imports);
     } catch (e, st) {
-      js_errors.translateJsError(e, st);
+      translateAsyncError(e, st);
     }
   }
 }
 
-wasm.Exports _createExports(wasm.Module module, JSObject exportObject) {
+wasm.Exports _createExports(
+  wasm.Module module,
+  JSObject exportObject,
+  bool asynchronous,
+) {
   final result = <String, wasm.ExportValue>{};
   for (final descriptor in wasm.Module.exports(module)) {
     final name = descriptor.name;
@@ -56,7 +72,9 @@ wasm.Exports _createExports(wasm.Module module, JSObject exportObject) {
     if (raw == null) continue;
     result[name] = switch (descriptor.kind) {
       wasm.ImportExportKind.function => wasm.ImportExportKind.function(
-        _wrapFunction(raw as JSFunction),
+        asynchronous
+            ? _wrapAsyncFunction(raw as JSFunction)
+            : _wrapFunction(raw as JSFunction),
       ),
       wasm.ImportExportKind.global => wasm.ImportExportKind.global(
         _ExportGlobal(raw as js_global.JSGlobal),
@@ -78,26 +96,91 @@ wasm.Exports _createExports(wasm.Module module, JSObject exportObject) {
   return result;
 }
 
-JSObject createImportObject(wasm.Imports imports) {
+bool hasAsyncBindings(wasm.Imports imports) => imports.values.any(
+  (bindings) => bindings.values.any(
+    (value) => value is wasm.FunctionImportExportValue && _isAsync(value.ref),
+  ),
+);
+
+bool hasAsyncHostImports(wasm.Module module, wasm.Imports imports) {
+  if (!hasAsyncBindings(imports)) return false;
+  return wasm.Module.imports(module).any((descriptor) {
+    if (descriptor.kind != wasm.ImportExportKind.function) return false;
+    final binding = imports[descriptor.module]?[descriptor.name];
+    return binding is wasm.FunctionImportExportValue && _isAsync(binding.ref);
+  });
+}
+
+// A synchronous function inferred as Never is also a subtype of Future<...>.
+bool _isAsync(wasm.WasmFunction function) =>
+    function is Future<Object?> Function(List<Object?>) &&
+    function is! Never Function(List<Object?>);
+
+JSObject createImportObject(wasm.Imports imports, {bool asynchronous = false}) {
+  if (asynchronous &&
+      (_suspendingConstructor == null ||
+          _promisingConstructor == null ||
+          !js_exception.supportsHostThrow)) {
+    throw UnsupportedError(
+      'Asynchronous host imports require WebAssembly.Suspending, '
+      'WebAssembly.promising and WebAssembly.JSTag.',
+    );
+  }
   final root = JSObject();
   for (final moduleEntry in imports.entries) {
     final moduleObject = JSObject();
     for (final importEntry in moduleEntry.value.entries) {
-      moduleObject[importEntry.key] = _encodeImport(importEntry.value);
+      moduleObject[importEntry.key] = _encodeImport(
+        importEntry.value,
+        asynchronous,
+      );
     }
     root[moduleEntry.key] = moduleObject;
   }
   return root;
 }
 
-JSAny? _encodeImport(wasm.ImportValue value) => switch (value) {
+JSAny? _encodeImport(
+  wasm.ImportValue value,
+  bool asynchronous,
+) => switch (value) {
   wasm.IntImportValue(:final ref) => ref.toJS,
-  wasm.FunctionImportExportValue(:final ref) => _hostFuncToJS(ref),
+  wasm.FunctionImportExportValue(:final ref) => _hostFuncToJS(
+    ref,
+    asynchronous,
+  ),
   wasm.GlobalImportExportValue(:final ref) => (ref as js_global.Global).host,
   wasm.MemoryImportExportValue(:final ref) => (ref as js_memory.Memory).host,
   wasm.TableImportExportValue(:final ref) => (ref as js_table.Table).host,
   wasm.TagImportExportValue(:final ref) => (ref as js_tag.Tag).host,
 };
+
+wasm.WasmFunction _wrapAsyncFunction(JSFunction raw) {
+  // promising only accepts a raw Wasm function. Cache one wrapper per export.
+  final promising = _jsPromising(raw);
+  return (List<Object?> args) async {
+    try {
+      final jsArgs = <JSAny?>[for (final arg in args) _encodeHostValue(arg)];
+      final promise = (promising as JSObject)
+          .callMethodVarArgs<JSPromise<JSAny?>>('call'.toJS, [null, ...jsArgs]);
+      return _decodeHostArg(await promise.toDart);
+    } catch (error, stack) {
+      translateAsyncError(error, stack);
+    }
+  };
+}
+
+Never translateAsyncError(Object error, StackTrace stack) {
+  // ignore: invalid_runtime_check_with_js_interop_types
+  if (error is JSObject) {
+    final original = _hostErrors.get(error);
+    if (original != null) {
+      final (cause, sourceStack) = original.toDart as (Object, StackTrace);
+      Error.throwWithStackTrace(cause, sourceStack);
+    }
+  }
+  js_errors.translateJsError(error, stack);
+}
 
 wasm.WasmFunction _wrapFunction(JSFunction jsFunc) => (List<Object?> args) {
   try {
@@ -124,7 +207,8 @@ wasm.WasmFunction _wrapFunction(JSFunction jsFunc) => (List<Object?> args) {
 /// Limitation: this heuristic is incorrect for host functions whose final
 /// parameter is a nullable reference type (externref / funcref). Numeric types
 /// (i32, i64, f32, f64) are always non-null and are unaffected.
-JSFunction _hostFuncToJS(wasm.WasmFunction hostFn) {
+JSAny _hostFuncToJS(wasm.WasmFunction hostFn, bool asynchronous) {
+  final suspending = asynchronous && _isAsync(hostFn);
   JSAny? bridge([
     JSAny? a,
     JSAny? b,
@@ -150,13 +234,73 @@ JSFunction _hostFuncToJS(wasm.WasmFunction hostFn) {
         .map(_decodeHostArg)
         .toList(growable: false);
     try {
-      return _encodeHostValue(hostFn(args));
+      final result = hostFn(args);
+      if (result is Future) {
+        if (suspending) return _hostPromise(result);
+        result.ignore();
+        throw UnsupportedError(
+          'A host callback returning a Future must declare a Future return '
+          'type. Adapt it with (_) async => await callback(...).',
+        );
+      }
+      return _encodeHostValue(result);
     } on js_exception.Exception catch (error) {
       js_exception.throwToHost(error);
+    } catch (error, stack) {
+      if (asynchronous) js_exception.throwValueToHost(_hostError(error, stack));
+      rethrow;
     }
   }
 
-  return bridge.toJS;
+  return suspending ? _JSSuspending(bridge.toJS) : bridge.toJS;
+}
+
+JSPromise<JSAny?> _hostPromise(Future<Object?> future) => JSPromise<JSAny?>(
+  (JSFunction resolve, JSFunction reject) {
+    future.then<void>(
+      (value) {
+        try {
+          resolve.callAsFunction(null, _encodeHostValue(value));
+        } catch (error, stack) {
+          reject.callAsFunction(null, _hostError(error, stack));
+        }
+      },
+      onError: (Object error, StackTrace stack) {
+        reject.callAsFunction(null, _hostError(error, stack));
+      },
+    );
+  }.toJS,
+);
+
+JSObject _hostError(Object error, StackTrace stack) {
+  if (error is js_exception.Exception) return error.host;
+  final carrier = JSObject();
+  _hostErrors.set(carrier, (error, stack).toJSBox);
+  return carrier;
+}
+
+final _hostErrors = _HostErrors();
+
+@JS('WeakMap')
+extension type _HostErrors._(JSObject _) implements JSObject {
+  external factory _HostErrors();
+
+  external JSBoxedDartObject? get(JSObject carrier);
+  external void set(JSObject carrier, JSBoxedDartObject error);
+}
+
+@JS('WebAssembly.Suspending')
+external JSFunction? get _suspendingConstructor;
+
+@JS('WebAssembly.promising')
+external JSFunction? get _promisingConstructor;
+
+@JS('WebAssembly.promising')
+external JSFunction _jsPromising(JSFunction function);
+
+@JS('WebAssembly.Suspending')
+extension type _JSSuspending._(JSObject _) implements JSObject {
+  external factory _JSSuspending(JSFunction function);
 }
 
 JSAny? _encodeHostValue(Object? value) => switch (value) {
