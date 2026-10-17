@@ -1,3 +1,36 @@
+## 0.6.0-dev.3
+
+Preview.
+
+- Add Component maps with synchronous Canonical ABI/WIT adapters. Ordered tuple
+  pairs preserve duplicate keys; memory views refresh after realloc growth.
+- Support modern Component name attributes and named WIT interfaces, preserving
+  external-ID metadata, distinct callbacks and local resource identities.
+- Execute complete frozen Component strings and numerics files through WASD:
+  `43/43` commands, with 17 initializations, one definition registration,
+  18 exact returns and seven invocation traps. Reuse the runtime for nested
+  Core execution and lexical outer type scopes. Keep nested Component starts
+  and concrete local resource aliases explicitly unsupported.
+- Ignore undefined upper flags bits during flat Canonical ABI lifting, retaining
+  declared labels and existing integer, host-label and enum-index checks.
+- Add exact WASI `0.3.1` contracts and linking alongside `0.3.0`, covering six
+  packages and eight worlds. Custom command/service guests exercise real host
+  calls and resource cleanup; the official `45/45` native suite remains a
+  separate `0.3.0` compatibility gate.
+- Freeze and enforce the complete 72-case official Preview1 native inventory,
+  verifying 137 fixture inputs and 15 runner source files. Reject missing,
+  duplicate, skipped and unexecuted cases. Native CI reuses one compiled Dart
+  runner across fixture processes; default JIT and Node/browser regressions
+  remain separate profiles.
+- Read actual Preview1 host process/thread CPU clocks on supported Linux/macOS
+  and Node capabilities, preserving 64-bit nanosecond encoding. Missing APIs
+  fail without modifying output. CPU timer subscriptions report `INVAL` events;
+  guest-specific CPU accounting remains outside this slice.
+
+These selected-file and host gates do not establish full Core, Component Model
+or WASI conformance. The frozen targets and remaining acceptance work are in
+`doc/standards.md`.
+
 ## 0.6.0-dev.2
 
 Preview.

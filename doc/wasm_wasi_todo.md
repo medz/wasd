@@ -39,7 +39,7 @@ P2/P3 work starts only after these P1 gates are green.
 - [x] `WASI-P1-OFFICIAL-WASIP1`
   - Historical evidence: `.dart_tool/wasi_testsuite_wasd_p1_current.json`
     records 72 P1 passes; its source/fixture revisions were not recorded.
-  - Unreleased replacement: `tool/wasi_testsuite_preview1_gate.dart` and
+  - `0.6.0-dev.3` replacement: `tool/wasi_testsuite_preview1_gate.dart` and
     `tool/wasi_preview1_contract.lock.json` freeze source `6600796`, fixtures
     `c63d52e`, 137 inputs, 15 runner sources and exactly 72 unique cases.
     Linux/macOS native CI retains `build/wasi-preview1.json` and the raw
@@ -94,7 +94,7 @@ P2/P3 work starts only after these P1 gates are green.
   - Remaining acceptance includes six imports absent from the selected suite
     (`fd_datasync`, `fd_sync`, `proc_raise`, `sock_accept`, `sock_recv`,
     `sock_send`), successful inherited-socket shutdown, host sync/durability,
-    CPU timers and per-guest CPU accounting. Unreleased CPU-clock reads now
+    CPU timers and per-guest CPU accounting. CPU-clock reads in `0.6.0-dev.3` now
     use actual host counters on supported Linux/macOS and Node capabilities;
     missing capabilities fail explicitly rather than using elapsed wall time.
     CPU subscriptions return an event with `INVAL`. See the pinned scope and runtime
@@ -137,7 +137,7 @@ P2/P3 work starts only after these P1 gates are green.
     ContextJ/ContextO are rejected explicitly.
 
 - [x] `SUPPORT-P3`
-  - Unreleased after `0.6.0-dev.2`: an explicit `0.3.1` contract/linking slice
+  - `0.6.0-dev.3` adds an explicit `0.3.1` contract/linking slice
     retains `0.3.0`. It covers six-package/eight-world WIT resolution, exact
     built-in callback aliases, and custom command/service execution inputs
     with actual host calls, async results and resource cleanup. Source and
