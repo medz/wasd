@@ -1,6 +1,6 @@
 # Component map adapters
 
-Available in `0.6.0-dev.3`.
+Included in `0.6.0`, first published in `0.6.0-dev.3`.
 
 This slice covers binary map types, validation and synchronous Canonical ABI
 adapter calls. It follows Component Model source

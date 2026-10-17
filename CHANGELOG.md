@@ -1,3 +1,21 @@
+## 0.6.0
+
+Regular release, including all changes from `0.6.0-dev.1` through
+`0.6.0-dev.3`.
+
+- Include public Dart VM Core feature options, numeric host globals and
+  tags/exceptions, floating-point/GC fixes, synchronous Component map adapters,
+  named WIT bindings and WASI `0.3.1` contract/linking support alongside `0.3.0`.
+- Extend actual WASD Component execution to the complete frozen realloc file:
+  three value files and `59/59` commands. Check realloc alignment before bounds,
+  including empty lists, and distinguish ABI faults from ordinary host errors.
+- Retain the frozen Core `65,336`-command gate, 72-case native Preview1 gate
+  and 45-case native Preview3 `0.3.0` gate. Shared canonical-memory regressions
+  also run on Node and Chrome.
+
+Selected-file and host gates retain the boundaries in `doc/standards.md`;
+this release does not claim full Core, Component Model or WASI conformance.
+
 ## 0.6.0-dev.3
 
 Preview.
