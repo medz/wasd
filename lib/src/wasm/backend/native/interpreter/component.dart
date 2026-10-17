@@ -931,6 +931,15 @@ final class WasmComponentTypeDefinitionContext {
 
   final WasmComponentTypeDefinition definition;
   final WasmComponentTypeScope typeScope;
+
+  /// Local type indexes of an instance definition, retaining outer aliases.
+  WasmComponentTypeScope? get instanceTypeScope => definition.instance == null
+      ? null
+      : _componentInstanceTypeContext(
+          definition.instance!,
+          typeScope.definitions,
+          outerTypeScope: typeScope,
+        ).typeScope;
 }
 
 final class WasmComponentFunctionTypeContext {
@@ -1925,6 +1934,17 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
   WasmComponentInstanceType instance,
   List<WasmComponentTypeDefinition> outerTypeDefinitions, {
   WasmComponentTypeScope? outerTypeScope,
+}) => _componentInstanceTypeContext(
+  instance,
+  outerTypeDefinitions,
+  outerTypeScope: outerTypeScope,
+).exports;
+
+({_WasmComponentInstanceExportMap exports, WasmComponentTypeScope typeScope})
+_componentInstanceTypeContext(
+  WasmComponentInstanceType instance,
+  List<WasmComponentTypeDefinition> outerTypeDefinitions, {
+  WasmComponentTypeScope? outerTypeScope,
 }) {
   final localTypeDefinitions = <WasmComponentTypeDefinition>[];
   final localTypeDefinitionContexts = <WasmComponentTypeDefinitionContext>[];
@@ -2112,7 +2132,12 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
     }
   }
 
-  return Map<String, _WasmComponentInstanceExportEntry>.unmodifiable(exports);
+  return (
+    exports: Map<String, _WasmComponentInstanceExportEntry>.unmodifiable(
+      exports,
+    ),
+    typeScope: localTypeScope,
+  );
 }
 
 WasmComponentFunctionTypeContext? _componentTypeDeclarationAliasFunctionContext(

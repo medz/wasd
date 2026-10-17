@@ -2,6 +2,23 @@ import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/async_values.dart';
 
 void main() {
+  test('covariant target preserves the typed prefix without copying', () {
+    List<int>? stored;
+    final WASIComponentAsyncCopyTarget<Object?> target =
+        WASIComponentAsyncCopyTarget<int>(
+          length: 2,
+          writePrefix: (values) => stored = values,
+        );
+    final prefix = <int>[7];
+    target.writePrefix(prefix);
+    expect(stored, same(prefix));
+    expect(
+      () => target.writePrefix(<String>['wrong type']),
+      throwsA(isA<TypeError>()),
+    );
+    expect(stored, same(prefix));
+  });
+
   test(
     'covariant source keeps both pending prefixes in a typed stream',
     () async {

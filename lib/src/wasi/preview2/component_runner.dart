@@ -169,6 +169,13 @@ final class WASIComponentNativeRuntime {
       <WasmComponentTypeDefinition>[];
   final List<String?> _visibleResourceTypeNames = <String?>[];
   final List<WASIComponentCanonicalResourceIdentity?> _visibleResources = [];
+  final Map<
+    WasmComponentTypeDefinitionContext,
+    WASIComponentCanonicalResourceIdentity
+  >
+  _resourceIdentities = {};
+  final Map<WASIComponentCanonicalResourceIdentity, String> _resourceTypeNames =
+      {};
   final Map<String, WASIComponentCanonicalResourceIdentity> _exportedResources =
       {};
   final Map<int, WASIComponentCanonicalAdapterPlan> _runtimeAdapterPlans = {};
@@ -395,6 +402,20 @@ final class WASIComponentNativeRuntime {
     final registered = _componentHost.canonicalHost.resourceHost
         .canonicalRegisteredTypeAt(index);
     if (registered != null) identity.type = registered;
+  }
+
+  void _addVisibleResourceIdentity(
+    WASIComponentCanonicalResourceIdentity? identity,
+  ) {
+    final index = _visibleResources.length;
+    _visibleResources.add(identity);
+    if (identity == null) return;
+    final context = component.componentTypeIndexScope.definitionContextAt(
+      index,
+    );
+    if (context != null) _resourceIdentities[context] = identity;
+    final name = _visibleResourceTypeNames[index];
+    if (name != null) _resourceTypeNames[identity] = name;
   }
 
   void _prepareExecution() {
@@ -624,7 +645,7 @@ final class WASIComponentNativeRuntime {
       final index = _visibleTypes.length;
       _visibleTypes.add(type);
       _visibleResourceTypeNames.add(null);
-      _visibleResources.add(
+      _addVisibleResourceIdentity(
         type.kind == WasmComponentTypeKind.resource
             ? WASIComponentCanonicalResourceIdentity(
                 _binding.canonicalResourceTypeAt(index),
@@ -664,7 +685,7 @@ final class WASIComponentNativeRuntime {
           }
           _visibleTypes.add(type.definition);
           _visibleResourceTypeNames.add(type.resourceTypeName);
-          _visibleResources.add(type.resourceIdentity);
+          _addVisibleResourceIdentity(type.resourceIdentity);
         case WasmComponentExternKind.coreModule:
         case WasmComponentExternKind.value:
         case WasmComponentExternKind.component:
@@ -677,9 +698,10 @@ final class WASIComponentNativeRuntime {
     }
     switch (import.descriptor.kind) {
       case WasmComponentExternKind.function:
-        final functionType = _typeDefinitionAt(
+        final context = component.componentTypeIndexScope.definitionContextAt(
           import.descriptor.typeIndex,
-        )?.function;
+        );
+        final functionType = context?.definition.function;
         _componentFunctions.add(
           _hostComponentFunction(
             name,
@@ -687,8 +709,7 @@ final class WASIComponentNativeRuntime {
                 ? null
                 : () => _functionResourceIdentities(
                     functionType,
-                    _visibleTypes,
-                    _visibleResources,
+                    context!.typeScope,
                   ),
           ),
         );
@@ -711,7 +732,7 @@ final class WASIComponentNativeRuntime {
         }
         _visibleTypes.add(type!);
         _visibleResourceTypeNames.add(null);
-        _visibleResources.add(
+        _addVisibleResourceIdentity(
           WASIComponentCanonicalResourceIdentity(registered, null),
         );
       case WasmComponentExternKind.component:
@@ -727,11 +748,16 @@ final class WASIComponentNativeRuntime {
     String interfaceName,
     WasmComponentExternDescriptor descriptor,
   ) {
-    final type = _typeDefinitionAt(descriptor.typeIndex);
+    final context = component.componentTypeIndexScope.definitionContextAt(
+      descriptor.typeIndex,
+    );
+    final type = context?.definition;
     final instanceType = type?.instance;
+    final typeScope = context?.instanceTypeScope;
     if (type == null ||
         type.kind != WasmComponentTypeKind.instance ||
-        instanceType == null) {
+        instanceType == null ||
+        typeScope == null) {
       throw WASIPreview2ComponentExecutionException(
         'Component import `$interfaceName` does not reference an instance type.',
       );
@@ -741,7 +767,6 @@ final class WASIComponentNativeRuntime {
     final resourceTypeNames = <String, String>{};
     final resources = <String, WASIComponentCanonicalResourceIdentity>{};
     final localResources = <WASIComponentCanonicalResourceIdentity?>[];
-    final localTypes = <WasmComponentTypeDefinition>[];
     final localResourceTypeNames = <String?>[];
     for (final declaration in instanceType.declarations) {
       final export = declaration.export;
@@ -749,7 +774,6 @@ final class WASIComponentNativeRuntime {
         case WasmComponentTypeDeclarationKind.type:
           final type = declaration.type;
           if (type != null) {
-            localTypes.add(type);
             localResourceTypeNames.add(null);
             localResources.add(null);
           }
@@ -759,17 +783,22 @@ final class WASIComponentNativeRuntime {
           }
           final name = export.name;
           if (export.descriptor.kind == WasmComponentExternKind.function) {
+            final functionContext = typeScope.definitionContextAt(
+              export.descriptor.typeIndex,
+            )!;
             functions[name] = _hostComponentFunction(
               _witCallbackKey(interfaceName, name),
               resources: () => _functionResourceIdentities(
-                localTypes[export.descriptor.typeIndex!].function!,
-                localTypes,
-                localResources,
+                functionContext.definition.function!,
+                functionContext.typeScope,
               ),
             );
             continue;
           }
-          final type = _typeExportDefinition(export.descriptor, localTypes);
+          if (export.descriptor.kind != WasmComponentExternKind.componentType) {
+            continue;
+          }
+          final type = typeScope.definitionAt(localResources.length);
           if (type != null) {
             types[name] = type;
             final resourceTypeName = switch (export.descriptor.boundKind) {
@@ -797,7 +826,15 @@ final class WASIComponentNativeRuntime {
                   );
             if (identity != null) _hostResourceIdentities.add(identity);
             if (identity != null) resources[name] = identity;
-            localTypes.add(type);
+            if (identity != null) {
+              _resourceIdentities[typeScope.definitionContextAt(
+                    localResources.length,
+                  )!] =
+                  identity;
+              if (resourceTypeName != null) {
+                _resourceTypeNames[identity] = resourceTypeName;
+              }
+            }
             localResources.add(identity);
             localResourceTypeNames.add(resourceTypeName);
           }
@@ -806,19 +843,19 @@ final class WASIComponentNativeRuntime {
           break;
         case WasmComponentTypeDeclarationKind.alias:
           final alias = declaration.alias;
-          final index = alias?.target.index;
+          final aliasContext = typeScope.definitionContextAt(
+            localResources.length,
+          );
           if (alias?.sort.kind != WasmComponentSortKind.componentType ||
               alias?.target.kind != WasmComponentAliasTargetKind.outer ||
-              index == null ||
-              index < 0 ||
-              index >= _visibleTypes.length) {
+              aliasContext == null) {
             throw WASIPreview2ComponentExecutionException(
               'Unsupported type alias in component import `$interfaceName`.',
             );
           }
-          localTypes.add(_visibleTypes[index]);
-          localResourceTypeNames.add(_visibleResourceTypeNames[index]);
-          localResources.add(_visibleResources[index]);
+          final identity = _resourceIdentities[aliasContext];
+          localResourceTypeNames.add(_resourceTypeNames[identity]);
+          localResources.add(identity);
       }
     }
     return _ComponentInstance(
@@ -890,13 +927,6 @@ final class WASIComponentNativeRuntime {
     );
   }
 
-  WasmComponentTypeDefinition? _typeDefinitionAt(int? index) {
-    if (index == null || index < 0 || index >= _visibleTypes.length) {
-      return null;
-    }
-    return _visibleTypes[index];
-  }
-
   void _addAlias(WasmComponentAlias alias) {
     switch (alias.target.kind) {
       case WasmComponentAliasTargetKind.coreExport:
@@ -939,7 +969,7 @@ final class WASIComponentNativeRuntime {
                   ? _visibleResourceTypeNames[alias.target.index!]
                   : null,
             );
-            _visibleResources.add(
+            _addVisibleResourceIdentity(
               alias.target.componentDepth == 0
                   ? _visibleResources[alias.target.index!]
                   : null,
@@ -1011,7 +1041,7 @@ final class WASIComponentNativeRuntime {
         _bindRegisteredHostResource(identity, _visibleTypes.length);
         _visibleTypes.add(type);
         _visibleResourceTypeNames.add(instance.resourceTypeNames[name]);
-        _visibleResources.add(identity);
+        _addVisibleResourceIdentity(identity);
       case WasmComponentSortKind.instance:
       case WasmComponentSortKind.value:
       case WasmComponentSortKind.component:
@@ -1401,58 +1431,72 @@ final class WASIComponentNativeRuntime {
 
   List<WASIComponentCanonicalResourceIdentity> _functionResourceIdentities(
     WasmComponentFunctionType function,
-    List<WasmComponentTypeDefinition> definitions,
-    List<WASIComponentCanonicalResourceIdentity?> identities,
+    WasmComponentTypeScope typeScope,
   ) {
     final result = <WASIComponentCanonicalResourceIdentity>[];
-    void visit(WasmComponentValueType? value) {
+    final active = <WasmComponentTypeDefinitionContext>{};
+    void visit(WasmComponentValueType? value, WasmComponentTypeScope scope) {
       final index = value?.typeIndex;
       if (index == null) return;
-      final type = definitions[index].definedValue;
+      final context = scope.definitionContextAt(index);
+      if (context == null) throw StateError('Unknown runtime host value type.');
+      final type = context.definition.definedValue;
       if (type == null) return;
-      switch (type.kind) {
-        case WasmComponentDefinedValueTypeKind.own:
-        case WasmComponentDefinedValueTypeKind.borrow:
-          final identity = identities[type.typeIndex!];
-          if (identity == null) {
-            throw StateError('Missing runtime host resource type.');
-          }
-          result.add(identity);
-        case WasmComponentDefinedValueTypeKind.record:
-          for (final field in type.fields) {
-            visit(field.type);
-          }
-        case WasmComponentDefinedValueTypeKind.variant:
-          for (final item in type.cases) {
-            visit(item.type);
-          }
-        case WasmComponentDefinedValueTypeKind.tuple:
-          for (final item in type.types) {
-            visit(item);
-          }
-        case WasmComponentDefinedValueTypeKind.result:
-          visit(type.okType);
-          visit(type.errorType);
-        case WasmComponentDefinedValueTypeKind.list:
-        case WasmComponentDefinedValueTypeKind.fixedList:
-        case WasmComponentDefinedValueTypeKind.option:
-        case WasmComponentDefinedValueTypeKind.stream:
-        case WasmComponentDefinedValueTypeKind.future:
-          visit(type.elementType);
-        case WasmComponentDefinedValueTypeKind.map:
-          visit(type.keyType);
-          visit(type.valueType);
-        case WasmComponentDefinedValueTypeKind.primitive:
-        case WasmComponentDefinedValueTypeKind.flags:
-        case WasmComponentDefinedValueTypeKind.enumeration:
-          break;
+      if (!active.add(context)) {
+        throw StateError('Cyclic runtime host value type.');
+      }
+      void child(WasmComponentValueType? value) =>
+          visit(value, context.typeScope);
+      try {
+        switch (type.kind) {
+          case WasmComponentDefinedValueTypeKind.own:
+          case WasmComponentDefinedValueTypeKind.borrow:
+            final resource = context.typeScope.definitionContextAt(
+              type.typeIndex,
+            );
+            final identity = _resourceIdentities[resource];
+            if (identity == null) {
+              throw StateError('Missing runtime host resource type.');
+            }
+            result.add(identity);
+          case WasmComponentDefinedValueTypeKind.record:
+            for (final field in type.fields) {
+              child(field.type);
+            }
+          case WasmComponentDefinedValueTypeKind.variant:
+            for (final item in type.cases) {
+              child(item.type);
+            }
+          case WasmComponentDefinedValueTypeKind.tuple:
+            for (final item in type.types) {
+              child(item);
+            }
+          case WasmComponentDefinedValueTypeKind.result:
+            child(type.okType);
+            child(type.errorType);
+          case WasmComponentDefinedValueTypeKind.list:
+          case WasmComponentDefinedValueTypeKind.fixedList:
+          case WasmComponentDefinedValueTypeKind.option:
+          case WasmComponentDefinedValueTypeKind.stream:
+          case WasmComponentDefinedValueTypeKind.future:
+            child(type.elementType);
+          case WasmComponentDefinedValueTypeKind.map:
+            child(type.keyType);
+            child(type.valueType);
+          case WasmComponentDefinedValueTypeKind.primitive:
+          case WasmComponentDefinedValueTypeKind.flags:
+          case WasmComponentDefinedValueTypeKind.enumeration:
+            break;
+        }
+      } finally {
+        active.remove(context);
       }
     }
 
     for (final parameter in function.params) {
-      visit(parameter.type);
+      visit(parameter.type, typeScope);
     }
-    visit(function.result);
+    visit(function.result, typeScope);
     return result;
   }
 
@@ -2113,11 +2157,11 @@ final class WASIComponentNativeRuntime {
         }
         final runtimeResource = _visibleResources[export.sort.index];
         if (runtimeResource != null) _exportedResources[name] = runtimeResource;
-        _visibleResources.add(runtimeResource);
         _visibleTypes.add(_visibleTypes[export.sort.index]);
         _visibleResourceTypeNames.add(
           _visibleResourceTypeNames[export.sort.index],
         );
+        _addVisibleResourceIdentity(runtimeResource);
       case WasmComponentSortKind.component:
         _components.add(_components[export.sort.index]);
       case WasmComponentSortKind.core:

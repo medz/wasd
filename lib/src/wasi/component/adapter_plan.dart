@@ -610,9 +610,19 @@ List<WASIComponentCanonicalAdapterPlan> componentCanonicalAdapterPlans(
     }
     final functionType = context.functionType;
     final definitions = context.typeDefinitions;
+    final uses = List<WASIComponentResourceUse>.unmodifiable(
+      resourceUseList.where((use) => use.canonicalIndex == canonicalIndex),
+    );
+    final resourceIndexes = {
+      for (final use in uses)
+        if (use.resourceTypeDefinition != null)
+          use.resourceTypeDefinition!: use.resourceTypeIndex,
+    };
     final flatLayouts = _FlatLayoutResolver(
       definitions,
       typeScope: context.typeScope,
+      resourceTypeIndexFor: (index, scope) =>
+          resourceIndexes[scope?.definitionAt(index)] ?? index,
       asyncTypeIndexFor: (typeIndex, typeScope) =>
           wasiComponentAsyncValueTypeIndex(
             component,
@@ -622,9 +632,6 @@ List<WASIComponentCanonicalAdapterPlan> componentCanonicalAdapterPlans(
           ),
     );
 
-    final uses = List<WASIComponentResourceUse>.unmodifiable(
-      resourceUseList.where((use) => use.canonicalIndex == canonicalIndex),
-    );
     final params = <WASIComponentCanonicalAdapterValuePlan>[];
     for (
       var paramIndex = 0;
@@ -725,11 +732,14 @@ final class _FlatLayoutResolver {
   _FlatLayoutResolver(
     this.definitions, {
     this.typeScope,
+    this.resourceTypeIndexFor,
     this.asyncTypeIndexFor,
   });
 
   final List<WasmComponentTypeDefinition> definitions;
   final WasmComponentTypeScope? typeScope;
+  final int Function(int index, WasmComponentTypeScope? scope)?
+  resourceTypeIndexFor;
   final int? Function(int typeIndex, WasmComponentTypeScope? typeScope)?
   asyncTypeIndexFor;
   final Map<Object, WASIComponentCanonicalAdapterFlatValuePlan?> _cache =
@@ -978,7 +988,9 @@ final class _FlatLayoutResolver {
           handleKind: type.kind == WasmComponentDefinedValueTypeKind.own
               ? WASIComponentResourceHandleKind.own
               : WASIComponentResourceHandleKind.borrow,
-          resourceTypeIndex: resourceTypeIndex,
+          resourceTypeIndex:
+              resourceTypeIndexFor?.call(resourceTypeIndex, scope) ??
+              resourceTypeIndex,
         );
       case WasmComponentDefinedValueTypeKind.stream:
         final asyncTypeIndex = asyncTypeIndexFor?.call(

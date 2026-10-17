@@ -54,17 +54,19 @@ final class WASIComponentAsyncCopyTarget<T> {
   /// Creates a target accepting [length] values, one prefix at a time.
   WASIComponentAsyncCopyTarget({
     required this.length,
-    required this.writePrefix,
+    required void Function(List<T> values) writePrefix,
     this.owner,
-  }) {
+  }) : _writePrefix = writePrefix {
     RangeError.checkNotNegative(length, 'length');
   }
 
   /// Number of values the guest buffer can accept.
   final int length;
 
+  final void Function(List<T> values) _writePrefix;
+
   /// Stores the next accepted prefix, or throws to stop the copy.
-  final void Function(List<T> values) writePrefix;
+  void writePrefix(List<T> values) => _writePrefix(values);
 
   /// Runtime component instance owning the buffer; null denotes the host.
   final Object? owner;

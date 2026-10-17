@@ -13,6 +13,248 @@ import 'package:wasd/wasi.dart';
 import 'package:wasd/wasm.dart' hide Exception;
 
 void main() {
+  test('host resource signature follows an outer value type scope', () async {
+    final component = await _encodeComponent(r'''
+(component
+  (type $marker (func))
+  (type $provider-type (instance
+    (export "r" (type (sub resource)))
+    (export "s" (type (sub resource)))
+    (type $payload (tuple u8))
+    (export "payload" (type $public-payload (eq $payload)))
+    (type $error (variant (case "empty") (case "detail" $public-payload)))
+    (export "error" (type (eq $error)))))
+  (import "provider" (instance $provider (type $provider-type)))
+  (alias export $provider "r" (type $r))
+  (alias export $provider "s" (type $s))
+  (alias export $provider "error" (type $public-error))
+  (type $api-type (instance
+    (alias outer 1 $r (type $r))
+    (export "r" (type (eq $r)))
+    (alias outer 1 $s (type $s))
+    (export "s" (type (eq $s)))
+    (alias outer 1 $public-error (type $error))
+    (export "error" (type (eq $error)))
+    (type $marker (func))
+    (type $other-marker (func))
+    (type $unrelated (option $error))
+    (type $owner (own $r))
+    (type $other (own $s))
+    (type $take (func (param "owner" $owner) (param "other" $other)
+      (param "again" $owner) (result $error)))
+    (export "take" (func (type $take)))))
+  (import "api" (instance $api (type $api-type)))
+  (alias export $api "take" (func $take))
+  (core module $memory (memory (export "memory") 1))
+  (core instance $memory (instantiate $memory))
+  (alias core export $memory "memory" (core memory $memory))
+  (core func $take (canon lower (func $take) (memory $memory)))
+  (core module $m
+    (import "h" "take" (func $take (param i32 i32 i32 i32)))
+    (import "h" "memory" (memory 1))
+    (func (export "run") (param i32 i32 i32) (result i32)
+      local.get 0 local.get 1 local.get 2 i32.const 0 call $take i32.const 1 i32.load8_u))
+  (core instance $h (export "take" (func $take)) (export "memory" (memory $memory)))
+  (core instance $m (instantiate $m (with "h" (instance $h))))
+  (func (export "run") (param "owner" (own $r))
+    (param "other" (own $s)) (param "again" (own $r)) (result u32)
+    (canon lift (core func $m "run"))))
+''', validate: true);
+    expect(component.validate(), isEmpty);
+    final host = WASIComponentHost();
+    var calls = 0;
+    var drops = 0;
+    final resourceIndexes = [
+      for (var i = 0; i < component.componentTypeIndexDefinitions.length; i++)
+        if (component.componentTypeIndexDefinitions[i].resource != null) i,
+    ];
+    final resources = [
+      for (final index in resourceIndexes)
+        host.canonicalHost.resourceHost.defineResourceType<int>(
+          index,
+          'same debug name',
+          onDrop: (_) => drops++,
+        ),
+    ];
+    await host.table.runScoped(() async {
+      final runtime = WASIComponentNativeRuntime.component(
+        component: component,
+        host: host,
+        imports: {
+          'api.take': (args) {
+            calls++;
+            expect(args, hasLength(3));
+            for (var i = 0; i < args.length; i++) {
+              final resource = resources[i % 2];
+              expect(host.table.get(resource, args[i] as int), 7 + i);
+              host.table.drop(resource, args[i] as int);
+            }
+            return WasmComponentValueData(
+              kind: WasmComponentValueDataKind.variant,
+              rawBytes: Uint8List(0),
+              index: 1,
+              label: 'detail',
+              associatedValue: WasmComponentValueData(
+                kind: WasmComponentValueDataKind.tuple,
+                rawBytes: Uint8List(0),
+                items: [
+                  WasmComponentValueData(
+                    kind: WasmComponentValueDataKind.integer,
+                    rawBytes: Uint8List(0),
+                    integer: 42,
+                  ),
+                ],
+              ),
+            );
+          },
+        },
+      );
+      expect(
+        await runtime.invokeExport('run', [
+          host.table.insert(resources[0], 7),
+          host.table.insert(resources[1], 8),
+          host.table.insert(resources[0], 9),
+        ]),
+        42,
+      );
+      expect(calls, 1);
+      expect(drops, 3);
+      expect(host.table.activeCount, 0);
+    });
+    expect(host.table.activeCount, 0);
+  });
+
+  for (final validResult in [true, false]) {
+    test(
+      'scoped resource signatures preserve nominal result types: $validResult',
+      () async {
+        final component = await _encodeComponent(r'''
+(component
+  (type $marker (func))
+  (type $provider-type (instance
+    (export "r" (type $r (sub resource)))
+    (export "s" (type (sub resource)))
+    (type $owned (own $r))
+    (type $payload (tuple $owned))
+    (export "payload" (type $public-payload (eq $payload)))
+    (type $error (variant (case "empty") (case "detail" $public-payload)))
+    (export "error" (type (eq $error)))))
+  (import "provider" (instance $provider (type $provider-type)))
+  (alias export $provider "r" (type $r))
+  (alias export $provider "s" (type $s))
+  (alias export $provider "error" (type $public-error))
+  (type $api-type (instance
+    (alias outer 1 $s (type $s))
+    (export "s" (type (eq $s)))
+    (alias outer 1 $r (type $r))
+    (export "r" (type (eq $r)))
+    (alias outer 1 $public-error (type $error))
+    (export "error" (type (eq $error)))
+    (type $marker (func))
+    (type $other-marker (func))
+    (type $unrelated (option $error))
+    (type $owner (own $r))
+    (type $other (own $s))
+    (type $take (func (param "owner" $owner) (param "other" $other)
+      (param "again" $owner) (result $error)))
+    (export "take" (func (type $take)))))
+  (import "api" (instance $api (type $api-type)))
+  (alias export $api "take" (func $take))
+  (core module $memory (memory (export "memory") 1))
+  (core instance $memory (instantiate $memory))
+  (alias core export $memory "memory" (core memory $memory))
+  (core func $take (canon lower (func $take) (memory $memory)))
+  (core func $drop (canon resource.drop $r))
+  (core module $m
+    (import "h" "take" (func $take (param i32 i32 i32 i32)))
+    (import "h" "memory" (memory 1))
+    (import "h" "drop" (func $drop (param i32)))
+    (func (export "run") (param i32 i32 i32) (result i32)
+      local.get 0 local.get 1 local.get 2 i32.const 0 call $take i32.const 4 i32.load call $drop i32.const 42))
+  (core instance $h (export "take" (func $take))
+    (export "memory" (memory $memory)) (export "drop" (func $drop)))
+  (core instance $m (instantiate $m (with "h" (instance $h))))
+  (func (export "run") (param "owner" (own $r))
+    (param "other" (own $s)) (param "again" (own $r)) (result u32)
+    (canon lift (core func $m "run"))))
+''', validate: true);
+        expect(component.validate(), isEmpty);
+        final host = WASIComponentHost();
+        var calls = 0;
+        var drops = 0;
+        final resourceIndexes = [
+          for (
+            var i = 0;
+            i < component.componentTypeIndexDefinitions.length;
+            i++
+          )
+            if (component.componentTypeIndexDefinitions[i].resource != null) i,
+        ];
+        final resources = [
+          for (final index in resourceIndexes)
+            host.canonicalHost.resourceHost.defineResourceType<int>(
+              index,
+              'same debug name',
+              onDrop: (_) => drops++,
+            ),
+        ];
+        await host.table.runScoped(() async {
+          final runtime = WASIComponentNativeRuntime.component(
+            component: component,
+            host: host,
+            imports: {
+              'api.take': (args) {
+                calls++;
+                expect(args, hasLength(3));
+                for (var i = 0; i < args.length; i++) {
+                  final resource = resources[i % 2];
+                  expect(host.table.get(resource, args[i] as int), 7 + i);
+                  host.table.drop(resource, args[i] as int);
+                }
+                return WasmComponentValueData(
+                  kind: WasmComponentValueDataKind.variant,
+                  rawBytes: Uint8List(0),
+                  index: 1,
+                  label: 'detail',
+                  associatedValue: WasmComponentValueData(
+                    kind: WasmComponentValueDataKind.tuple,
+                    rawBytes: Uint8List(0),
+                    items: [
+                      WasmComponentValueData(
+                        kind: WasmComponentValueDataKind.integer,
+                        rawBytes: Uint8List(0),
+                        integer: host.table.insert(
+                          resources[validResult ? 0 : 1],
+                          42,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            },
+          );
+          final result = runtime.invokeExport('run', [
+            host.table.insert(resources[0], 7),
+            host.table.insert(resources[1], 8),
+            host.table.insert(resources[0], 9),
+          ]);
+          if (validResult) {
+            expect(await result, 42);
+            expect(drops, 4);
+            expect(host.table.activeCount, 0);
+          } else {
+            await expectLater(result, throwsA(anything));
+            expect(drops, 3);
+            expect(host.table.activeCount, 1);
+          }
+          expect(calls, 1);
+        });
+        expect(host.table.activeCount, 0);
+      },
+    );
+  }
+
   for (final write in [false, true]) {
     for (final immediate in [false, true]) {
       test(
@@ -2686,7 +2928,10 @@ void main() {
   );
 }
 
-Future<WasmComponent> _encodeComponent(String source) async {
+Future<WasmComponent> _encodeComponent(
+  String source, {
+  bool validate = false,
+}) async {
   final directory = await Directory.systemTemp.createTemp(
     'wasd-nested-component-',
   );
@@ -2699,6 +2944,13 @@ Future<WasmComponent> _encodeComponent(String source) async {
     ['parse', input.path, '-o', output.path],
   );
   expect(result.exitCode, 0, reason: '${result.stdout}${result.stderr}');
+  if (validate) {
+    final checked = await Process.run(
+      '.toolchains/bin/${Platform.isWindows ? 'wasm-tools.exe' : 'wasm-tools'}',
+      ['validate', '--features', 'all', output.path],
+    );
+    expect(checked.exitCode, 0, reason: '${checked.stdout}${checked.stderr}');
+  }
   return WasmComponent.decode(await output.readAsBytes());
 }
 
