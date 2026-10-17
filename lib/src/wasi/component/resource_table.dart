@@ -851,7 +851,11 @@ extension WASIComponentCanonicalResourceAccess on WASIComponentResourceTable {
     }
     _validateScopeAccess(handle, entry);
     _requireOwnedHandle(handle, entry);
-    canonicalRequireReleasable(handle);
+    if (entry.borrowCount != 0) {
+      throw StateError('Cannot release lent WASI component resource: $handle.');
+    }
+    // Moving G keeps the same H entry and child dependencies alive. Only
+    // deleting that entry must wait for its children to be released.
   }
 
   /// Checks all conditions that can fail before removal or destructor execution.

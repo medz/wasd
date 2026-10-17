@@ -110,6 +110,7 @@ final class WASIComponentCanonicalHandles
   final _hostToGuest = <int, int>{};
   final _endpointByHost = <int, Object>{};
   final _callKey = Object();
+  final _liftKey = Object();
   final threads = WASIComponentCanonicalIndexTable<WASIComponentContext>();
   final _threadKey = Object();
 
@@ -141,6 +142,22 @@ final class WASIComponentCanonicalHandles
       close();
       rethrow;
     }
+  }
+
+  @override
+  T withHandleLifting<T>(T Function() callback) {
+    if (Zone.current[_liftKey] != null) return callback();
+    final owners = <int>{};
+    final result = runZoned(callback, zoneValues: {_liftKey: owners});
+    // A later parameter may have borrowed an earlier owner. Check all owners
+    // before committing any move; an exception preserves every original G.
+    for (final guest in owners) {
+      table.canonicalRequireOwned(host(guest));
+    }
+    for (final guest in owners) {
+      remove(guest);
+    }
+    return result;
   }
 
   @override
@@ -206,6 +223,7 @@ final class WASIComponentCanonicalHandles
         descriptor.canonicalElementType,
         descriptor.canonicalReferenceDefinitions,
         {},
+        descriptor.canonicalTypeScope,
       )) {
         handleLayouts.add(descriptor.componentTypeIndex);
       }
@@ -219,6 +237,7 @@ final class WASIComponentCanonicalHandles
           : componentCanonicalFlatLayout(
               element,
               binding.canonicalReferenceDefinitions,
+              typeScope: binding.canonicalTypeScope,
             );
     });
     _PayloadHandleBindings boundary(
@@ -255,6 +274,7 @@ final class WASIComponentCanonicalHandles
           binding.canonicalReferenceDefinitions,
           (index) => identity(binding, index),
           {},
+          binding.canonicalTypeScope,
         ),
       ]),
       lift: (binding, values) {
@@ -449,7 +469,12 @@ final class WASIComponentCanonicalHandles
     _type(index, backing, canonicalIndex);
     if (owned) {
       table.canonicalRequireOwned(backing);
-      remove(guest);
+      final owners = Zone.current[_liftKey] as Set<int>?;
+      if (owners == null) {
+        remove(guest);
+      } else if (!owners.add(guest)) {
+        throw StateError('Canonical parameters repeat an owned resource.');
+      }
       return backing;
     }
     final scope =
@@ -615,6 +640,10 @@ final class _AdapterHandleBindings
   Object liftReadableEndpoint(int index, int handle) =>
       owner.liftReadableEndpoint(index, handle);
   @override
+  T withHandleLifting<T>(T Function() callback) =>
+      owner.withHandleLifting(callback);
+
+  @override
   T withHandleCall<T>(
     T Function() callback, {
     void Function(void Function() close)? retain,
@@ -721,6 +750,9 @@ final class _PayloadHandleBindings
   @override
   WASIComponentCanonicalHandleBindings forCanonicalAdapter(int index) => this;
   @override
+  T withHandleLifting<T>(T Function() callback) => callback();
+
+  @override
   T withHandleCall<T>(
     T Function() callback, {
     void Function(void Function() close)? retain,
@@ -771,21 +803,28 @@ final class _PayloadHandleBindings
 bool _payloadContainsHandle(
   WasmComponentValueType? type,
   List<WasmComponentTypeDefinition> definitions,
-  Map<int, bool> cache,
+  Map<Object, bool> cache,
+  WasmComponentTypeScope? scope,
 ) {
   if (type == null) return false;
   if (type.kind == WasmComponentValueTypeKind.primitive) {
     return type.primitive == WasmComponentPrimitiveValueType.errorContext;
   }
   final index = type.typeIndex!;
-  if (cache.containsKey(index)) return cache[index]!;
-  final value = definitions[index].definedValue;
+  final context = scope?.definitionContextAt(index);
+  final key = context ?? index;
+  if (cache.containsKey(key)) return cache[key]!;
+  final value = (context?.definition ?? definitions[index]).definedValue;
   if (value == null) throw StateError('Expected canonical payload value type.');
-  bool child(WasmComponentValueType? type) =>
-      _payloadContainsHandle(type, definitions, cache);
+  bool child(WasmComponentValueType? type) => _payloadContainsHandle(
+    type,
+    definitions,
+    cache,
+    context?.typeScope ?? scope,
+  );
   // Valid value types are acyclic. Mark before descending to bound bad input too.
-  cache[index] = false;
-  return cache[index] = switch (value.kind) {
+  cache[key] = false;
+  return cache[key] = switch (value.kind) {
     WasmComponentDefinedValueTypeKind.own ||
     WasmComponentDefinedValueTypeKind.borrow ||
     WasmComponentDefinedValueTypeKind.stream ||
@@ -808,19 +847,27 @@ Object? _payloadTypeKey(
   WasmComponentValueType? type,
   List<WasmComponentTypeDefinition> definitions,
   WASIComponentCanonicalResourceIdentity Function(int index) identity,
-  Map<int, Object> cache,
+  Map<Object, Object> cache,
+  WasmComponentTypeScope? scope,
 ) {
   if (type == null) return null;
   if (type.kind == WasmComponentValueTypeKind.primitive) return type.primitive;
   final index = type.typeIndex!;
-  final cached = cache[index];
+  final context = scope?.definitionContextAt(index);
+  final key = context ?? index;
+  final cached = cache[key];
   if (cached != null) return cached;
-  final value = definitions[index].definedValue;
+  final value = (context?.definition ?? definitions[index]).definedValue;
   if (value == null) throw StateError('Expected canonical payload value type.');
-  Object? child(WasmComponentValueType? type) =>
-      _payloadTypeKey(type, definitions, identity, cache);
+  Object? child(WasmComponentValueType? type) => _payloadTypeKey(
+    type,
+    definitions,
+    identity,
+    cache,
+    context?.typeScope ?? scope,
+  );
   if (value.kind == WasmComponentDefinedValueTypeKind.primitive) {
-    return cache[index] = value.primitive!;
+    return cache[key] = value.primitive!;
   }
   Object resource() {
     final token = identity(value.typeIndex!).type;
@@ -830,7 +877,7 @@ Object? _payloadTypeKey(
     return token;
   }
 
-  return cache[index] = _PayloadTypeKey([
+  return cache[key] = _PayloadTypeKey([
     value.kind,
     ...switch (value.kind) {
       WasmComponentDefinedValueTypeKind.own ||

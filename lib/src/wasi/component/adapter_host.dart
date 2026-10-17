@@ -959,29 +959,30 @@ final class WASIComponentCanonicalAdapterOperation {
     }
   }
 
-  List<Object?> _loadFlatArgs(List<Object?> flatArgs, wasm.Memory? memory) {
-    var offset = 0;
-    final args = <Object?>[];
-    for (final param in plan.params) {
-      final next = _loadFlatValue(
-        param,
-        flatArgs,
-        offset,
-        memory,
-        plan.stringEncoding,
-        _asyncHost,
-      );
-      args.add(next.value);
-      offset = next.nextOffset;
-    }
-    if (offset != flatArgs.length) {
-      throw StateError(
-        'WASI component canonical adapter index $canonicalIndex expected '
-        '$offset flat arguments, got ${flatArgs.length}.',
-      );
-    }
-    return args;
-  }
+  List<Object?> _loadFlatArgs(List<Object?> flatArgs, wasm.Memory? memory) =>
+      _withHandleLifting(() {
+        var offset = 0;
+        final args = <Object?>[];
+        for (final param in plan.params) {
+          final next = _loadFlatValue(
+            param,
+            flatArgs,
+            offset,
+            memory,
+            plan.stringEncoding,
+            _asyncHost,
+          );
+          args.add(next.value);
+          offset = next.nextOffset;
+        }
+        if (offset != flatArgs.length) {
+          throw StateError(
+            'WASI component canonical adapter index $canonicalIndex expected '
+            '$offset flat arguments, got ${flatArgs.length}.',
+          );
+        }
+        return args;
+      });
 
   List<Object?> _storeLiftedCoreArgs(
     List<Object?> args,
@@ -1310,7 +1311,10 @@ final class WASIComponentCanonicalAdapterOperation {
     return (args: args, resultPointer: resultPointer);
   }
 
-  List<Object?> _loadIndirectParams(int pointer, wasm.Memory? memory) {
+  List<Object?> _loadIndirectParams(
+    int pointer,
+    wasm.Memory? memory,
+  ) => _withHandleLifting(() {
     if (memory == null) {
       throw StateError(
         'WASI component canonical adapter index $canonicalIndex requires memory '
@@ -1328,7 +1332,7 @@ final class WASIComponentCanonicalAdapterOperation {
       offset += layout.byteLength;
     }
     return args;
-  }
+  });
 
   List<Object?> _storeLoweredCoreResult(
     Object? result,
@@ -1392,6 +1396,14 @@ final class WASIComponentCanonicalAdapterOperation {
       );
     }
     return value.toUnsigned(32);
+  }
+
+  T _withHandleLifting<T>(T Function() callback) {
+    final host = _asyncHost;
+    return plan.hasResourceHandles &&
+            host is WASIComponentCanonicalHandleBindings
+        ? host.withHandleLifting(callback)
+        : callback();
   }
 
   T _withHandleCall<T>(

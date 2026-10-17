@@ -13,6 +13,68 @@ import 'support/component_fixtures.dart' as component_fixtures;
 import 'support/runtime_environment.dart';
 
 void main() {
+  for (final mode in ['queued read', 'pending read', 'write source']) {
+    test('canonical Object registry copies a host int stream: $mode', () async {
+      final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+      final host = WASIComponentAsyncHost()
+        ..defineStreamTypeFromComponent<Object?>(component, 0, 'u32');
+      final stream = WASIComponentStream<int>(
+        'host ints',
+        maxBufferedElements: mode == 'pending read' ? 0 : null,
+      );
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(0, 41, Endian.little);
+      data.setUint32(4, 42, Endian.little);
+      try {
+        await host.table.runScoped(() async {
+          final read = host.bindCanonicalDefinition(
+            _asyncDefinition(WasmComponentCanonicalKind.streamRead),
+          );
+          final write = host.bindCanonicalDefinition(
+            _asyncDefinition(WasmComponentCanonicalKind.streamWrite),
+          );
+          if (mode == 'write source') {
+            expect(
+              write
+                  .streamWriteFromMemory(stream.writable, memory, 0, 2)
+                  .packedResult,
+              32,
+            );
+            expect(stream.readable.read(2), [41, 42]);
+          } else {
+            final handle = host.lowerReadableEndpoint(0, stream.readable);
+            if (mode == 'queued read') {
+              stream.writable.writeAll([41, 42]);
+              expect(
+                read
+                    .streamReadHandleToMemory(handle, memory, 16, 2)
+                    .packedResult,
+                32,
+              );
+            } else {
+              final pending = read.streamReadHandleToMemoryWhenAvailable(
+                handle,
+                memory,
+                16,
+                2,
+              );
+              final sending = stream.writable.writeWhenAvailable([41, 42]);
+              expect((await pending).packedResult, 32);
+              await sending;
+            }
+            expect(data.getUint32(16, Endian.little), 41);
+            expect(data.getUint32(20, Endian.little), 42);
+          }
+        });
+      } finally {
+        stream.readable.dispose();
+        stream.writable.dispose();
+      }
+      expect(host.table.activeCount, 0);
+    });
+  }
+
   test('equivalent async types retain each descriptor allocation policy', () {
     final owner = WASIComponentAsyncHost();
     final component = WasmComponent.decode(

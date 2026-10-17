@@ -490,6 +490,71 @@ void main() {
     },
   );
 
+  for (final indirect in [false, true]) {
+    for (final duplicate in [false, true]) {
+      test(
+        'failed multi-own ${indirect ? 'indirect' : 'flat'} ${duplicate ? 'duplicate' : 'invalid suffix'} preserves all guest owners',
+        () async {
+          final component = await _encodeComponent(
+            indirect ? _canonicalMultiOwnIndirect : _canonicalMultiOwn,
+          );
+          expect(component.validate(), isEmpty);
+          final host = WASIComponentHost();
+          var calls = 0;
+          var sum = 0;
+          await host.table.runScoped(() async {
+            final resource = host.canonicalHost.resourceHost
+                .defineResourceType<int>(
+                  1,
+                  'provider.r',
+                  onDrop: (rep) => sum += rep,
+                );
+            final runtime = WASIComponentNativeRuntime.component(
+              component: component,
+              host: host,
+              imports: {
+                'take': (args) {
+                  calls++;
+                  for (final handle in args.take(2)) {
+                    host.table.drop(resource, handle as int);
+                  }
+                  return null;
+                },
+                'inspect': (args) =>
+                    host.table.get(resource, args.single as int),
+              },
+            );
+            var expected = 0;
+            for (final rep in [11, 22, 33]) {
+              await expectLater(
+                runtime.invokeExport('attempt', [
+                  host.table.insert(resource, rep),
+                  duplicate ? 1 : 0,
+                ]),
+                throwsA(anything),
+              );
+              expect(calls, 0);
+              expect(host.table.activeCount, 1);
+              expect(await runtime.invokeExport('rep', []), rep);
+              await runtime.invokeExport('drop', []);
+              expected += rep;
+              expect(sum, expected);
+              expect(host.table.activeCount, 0);
+            }
+            await runtime.invokeExport('valid', [
+              host.table.insert(resource, 45),
+              host.table.insert(resource, 55),
+            ]);
+            expect(calls, 1);
+            expect(sum, 166);
+            expect(host.table.activeCount, 0);
+          });
+          expect(host.table.activeCount, 0);
+        },
+      );
+    }
+  }
+
   group('canonical typed owners', () {
     for (final width in [2, 17]) {
       for (final asynchronous in [false, true]) {
@@ -3568,4 +3633,73 @@ String _postTaskStreamCopy({required bool write, required bool immediate}) =>
   (func (export "dropped") (result u32) (canon lift (core func \$m "dropped")))
   (func (export "thread") (result u32) (canon lift (core func \$m "thread")))
   (func (export "cleanup") (canon lift (core func \$m "cleanup"))))
+''';
+
+const _canonicalMultiOwn = r'''
+(component
+ (type $provider-type (instance (export "r" (type (sub resource)))))
+ (import "provider" (instance $provider (type $provider-type)))
+ (alias export $provider "r" (type $r))
+ (import "take" (func $take (param "first" (own $r)) (param "second" (own $r))))
+ (import "inspect" (func $inspect (param "value" (borrow $r)) (result u32)))
+ (core func $take (canon lower (func $take)))
+ (core func $inspect (canon lower (func $inspect)))
+ (core func $drop (canon resource.drop $r))
+ (core module $m
+  (import "h" "take" (func $take (param i32 i32)))
+  (import "h" "inspect" (func $inspect (param i32) (result i32)))
+  (import "h" "drop" (func $drop (param i32)))
+  (global $first (mut i32) (i32.const 0))
+  (func (export "attempt") (param i32 i32)
+   local.get 0 global.set $first
+   global.get $first
+   local.get 1 if (result i32) global.get $first else i32.const 0 end
+   call $take)
+  (func (export "rep") (result i32) global.get $first call $inspect)
+  (func (export "drop") global.get $first call $drop)
+  (func (export "valid") (param i32 i32) local.get 0 local.get 1 call $take))
+ (core instance $h (export "take" (func $take)) (export "inspect" (func $inspect)) (export "drop" (func $drop)))
+ (core instance $m (instantiate $m (with "h" (instance $h))))
+ (func (export "attempt") (param "value" (own $r)) (param "duplicate" u32) (canon lift (core func $m "attempt")))
+ (func (export "rep") (result u32) (canon lift (core func $m "rep")))
+ (func (export "drop") (canon lift (core func $m "drop")))
+ (func (export "valid") (param "first" (own $r)) (param "second" (own $r)) (canon lift (core func $m "valid"))))
+''';
+
+const _canonicalMultiOwnIndirect = r'''
+(component
+ (type $provider-type (instance (export "r" (type (sub resource)))))
+ (import "provider" (instance $provider (type $provider-type)))
+ (alias export $provider "r" (type $r))
+ (import "take" (func $take (param "first" (own $r)) (param "second" (own $r)) (param "padding" (tuple u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32))))
+ (import "inspect" (func $inspect (param "value" (borrow $r)) (result u32)))
+ (core module $memory (memory (export "memory") 1))
+ (core instance $memory (instantiate $memory))
+ (alias core export $memory "memory" (core memory $memory))
+ (core func $take (canon lower (func $take) (memory $memory)))
+ (core func $inspect (canon lower (func $inspect)))
+ (core func $drop (canon resource.drop $r))
+ (core module $m
+  (import "h" "memory" (memory 1))
+  (import "h" "take" (func $take (param i32)))
+  (import "h" "inspect" (func $inspect (param i32) (result i32)))
+  (import "h" "drop" (func $drop (param i32)))
+  (global $first (mut i32) (i32.const 0))
+  (func (export "attempt") (param i32 i32)
+   local.get 0 global.set $first
+   i32.const 0 global.get $first i32.store
+   i32.const 4 local.get 1 if (result i32) global.get $first else i32.const 0 end i32.store
+   i32.const 0 call $take)
+  (func (export "rep") (result i32) global.get $first call $inspect)
+  (func (export "drop") global.get $first call $drop)
+  (func (export "valid") (param i32 i32)
+   i32.const 0 local.get 0 i32.store
+   i32.const 4 local.get 1 i32.store
+   i32.const 0 call $take))
+ (core instance $h (export "memory" (memory $memory)) (export "take" (func $take)) (export "inspect" (func $inspect)) (export "drop" (func $drop)))
+ (core instance $m (instantiate $m (with "h" (instance $h))))
+ (func (export "attempt") (param "value" (own $r)) (param "duplicate" u32) (canon lift (core func $m "attempt")))
+ (func (export "rep") (result u32) (canon lift (core func $m "rep")))
+ (func (export "drop") (canon lift (core func $m "drop")))
+ (func (export "valid") (param "first" (own $r)) (param "second" (own $r)) (canon lift (core func $m "valid"))))
 ''';

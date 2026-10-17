@@ -70,8 +70,8 @@ final class WASIComponentAsyncCopyTarget<T> {
   final Object? owner;
 }
 
-void _requireCopyOwners<T>(
-  WASIComponentAsyncCopySource<T>? source,
+void _requireCopyOwners(
+  WASIComponentAsyncCopySource<Object?>? source,
   Object? targetOwner,
   int count,
 ) {
@@ -84,6 +84,27 @@ void _requireCopyOwners<T>(
       'WASI component non-numeric values cannot be copied within the same instance.',
     );
   }
+}
+
+// A registry can view a host endpoint covariantly (for example int as Object?).
+// Check the accepted prefix before mutation; preserve the typed-list fast path.
+List<T> _readCopyPrefix<T>(
+  WASIComponentAsyncCopySource<Object?> source,
+  int count,
+) {
+  final values = source.readPrefix(count);
+  if (values.length != count) {
+    throw StateError(
+      'WASI component copy source returned a wrong prefix length.',
+    );
+  }
+  if (values is List<T>) return values;
+  for (final value in values) {
+    if (value is! T) {
+      throw StateError('WASI component copy source expected $T values.');
+    }
+  }
+  return values.cast<T>();
 }
 
 /// In-memory runtime state for a Component Model `stream<T>` value.
@@ -310,13 +331,13 @@ final class WASIComponentWritableStream<T> {
   }
 
   /// Writes the prefix of [source] that can be accepted without waiting.
-  int writeSourceForCopy(WASIComponentAsyncCopySource<T> source) {
+  int writeSourceForCopy(WASIComponentAsyncCopySource<Object?> source) {
     return _state.writeSourceForCopy(source);
   }
 
   /// Waits to accept one prefix without loading the unaccepted remainder.
   Future<int> writeSourceWhenAvailableForCopy(
-    WASIComponentAsyncCopySource<T> source, {
+    WASIComponentAsyncCopySource<Object?> source, {
     bool asynchronous = true,
     bool deferCompletion = false,
   }) {
@@ -596,13 +617,13 @@ final class WASIComponentWritableFuture<T> {
   }
 
   /// Completes a canonical future only when a reader can accept its value.
-  void completeSourceForCopy(WASIComponentAsyncCopySource<T> source) {
+  void completeSourceForCopy(WASIComponentAsyncCopySource<Object?> source) {
     _state.completeSourceForCopy(source);
   }
 
   /// Waits for a reader before loading and transferring [source]'s value.
   Future<void> completeSourceWhenReadForCopy(
-    WASIComponentAsyncCopySource<T> source, {
+    WASIComponentAsyncCopySource<Object?> source, {
     bool asynchronous = true,
     bool deferCompletion = false,
   }) {
@@ -729,7 +750,7 @@ final class _WASIComponentStreamState<T> {
 
   List<T> readQueued(
     int maxElements, {
-    WASIComponentAsyncCopyTarget<T>? target,
+    WASIComponentAsyncCopyTarget<Object?>? target,
   }) {
     requireReadable();
     RangeError.checkNotNegative(maxElements, 'maxElements');
@@ -851,7 +872,7 @@ final class _WASIComponentStreamState<T> {
     }
   }
 
-  int readIntoForCopy(WASIComponentAsyncCopyTarget<T> target) {
+  int readIntoForCopy(WASIComponentAsyncCopyTarget<Object?> target) {
     _beginReadCopy(asynchronous: false);
     try {
       final values = readQueued(target.length, target: target);
@@ -865,7 +886,7 @@ final class _WASIComponentStreamState<T> {
   }
 
   Future<int> readIntoWhenAvailableForCopy(
-    WASIComponentAsyncCopyTarget<T> target, {
+    WASIComponentAsyncCopyTarget<Object?> target, {
     required bool asynchronous,
     required bool deferCompletion,
   }) {
@@ -984,7 +1005,7 @@ final class _WASIComponentStreamState<T> {
     }
   }
 
-  int writeSourceForCopy(WASIComponentAsyncCopySource<T> source) {
+  int writeSourceForCopy(WASIComponentAsyncCopySource<Object?> source) {
     _beginWriteCopy(asynchronous: false);
     try {
       requireWritable();
@@ -1004,7 +1025,7 @@ final class _WASIComponentStreamState<T> {
   }
 
   Future<int> writeSourceWhenAvailableForCopy(
-    WASIComponentAsyncCopySource<T> source, {
+    WASIComponentAsyncCopySource<Object?> source, {
     required bool asynchronous,
     required bool deferCompletion,
   }) {
@@ -1027,7 +1048,7 @@ final class _WASIComponentStreamState<T> {
   }
 
   Future<int> _writeSourceWhenAvailable(
-    WASIComponentAsyncCopySource<T> source, {
+    WASIComponentAsyncCopySource<Object?> source, {
     required bool retain,
   }) {
     requireWritable();
@@ -1650,7 +1671,7 @@ final class _WASIComponentStreamState<T> {
     return count;
   }
 
-  int _writeSourceAvailable(WASIComponentAsyncCopySource<T> source) {
+  int _writeSourceAvailable(WASIComponentAsyncCopySource<Object?> source) {
     if (source.length == 0) return 0;
     if (maxBufferedElements == 0) {
       final readers = readWaiters;
@@ -1659,7 +1680,7 @@ final class _WASIComponentStreamState<T> {
       final count = _minInt(reader.maxElements, source.length);
       try {
         _requireCopyOwners(source, reader.target?.owner, count);
-        reader.complete(source.readPrefix(count));
+        reader.complete(_readCopyPrefix<T>(source, count));
         if (!reader.keepPending) readers.removeFirst();
       } catch (error) {
         readers.removeFirst();
@@ -1676,13 +1697,13 @@ final class _WASIComponentStreamState<T> {
         : _minInt(source.length, available);
     if (count == 0) return 0;
     _checkWaitingCopyReader(source, count);
-    _appendValues(source.readPrefix(count), count);
+    _appendValues(_readCopyPrefix<T>(source, count), count);
     if (readWaiters != null || writeWaiters != null) _pumpWaiters();
     return count;
   }
 
   void _checkWaitingCopyReader(
-    WASIComponentAsyncCopySource<T> source,
+    WASIComponentAsyncCopySource<Object?> source,
     int count,
   ) {
     final readers = readWaiters;
@@ -2049,7 +2070,7 @@ final class _WASIComponentStreamReadWaiter<T> {
        completer = null;
 
   final int _length;
-  final WASIComponentAsyncCopyTarget<T>? target;
+  final WASIComponentAsyncCopyTarget<Object?>? target;
   final Completer<List<T>>? completer;
   final Completer<int>? countCompleter;
   final bool retain;
@@ -2094,7 +2115,7 @@ final class _WASIComponentStreamWriteWaiter<T> {
   }) : values = null;
 
   final List<T>? values;
-  final WASIComponentAsyncCopySource<T>? source;
+  final WASIComponentAsyncCopySource<Object?>? source;
   final Completer<int> completer;
   final bool retain;
   final void Function(int count)? onProgress;
@@ -2105,7 +2126,7 @@ final class _WASIComponentStreamWriteWaiter<T> {
 
   List<T> readPrefix(int count) {
     final prefix =
-        source?.readPrefix(count) ??
+        (source == null ? null : _readCopyPrefix<T>(source!, count)) ??
         values!.sublist(_progress, _progress + count);
     if (prefix.length != count) {
       throw StateError(
@@ -2163,7 +2184,7 @@ final class _WASIComponentFutureState<T> {
 
   _WASIComponentFutureStatus status = _WASIComponentFutureStatus.pending;
   T? value;
-  WASIComponentAsyncCopySource<T>? _pendingCopySource;
+  WASIComponentAsyncCopySource<Object?>? _pendingCopySource;
   List<Completer<T>>? readWaiters;
   List<Completer<void>>? writeDeliveryWaiters;
   bool readDropped = false;
@@ -2292,7 +2313,7 @@ final class _WASIComponentFutureState<T> {
     }
   }
 
-  void _requireSingleSource(WASIComponentAsyncCopySource<T> source) {
+  void _requireSingleSource(WASIComponentAsyncCopySource<Object?> source) {
     if (source.length != 1) {
       throw StateError(
         'WASI component future $name requires exactly one source value.',
@@ -2300,7 +2321,7 @@ final class _WASIComponentFutureState<T> {
     }
   }
 
-  void completeSourceForCopy(WASIComponentAsyncCopySource<T> source) {
+  void completeSourceForCopy(WASIComponentAsyncCopySource<Object?> source) {
     _beginWriteCopy(asynchronous: false);
     try {
       _requireCompletable();
@@ -2320,7 +2341,7 @@ final class _WASIComponentFutureState<T> {
   }
 
   Future<void> completeSourceWhenReadForCopy(
-    WASIComponentAsyncCopySource<T> source, {
+    WASIComponentAsyncCopySource<Object?> source, {
     required bool asynchronous,
     required bool deferCompletion,
   }) {
@@ -2361,7 +2382,7 @@ final class _WASIComponentFutureState<T> {
     var accepted = false;
     try {
       _requireCopyOwners(source, owner, 1);
-      loadedValue = source.readPrefix(1).single;
+      loadedValue = _readCopyPrefix<T>(source, 1).single;
       loaded = true;
       complete(loadedValue as T);
       accepted = true;

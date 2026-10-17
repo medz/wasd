@@ -2,6 +2,74 @@ import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/async_values.dart';
 
 void main() {
+  test(
+    'covariant source keeps both pending prefixes in a typed stream',
+    () async {
+      final stream = WASIComponentStream<int>(
+        'typed prefixes',
+        maxBufferedElements: 0,
+      );
+      final WASIComponentWritableStream<Object?> writable = stream.writable;
+      var offset = 0;
+      final pending = writable.writeSourceWhenAvailableForCopy(
+        WASIComponentAsyncCopySource<Object?>(
+          length: 2,
+          readPrefix: (count) => <Object?>[
+            for (var i = 0; i < count; i++) ++offset,
+          ],
+        ),
+        deferCompletion: true,
+      );
+      expect(stream.readable.read(1), [1]);
+      expect(await pending, 1);
+      expect(stream.readable.read(1), [2]);
+      expect(writable.copyProgress, 2);
+      writable.finishDeferredCopy(dropped: false);
+      stream.readable.dispose();
+      stream.writable.dispose();
+    },
+  );
+
+  test('covariant source validates every accepted value before queueing', () {
+    final stream = WASIComponentStream<int>('typed validation');
+    final WASIComponentWritableStream<Object?> writable = stream.writable;
+    expect(
+      () => writable.writeSourceForCopy(
+        WASIComponentAsyncCopySource<Object?>(
+          length: 2,
+          readPrefix: (_) => <Object?>[1, 'wrong type'],
+        ),
+      ),
+      throwsStateError,
+    );
+    expect(stream.readable.read(2), isEmpty);
+    stream.readable.dispose();
+    stream.writable.dispose();
+  });
+
+  for (final readerFirst in [false, true]) {
+    test(
+      'covariant future source preserves typed value: reader first=$readerFirst',
+      () async {
+        final future = WASIComponentFuture<int>('typed future');
+        final WASIComponentWritableFuture<Object?> writable = future.writable;
+        Future<int>? read;
+        if (readerFirst) read = future.readable.readWhenReadyForCopy();
+        final write = writable.completeSourceWhenReadForCopy(
+          WASIComponentAsyncCopySource<Object?>(
+            length: 1,
+            readPrefix: (_) => <Object?>[42],
+          ),
+        );
+        read ??= future.readable.readWhenReadyForCopy();
+        expect(await read, 42);
+        await write;
+        future.readable.dispose();
+        future.writable.dispose();
+      },
+    );
+  }
+
   for (final terminal in [
     'cancel reader',
     'cancel writer',

@@ -13,6 +13,206 @@ import 'package:wasd/src/wasm/memory.dart';
 import 'support/component_fixtures.dart' as fixtures;
 
 void main() {
+  test(
+    'scoped numeric aliases keep same-instance rendezvous numeric',
+    () async {
+      final store = _Store();
+      await _scoped(store, () async {
+        final instance = _Instance(
+          store,
+          WasmComponent.decode(
+            fixtures.scopedPrimitiveStreamTypeComponentBytes(),
+          ),
+          store.type(),
+        );
+        final pair = instance.stream(0);
+        final memory = _memory();
+        final data = ByteData.view(memory.buffer)
+          ..setUint32(0, 42, Endian.little);
+        Object? readFailure;
+        final reading = instance
+            .operation(WasmComponentCanonicalKind.streamRead, 0)
+            .streamReadHandleToMemoryWhenAvailable(
+              instance.backing(pair.readable),
+              memory,
+              16,
+              1,
+            )
+            .then<WASIComponentAsyncCopyResult?>(
+              (result) => result,
+              onError: (Object error) {
+                readFailure = error;
+                return null;
+              },
+            );
+        Object? writeFailure;
+        WASIComponentAsyncCopyResult? written;
+        try {
+          written = instance
+              .operation(WasmComponentCanonicalKind.streamWrite, 0)
+              .streamWriteHandleFromMemory(
+                instance.backing(pair.writable),
+                memory,
+                0,
+                1,
+              );
+        } catch (error) {
+          writeFailure = error;
+        }
+        final read = await reading;
+        expect(writeFailure, isNull);
+        expect(readFailure, isNull);
+        expect(written?.packedResult, 16);
+        expect(read?.packedResult, 16);
+        expect(data.getUint32(16, Endian.little), 42);
+      });
+    },
+  );
+
+  test('moving an owner preserves its live children and drop guard', () async {
+    final store = _Store();
+    await _scoped(store, () {
+      final type = store.type();
+      final childType = store.type();
+      final source = _Instance(store, _ownStream(), type);
+      final target = _Instance(store, _ownStream(), type);
+      final owner = source.handles.newResource(0, 77);
+      final child = store.table.resourceNew(childType, 18);
+      store.table.attachChild(source.backing(owner), child);
+      expect(() => source.handles.resourceDrop(0, owner), throwsStateError);
+      final moved = source.handles.withHandleLifting(
+        () => source.handles.liftResourceHandle(0, owner, owned: true),
+      );
+      expect(() => source.handles.resourceRep(0, owner), throwsStateError);
+      final received = target.handles.lowerResourceHandle(
+        0,
+        moved,
+        owned: true,
+      );
+      expect(target.handles.resourceRep(0, received), 77);
+      expect(() => target.handles.resourceDrop(0, received), throwsStateError);
+      expect(() => store.table.drop(type, moved), throwsStateError);
+      expect(store.dropped, isEmpty);
+      store.table.drop(childType, child);
+      target.handles.resourceDrop(0, received);
+      expect(store.dropped, [18, 77]);
+      expect(store.table.activeCount, 0);
+    });
+  });
+
+  for (final duplicate in [false, true]) {
+    test(
+      'own parameter transaction preserves guests after ${duplicate ? 'duplicate' : 'invalid'} suffix',
+      () async {
+        final store = _Store();
+        await _scoped(store, () {
+          final type = store.type();
+          final instance = _Instance(store, _ownStream(), type);
+          final first = instance.handles.newResource(0, 11);
+          final second = instance.handles.newResource(0, 22);
+          expect(
+            () => instance.handles.withHandleLifting(() {
+              instance.handles.liftResourceHandle(0, first, owned: true);
+              instance.handles.liftResourceHandle(
+                0,
+                duplicate ? first : 0,
+                owned: true,
+              );
+            }),
+            throwsStateError,
+          );
+          expect(instance.handles.resourceRep(0, first), 11);
+          expect(instance.handles.resourceRep(0, second), 22);
+          final lifted = instance.handles.withHandleLifting(
+            () => [
+              instance.handles.liftResourceHandle(0, first, owned: true),
+              instance.handles.liftResourceHandle(0, second, owned: true),
+            ],
+          );
+          expect(
+            () => instance.handles.resourceRep(0, first),
+            throwsStateError,
+          );
+          for (final handle in lifted) {
+            store.table.drop(type, handle);
+          }
+          expect(store.dropped, [11, 22]);
+          expect(store.table.activeCount, 0);
+        });
+      },
+    );
+  }
+
+  for (final arm in ['ok', 'empty', 'detail']) {
+    test(
+      'scoped payload aliases retain their original definition context: $arm',
+      () async {
+        final store = _Store();
+        await _scoped(store, () {
+          final component = WasmComponent.decode(
+            fixtures.scopedResultFutureTypeComponentBytes(),
+          );
+          final instance = _Instance(store, component, store.type());
+          final pair = instance.future(0);
+          final target = _Instance(store, component, store.type());
+          final endpoint = instance.handles.liftReadableEndpoint(
+            0,
+            pair.readable,
+          );
+          final reader = target.handles.lowerReadableEndpoint(0, endpoint);
+          final value = WasmComponentValueData(
+            kind: WasmComponentValueDataKind.result,
+            rawBytes: Uint8List(0),
+            isOk: arm == 'ok',
+            associatedValue: arm == 'ok'
+                ? null
+                : WasmComponentValueData(
+                    kind: WasmComponentValueDataKind.variant,
+                    rawBytes: Uint8List(0),
+                    index: arm == 'empty' ? 0 : 1,
+                    label: arm,
+                    associatedValue: arm == 'empty'
+                        ? null
+                        : WasmComponentValueData(
+                            kind: WasmComponentValueDataKind.tuple,
+                            rawBytes: Uint8List(0),
+                            items: [
+                              WasmComponentValueData(
+                                kind: WasmComponentValueDataKind.integer,
+                                rawBytes: Uint8List.fromList([42]),
+                                integer: 42,
+                              ),
+                            ],
+                          ),
+                  ),
+          );
+          instance
+              .operation(WasmComponentCanonicalKind.futureWrite, 0)
+              .futureWriteHandle(instance.backing(pair.writable), value);
+          final memory = _memory();
+          expect(
+            target
+                .operation(WasmComponentCanonicalKind.futureRead, 0)
+                .futureReadHandleToMemory(target.backing(reader), memory, 32)
+                .packedResult,
+            0,
+          );
+          final bytes = Uint8List.view(memory.buffer);
+          expect(bytes[32], arm == 'ok' ? 0 : 1);
+          if (arm != 'ok') expect(bytes[33], arm == 'empty' ? 0 : 1);
+          if (arm == 'detail') expect(bytes[34], 42);
+          target
+              .operation(WasmComponentCanonicalKind.futureDropReadable, 0)
+              .futureDropReadableHandle(target.backing(reader));
+          instance
+              .operation(WasmComponentCanonicalKind.futureDropWritable, 0)
+              .futureDropWritableHandle(instance.backing(pair.writable));
+          expect(store.table.activeCount, 0);
+        });
+      },
+    );
+  }
+
   for (final owned in [false, true]) {
     test(
       'huge fixed-list ${owned ? 'own' : 'pure'} endpoint initialization stays compact',

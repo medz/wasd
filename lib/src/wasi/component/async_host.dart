@@ -49,6 +49,9 @@ abstract interface class WASIComponentCanonicalHandleBindings
   /// Copies a host error reference into the receiving guest table.
   int lowerErrorContextHandle(int handle);
 
+  /// Commits lifted resource owners only after every parameter has validated.
+  T withHandleLifting<T>(T Function() callback);
+
   /// Keeps loans and internal carriers alive through callback settlement.
   T withHandleCall<T>(
     T Function() callback, {
@@ -332,7 +335,11 @@ final class WASIComponentAsyncHost
       componentTypeIndex < definitions.length;
       componentTypeIndex++
     ) {
-      final definition = definitions[componentTypeIndex];
+      final definitionContext = component.componentTypeIndexScope
+          .definitionContextAt(componentTypeIndex);
+      final definition =
+          definitionContext?.definition ?? definitions[componentTypeIndex];
+      final typeScope = definitionContext?.typeScope;
       final definedValue = definition.definedValue;
       if (definition.kind != WasmComponentTypeKind.definedValue ||
           definedValue == null) {
@@ -352,6 +359,7 @@ final class WASIComponentAsyncHost
           _supportedAsyncValueValidatorForElementType(
             definedValue.elementType,
             definitions,
+            typeScope: typeScope,
           ) ??
           _supportedAsyncValueValidatorFromFunctionContexts(
             component,
@@ -368,6 +376,7 @@ final class WASIComponentAsyncHost
           valueValidator: validator,
           elementType: definedValue.elementType,
           referenceDefinitions: definitions,
+          typeScope: typeScope,
         ),
       );
     }
@@ -375,6 +384,7 @@ final class WASIComponentAsyncHost
       final validator = _supportedAsyncValueValidatorForElementType(
         scopedType.definedValue.elementType,
         scopedType.referenceDefinitions,
+        typeScope: scopedType.typeScope,
       );
       if (validator == null) {
         continue;
@@ -387,6 +397,7 @@ final class WASIComponentAsyncHost
           valueValidator: validator,
           elementType: scopedType.definedValue.elementType,
           referenceDefinitions: scopedType.referenceDefinitions,
+          typeScope: scopedType.typeScope,
         ),
       );
     }
@@ -422,6 +433,7 @@ final class WASIComponentAsyncHost
               WASIComponentCanonicalValueMemoryCodec.fromValueType(
                     binding._elementType,
                     binding._referenceDefinitions,
+                    typeScope: binding._typeScope,
                   ) !=
                   null,
           name: nameForBinding?.call(binding) ?? binding.name,
@@ -671,6 +683,7 @@ int? wasiComponentAsyncValueTypeIndex(
     source,
     sourceValue,
     referenceDefinitions,
+    sourceTypeScope: sourceContext?.typeScope ?? sourceTypeScope,
   );
   if (topLevelIndex != null) {
     return topLevelIndex;
@@ -687,8 +700,9 @@ int? _topLevelAsyncValueTypeIndex(
   WasmComponent component,
   WasmComponentTypeDefinition source,
   WasmComponentDefinedValueType sourceValue,
-  List<WasmComponentTypeDefinition> sourceDefinitions,
-) {
+  List<WasmComponentTypeDefinition> sourceDefinitions, {
+  WasmComponentTypeScope? sourceTypeScope,
+}) {
   final componentDefinitions = component.componentTypeIndexDefinitions;
   final identityMatches = <int>[];
   for (var index = 0; index < componentDefinitions.length; index++) {
@@ -712,6 +726,10 @@ int? _topLevelAsyncValueTypeIndex(
           candidateValue.elementType,
           componentDefinitions,
           <(WasmComponentTypeDefinition, WasmComponentTypeDefinition)>{},
+          leftScope: sourceTypeScope,
+          rightScope: component.componentTypeIndexScope
+              .definitionContextAt(index)
+              ?.typeScope,
         )) {
       matches.add(index);
     }
@@ -764,6 +782,7 @@ List<_WASIComponentScopedAsyncValueType> _componentScopedAsyncValueTypes(
             definition,
             value,
             referenceDefinitions,
+            sourceTypeScope: definitionContext?.typeScope ?? typeScope,
           ) !=
           null) {
         continue;
@@ -774,6 +793,7 @@ List<_WASIComponentScopedAsyncValueType> _componentScopedAsyncValueTypes(
           definition: definition,
           definedValue: value,
           referenceDefinitions: referenceDefinitions,
+          typeScope: definitionContext?.typeScope ?? typeScope,
           kind: kind,
         ),
       );
@@ -792,6 +812,7 @@ final class _WASIComponentScopedAsyncValueType {
     required this.definition,
     required this.definedValue,
     required this.referenceDefinitions,
+    required this.typeScope,
     required this.kind,
   });
 
@@ -799,6 +820,7 @@ final class _WASIComponentScopedAsyncValueType {
   final WasmComponentTypeDefinition definition;
   final WasmComponentDefinedValueType definedValue;
   final List<WasmComponentTypeDefinition> referenceDefinitions;
+  final WasmComponentTypeScope? typeScope;
   final WASIComponentAsyncValueBindingKind kind;
 }
 
@@ -834,6 +856,7 @@ _supportedAsyncValueValidatorFromFunctionContexts(
       final validator = _supportedAsyncValueValidatorForElementType(
         value.elementType,
         definitionContext?.typeScope.definitions ?? definitions,
+        typeScope: definitionContext?.typeScope ?? typeScope,
       );
       if (validator != null) {
         return validator;
@@ -848,8 +871,10 @@ bool _asyncBindingValueTypesEquivalent(
   List<WasmComponentTypeDefinition> leftDefinitions,
   WasmComponentValueType? right,
   List<WasmComponentTypeDefinition> rightDefinitions,
-  Set<(WasmComponentTypeDefinition, WasmComponentTypeDefinition)> visiting,
-) {
+  Set<(WasmComponentTypeDefinition, WasmComponentTypeDefinition)> visiting, {
+  WasmComponentTypeScope? leftScope,
+  WasmComponentTypeScope? rightScope,
+}) {
   if (left == null || right == null) {
     return left == null && right == null;
   }
@@ -861,20 +886,24 @@ bool _asyncBindingValueTypesEquivalent(
   }
   final leftIndex = left.typeIndex;
   final rightIndex = right.typeIndex;
+  final leftContext = leftScope?.definitionContextAt(leftIndex);
+  final rightContext = rightScope?.definitionContextAt(rightIndex);
   if (leftIndex == null ||
       leftIndex < 0 ||
-      leftIndex >= leftDefinitions.length ||
+      (leftContext == null && leftIndex >= leftDefinitions.length) ||
       rightIndex == null ||
       rightIndex < 0 ||
-      rightIndex >= rightDefinitions.length) {
+      (rightContext == null && rightIndex >= rightDefinitions.length)) {
     return false;
   }
   return _asyncBindingTypeDefinitionsEquivalent(
-    leftDefinitions[leftIndex],
+    leftContext?.definition ?? leftDefinitions[leftIndex],
     leftDefinitions,
-    rightDefinitions[rightIndex],
+    rightContext?.definition ?? rightDefinitions[rightIndex],
     rightDefinitions,
     visiting,
+    leftScope: leftContext?.typeScope ?? leftScope,
+    rightScope: rightContext?.typeScope ?? rightScope,
   );
 }
 
@@ -883,8 +912,10 @@ bool _asyncBindingTypeDefinitionsEquivalent(
   List<WasmComponentTypeDefinition> leftDefinitions,
   WasmComponentTypeDefinition right,
   List<WasmComponentTypeDefinition> rightDefinitions,
-  Set<(WasmComponentTypeDefinition, WasmComponentTypeDefinition)> visiting,
-) {
+  Set<(WasmComponentTypeDefinition, WasmComponentTypeDefinition)> visiting, {
+  WasmComponentTypeScope? leftScope,
+  WasmComponentTypeScope? rightScope,
+}) {
   if (identical(left, right)) {
     return true;
   }
@@ -907,8 +938,11 @@ bool _asyncBindingTypeDefinitionsEquivalent(
         rightValue,
         rightDefinitions,
         visiting,
+        leftScope: leftScope,
+        rightScope: rightScope,
       );
-  visiting.remove(pair);
+  // Keep proven pairs memoized so shared type DAGs are compared only once.
+  if (!equivalent) visiting.remove(pair);
   return equivalent;
 }
 
@@ -917,8 +951,10 @@ bool _asyncBindingDefinedValuesEquivalent(
   List<WasmComponentTypeDefinition> leftDefinitions,
   WasmComponentDefinedValueType right,
   List<WasmComponentTypeDefinition> rightDefinitions,
-  Set<(WasmComponentTypeDefinition, WasmComponentTypeDefinition)> visiting,
-) {
+  Set<(WasmComponentTypeDefinition, WasmComponentTypeDefinition)> visiting, {
+  WasmComponentTypeScope? leftScope,
+  WasmComponentTypeScope? rightScope,
+}) {
   if (left.kind != right.kind ||
       left.primitive != right.primitive ||
       left.fixedLength != right.fixedLength ||
@@ -934,6 +970,8 @@ bool _asyncBindingDefinedValuesEquivalent(
     rightType,
     rightDefinitions,
     visiting,
+    leftScope: leftScope,
+    rightScope: rightScope,
   );
   if (!valueTypesEquivalent(left.elementType, right.elementType) ||
       !valueTypesEquivalent(left.keyType, right.keyType) ||
@@ -950,6 +988,8 @@ bool _asyncBindingDefinedValuesEquivalent(
       right.typeIndex,
       rightDefinitions,
       visiting,
+      leftScope: leftScope,
+      rightScope: rightScope,
     );
   }
   if (left.types.length != right.types.length ||
@@ -986,22 +1026,28 @@ bool _asyncBindingTypeIndexesEquivalent(
   List<WasmComponentTypeDefinition> leftDefinitions,
   int? rightIndex,
   List<WasmComponentTypeDefinition> rightDefinitions,
-  Set<(WasmComponentTypeDefinition, WasmComponentTypeDefinition)> visiting,
-) {
+  Set<(WasmComponentTypeDefinition, WasmComponentTypeDefinition)> visiting, {
+  WasmComponentTypeScope? leftScope,
+  WasmComponentTypeScope? rightScope,
+}) {
+  final leftContext = leftScope?.definitionContextAt(leftIndex);
+  final rightContext = rightScope?.definitionContextAt(rightIndex);
   if (leftIndex == null ||
       leftIndex < 0 ||
-      leftIndex >= leftDefinitions.length ||
+      (leftContext == null && leftIndex >= leftDefinitions.length) ||
       rightIndex == null ||
       rightIndex < 0 ||
-      rightIndex >= rightDefinitions.length) {
+      (rightContext == null && rightIndex >= rightDefinitions.length)) {
     return false;
   }
   return _asyncBindingTypeDefinitionsEquivalent(
-    leftDefinitions[leftIndex],
+    leftContext?.definition ?? leftDefinitions[leftIndex],
     leftDefinitions,
-    rightDefinitions[rightIndex],
+    rightContext?.definition ?? rightDefinitions[rightIndex],
     rightDefinitions,
     visiting,
+    leftScope: leftContext?.typeScope ?? leftScope,
+    rightScope: rightContext?.typeScope ?? rightScope,
   );
 }
 
@@ -1035,12 +1081,15 @@ final class WASIComponentAsyncValueBinding {
     required _WASIComponentAsyncValueValidator valueValidator,
     required WasmComponentValueType? elementType,
     required List<WasmComponentTypeDefinition> referenceDefinitions,
+    required WasmComponentTypeScope? typeScope,
   }) : _elementType = elementType,
+       _typeScope = typeScope,
        _referenceDefinitions = referenceDefinitions,
        _valueValidator = valueValidator,
        memoryLayout = _memoryLayoutFor(valueValidator);
 
   final WasmComponentValueType? _elementType;
+  final WasmComponentTypeScope? _typeScope;
   final List<WasmComponentTypeDefinition> _referenceDefinitions;
 
   bool _equivalentTo(WASIComponentAsyncValueBinding other) =>
@@ -1051,6 +1100,8 @@ final class WASIComponentAsyncValueBinding {
         other._elementType,
         other._referenceDefinitions,
         <(WasmComponentTypeDefinition, WasmComponentTypeDefinition)>{},
+        leftScope: _typeScope,
+        rightScope: other._typeScope,
       );
 
   final _WASIComponentAsyncValueValidator _valueValidator;
@@ -4627,17 +4678,25 @@ _WASIComponentAsyncValueValidator _expectDecodedAsyncType(
   return _asyncValueValidatorForElementType(
     definedValue.elementType,
     component.componentTypeIndexDefinitions,
+    typeScope: component.componentTypeIndexScope
+        .definitionContextAt(componentTypeIndex)
+        ?.typeScope,
   );
 }
 
 _WASIComponentAsyncValueValidator _asyncValueValidatorForElementType(
   WasmComponentValueType? elementType,
-  List<WasmComponentTypeDefinition> definitions,
-) {
+  List<WasmComponentTypeDefinition> definitions, {
+  WasmComponentTypeScope? typeScope,
+}) {
   if (elementType == null) {
     return _WASIComponentAsyncValueValidator.unit;
   }
-  final primitive = _primitiveElementType(elementType, definitions);
+  final primitive = _primitiveElementType(
+    elementType,
+    definitions,
+    typeScope: typeScope,
+  );
   if (primitive != null) {
     return _WASIComponentAsyncValueValidator._(
       kind: _WASIComponentAsyncValueShape.primitive,
@@ -4645,6 +4704,7 @@ _WASIComponentAsyncValueValidator _asyncValueValidatorForElementType(
       memoryCodec: WASIComponentCanonicalValueMemoryCodec.fromValueType(
         elementType,
         definitions,
+        typeScope: typeScope,
       ),
     );
   }
@@ -4652,6 +4712,7 @@ _WASIComponentAsyncValueValidator _asyncValueValidatorForElementType(
       WASIComponentCanonicalValueMemoryCodec.fromAsyncElementType(
         elementType,
         definitions,
+        typeScope: typeScope,
       );
   if (memoryCodec == null) {
     throw UnsupportedError(
@@ -4667,10 +4728,15 @@ _WASIComponentAsyncValueValidator _asyncValueValidatorForElementType(
 
 _WASIComponentAsyncValueValidator? _supportedAsyncValueValidatorForElementType(
   WasmComponentValueType? elementType,
-  List<WasmComponentTypeDefinition> definitions,
-) {
+  List<WasmComponentTypeDefinition> definitions, {
+  WasmComponentTypeScope? typeScope,
+}) {
   try {
-    return _asyncValueValidatorForElementType(elementType, definitions);
+    return _asyncValueValidatorForElementType(
+      elementType,
+      definitions,
+      typeScope: typeScope,
+    );
   } on UnsupportedError {
     return null;
   }
@@ -4678,17 +4744,21 @@ _WASIComponentAsyncValueValidator? _supportedAsyncValueValidatorForElementType(
 
 WasmComponentPrimitiveValueType? _primitiveElementType(
   WasmComponentValueType elementType,
-  List<WasmComponentTypeDefinition> definitions,
-) {
+  List<WasmComponentTypeDefinition> definitions, {
+  WasmComponentTypeScope? typeScope,
+}) {
   if (elementType.kind == WasmComponentValueTypeKind.primitive) {
     return elementType.primitive;
   }
 
   final typeIndex = elementType.typeIndex;
-  if (typeIndex == null || typeIndex < 0 || typeIndex >= definitions.length) {
+  final context = typeScope?.definitionContextAt(typeIndex);
+  if (typeIndex == null ||
+      typeIndex < 0 ||
+      (context == null && typeIndex >= definitions.length)) {
     return null;
   }
-  final definition = definitions[typeIndex];
+  final definition = context?.definition ?? definitions[typeIndex];
   final definedValue = definition.definedValue;
   if (definition.kind != WasmComponentTypeKind.definedValue ||
       definedValue == null ||
@@ -5034,4 +5104,7 @@ extension WASIComponentCanonicalAsyncValueAccess
   /// Type definitions in the element type's original local index space.
   List<WasmComponentTypeDefinition> get canonicalReferenceDefinitions =>
       _referenceDefinitions;
+
+  /// Original scope, including local and outer aliases used by child references.
+  WasmComponentTypeScope? get canonicalTypeScope => _typeScope;
 }
