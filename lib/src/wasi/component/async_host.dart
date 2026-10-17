@@ -85,6 +85,46 @@ final class WASIComponentAsyncValueBindingSet
 /// Internal typed value conversion over the existing instance binding registry.
 extension WASIComponentCanonicalAsyncValueBindings
     on WASIComponentAsyncValueBindingSet {
+  /// Refuses a post-return synchronous copy requiring caller continuation.
+  /// Validation and readiness checks do not register or consume a copy buffer.
+  void requireImmediateStreamCopy(
+    WasmComponentCanonicalDefinition definition,
+    List<Object?> args, {
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    final valueType = _type(definition.typeIndex!);
+    final write = definition.kind == WasmComponentCanonicalKind.streamWrite;
+    final handle = (args[0] as int).toUnsigned(32);
+    final count = (args[2] as int).toUnsigned(32);
+    _checkCopyElementCount(count);
+    if (memory == null) {
+      valueType._unitValue();
+    } else {
+      final pointer = (args[1] as int).toUnsigned(32);
+      if (!write) {
+        _requireReallocForReadToMemory(
+          valueType.valueValidator,
+          valueType.name,
+          realloc,
+          count,
+        );
+      }
+      _checkReadToMemoryRange(
+        valueType.valueValidator,
+        valueType.name,
+        memory,
+        pointer,
+        count,
+      );
+    }
+    if (!valueType._streamCopyCanComplete(handle, count, write: write)) {
+      throw UnsupportedError(
+        'Synchronous stream copy after task.return requires caller continuation scheduling.',
+      );
+    }
+  }
+
   /// Connects this registry to the executing instance's typed copy boundary.
   void bindCanonicalValues({
     required Object owner,
@@ -2687,6 +2727,27 @@ final class _RegisteredAsyncValueType<T> {
         WasmComponentPrimitiveValueType.f64 => true,
         _ => false,
       };
+
+  bool _streamCopyCanComplete(int handle, int count, {required bool write}) {
+    if (write) {
+      return table.borrow<WASIComponentWritableStream<T>, bool>(
+        writableStreamType!,
+        handle,
+        (stream) {
+          stream.requireCopyIdle();
+          return stream.isClosed || stream.canWriteSourceImmediately(count);
+        },
+      );
+    }
+    return table.borrow<WASIComponentReadableStream<T>, bool>(
+      readableStreamType!,
+      handle,
+      (stream) {
+        stream.requireCopyIdle();
+        return count == 0 || stream.canReadImmediatelyForCopy;
+      },
+    );
+  }
 
   WASIComponentAsyncCopySource<T> _copySource(
     wasm.Memory memory,

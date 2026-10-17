@@ -3,6 +3,8 @@
 
 import 'dart:async';
 
+import '../../wasm/backend/native/interpreter/component.dart';
+
 import 'adapter_host.dart';
 import 'adapter_plan.dart';
 import 'async_host.dart';
@@ -199,31 +201,26 @@ final class WASIComponentCanonicalHandles
   ) {
     final layouts = <int, WASIComponentCanonicalAdapterFlatValuePlan?>{};
     final handleLayouts = <int>{};
-    bool containsHandle(WASIComponentCanonicalAdapterFlatValuePlan? layout) =>
-        layout != null &&
-        (layout.kind == WASIComponentCanonicalAdapterFlatValueKind.resource ||
-            layout.kind ==
-                WASIComponentCanonicalAdapterFlatValueKind.errorContext ||
-            layout.kind == WASIComponentCanonicalAdapterFlatValueKind.stream ||
-            layout.kind == WASIComponentCanonicalAdapterFlatValueKind.future ||
-            layout.fields.any((field) => containsHandle(field.value)) ||
-            layout.cases.any((item) => containsHandle(item.value)) ||
-            containsHandle(layout.element) ||
-            containsHandle(layout.ok) ||
-            containsHandle(layout.error));
     for (final descriptor in descriptors) {
-      final element = descriptor.canonicalElementType;
-      final layout = element == null
-          ? null
-          : componentCanonicalFlatLayout(
-              element,
-              descriptor.canonicalReferenceDefinitions,
-            );
-      layouts[descriptor.componentTypeIndex] = layout;
-      if (containsHandle(layout)) {
+      if (_payloadContainsHandle(
+        descriptor.canonicalElementType,
+        descriptor.canonicalReferenceDefinitions,
+        {},
+      )) {
         handleLayouts.add(descriptor.componentTypeIndex);
       }
     }
+    WASIComponentCanonicalAdapterFlatValuePlan? layoutFor(
+      WASIComponentAsyncValueBinding binding,
+    ) => layouts.putIfAbsent(binding.componentTypeIndex, () {
+      final element = binding.canonicalElementType;
+      return element == null
+          ? null
+          : componentCanonicalFlatLayout(
+              element,
+              binding.canonicalReferenceDefinitions,
+            );
+    });
     _PayloadHandleBindings boundary(
       WASIComponentAsyncValueBinding binding,
       _PayloadMode mode,
@@ -235,7 +232,7 @@ final class WASIComponentCanonicalHandles
       _PayloadHandleBindings converter, {
       required bool lift,
     }) {
-      final layout = layouts[binding.componentTypeIndex];
+      final layout = layoutFor(binding);
       if (layout == null) return value;
       return lift
           ? liftWASIComponentCanonicalMemoryHandles(layout, value, converter)
@@ -251,15 +248,15 @@ final class WASIComponentCanonicalHandles
 
     bindings.bindCanonicalValues(
       owner: this,
-      typeKey: (binding) {
-        final parts = <Object?>[binding.kind];
-        _payloadTypeParts(
-          layouts[binding.componentTypeIndex],
+      typeKey: (binding) => _PayloadTypeKey([
+        binding.kind,
+        _payloadTypeKey(
+          binding.canonicalElementType,
+          binding.canonicalReferenceDefinitions,
           (index) => identity(binding, index),
-          parts,
-        );
-        return _PayloadTypeKey(parts);
-      },
+          {},
+        ),
+      ]),
       lift: (binding, values) {
         if (!handleLayouts.contains(binding.componentTypeIndex)) return values;
         // Validate every accepted owner, including duplicates, before removing any G.
@@ -769,56 +766,131 @@ final class _PayloadHandleBindings
       throw StateError('Unsupported nested async payload.');
 }
 
-void _payloadTypeParts(
-  WASIComponentCanonicalAdapterFlatValuePlan? layout,
-  WASIComponentCanonicalResourceIdentity Function(int index) identity,
-  List<Object?> parts,
+// Fixed-list lengths describe values, not the size of their type metadata.
+// Walk each referenced definition once; build conversion layouts only on copy.
+bool _payloadContainsHandle(
+  WasmComponentValueType? type,
+  List<WasmComponentTypeDefinition> definitions,
+  Map<int, bool> cache,
 ) {
-  if (layout == null) {
-    parts.add(null);
-    return;
+  if (type == null) return false;
+  if (type.kind == WasmComponentValueTypeKind.primitive) {
+    return type.primitive == WasmComponentPrimitiveValueType.errorContext;
   }
-  parts.addAll([
-    layout.kind,
-    layout.primitive,
-    layout.handleKind,
-    layout.labels.length,
-    ...layout.labels,
-  ]);
-  if (layout.resourceTypeIndex != null) {
-    final type = identity(layout.resourceTypeIndex!).type;
-    if (type == null) {
+  final index = type.typeIndex!;
+  if (cache.containsKey(index)) return cache[index]!;
+  final value = definitions[index].definedValue;
+  if (value == null) throw StateError('Expected canonical payload value type.');
+  bool child(WasmComponentValueType? type) =>
+      _payloadContainsHandle(type, definitions, cache);
+  // Valid value types are acyclic. Mark before descending to bound bad input too.
+  cache[index] = false;
+  return cache[index] = switch (value.kind) {
+    WasmComponentDefinedValueTypeKind.own ||
+    WasmComponentDefinedValueTypeKind.borrow ||
+    WasmComponentDefinedValueTypeKind.stream ||
+    WasmComponentDefinedValueTypeKind.future => true,
+    WasmComponentDefinedValueTypeKind.primitive =>
+      value.primitive == WasmComponentPrimitiveValueType.errorContext,
+    _ =>
+      child(value.elementType) ||
+          child(value.keyType) ||
+          child(value.valueType) ||
+          child(value.okType) ||
+          child(value.errorType) ||
+          value.types.any(child) ||
+          value.fields.any((field) => child(field.type)) ||
+          value.cases.any((item) => child(item.type)),
+  };
+}
+
+Object? _payloadTypeKey(
+  WasmComponentValueType? type,
+  List<WasmComponentTypeDefinition> definitions,
+  WASIComponentCanonicalResourceIdentity Function(int index) identity,
+  Map<int, Object> cache,
+) {
+  if (type == null) return null;
+  if (type.kind == WasmComponentValueTypeKind.primitive) return type.primitive;
+  final index = type.typeIndex!;
+  final cached = cache[index];
+  if (cached != null) return cached;
+  final value = definitions[index].definedValue;
+  if (value == null) throw StateError('Expected canonical payload value type.');
+  Object? child(WasmComponentValueType? type) =>
+      _payloadTypeKey(type, definitions, identity, cache);
+  if (value.kind == WasmComponentDefinedValueTypeKind.primitive) {
+    return cache[index] = value.primitive!;
+  }
+  Object resource() {
+    final token = identity(value.typeIndex!).type;
+    if (token == null) {
       throw StateError('Unbound canonical async payload resource.');
     }
-    parts.add(type);
+    return token;
   }
-  parts.add(layout.fields.length);
-  for (final field in layout.fields) {
-    parts.add(field.label);
-    _payloadTypeParts(field.value, identity, parts);
-  }
-  parts.add(layout.cases.length);
-  for (final item in layout.cases) {
-    parts.add(item.label);
-    _payloadTypeParts(item.value, identity, parts);
-  }
-  _payloadTypeParts(layout.element, identity, parts);
-  _payloadTypeParts(layout.ok, identity, parts);
-  _payloadTypeParts(layout.error, identity, parts);
+
+  return cache[index] = _PayloadTypeKey([
+    value.kind,
+    ...switch (value.kind) {
+      WasmComponentDefinedValueTypeKind.own ||
+      WasmComponentDefinedValueTypeKind.borrow => [resource()],
+      WasmComponentDefinedValueTypeKind.record => [
+        for (final field in value.fields)
+          _PayloadTypeKey([field.label, child(field.type)]),
+      ],
+      WasmComponentDefinedValueTypeKind.variant => [
+        for (final item in value.cases)
+          _PayloadTypeKey([item.label, child(item.type)]),
+      ],
+      WasmComponentDefinedValueTypeKind.tuple => [
+        for (final type in value.types) child(type),
+      ],
+      WasmComponentDefinedValueTypeKind.flags ||
+      WasmComponentDefinedValueTypeKind.enumeration => value.labels,
+      WasmComponentDefinedValueTypeKind.map => [
+        child(value.keyType),
+        child(value.valueType),
+      ],
+      WasmComponentDefinedValueTypeKind.result => [
+        child(value.okType),
+        child(value.errorType),
+      ],
+      _ => [value.fixedLength, child(value.elementType)],
+    },
+  ]);
 }
 
 final class _PayloadTypeKey {
-  _PayloadTypeKey(this.parts);
+  _PayloadTypeKey(this.parts) : _hash = Object.hashAll(parts);
   final List<Object?> parts;
+  final int _hash;
   @override
-  int get hashCode => Object.hashAll(parts);
+  int get hashCode => _hash;
   @override
   bool operator ==(Object other) {
-    if (other is! _PayloadTypeKey || parts.length != other.parts.length) {
-      return false;
-    }
-    for (var i = 0; i < parts.length; i++) {
-      if (parts[i] != other.parts[i]) return false;
+    if (other is! _PayloadTypeKey) return false;
+    final pending = <(_PayloadTypeKey, _PayloadTypeKey)>[(this, other)];
+    final compared = Map<_PayloadTypeKey, Set<_PayloadTypeKey>>.identity();
+    while (pending.isNotEmpty) {
+      final (left, right) = pending.removeLast();
+      if (identical(left, right)) continue;
+      if (left._hash != right._hash ||
+          left.parts.length != right.parts.length) {
+        return false;
+      }
+      if (!(compared[left] ??= Set<_PayloadTypeKey>.identity()).add(right)) {
+        continue;
+      }
+      for (var i = 0; i < left.parts.length; i++) {
+        final a = left.parts[i];
+        final b = right.parts[i];
+        if (a is _PayloadTypeKey && b is _PayloadTypeKey) {
+          pending.add((a, b));
+        } else if (a != b) {
+          return false;
+        }
+      }
     }
     return true;
   }

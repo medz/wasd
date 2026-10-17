@@ -13,6 +13,184 @@ import 'package:wasd/src/wasm/memory.dart';
 import 'support/component_fixtures.dart' as fixtures;
 
 void main() {
+  for (final owned in [false, true]) {
+    test(
+      'huge fixed-list ${owned ? 'own' : 'pure'} endpoint initialization stays compact',
+      () async {
+        final store = _Store();
+        await _scoped(store, () {
+          final component = _types([
+            if (owned) ...[0x3f, 0x7f, 0, 0x69, 0],
+            0x67,
+            owned ? 1 : 0x7d,
+            ..._u32(owned ? 67108863 : 268435455),
+            0x66,
+            1,
+            owned ? 2 : 0,
+            0x66,
+            1,
+            owned ? 2 : 0,
+          ], owned ? 5 : 3);
+          final instance = _Instance(store, component, store.type());
+          final index = owned ? 3 : 1;
+          final pair = instance.stream(index);
+          // Equivalent aliases still require a full structural/nominal type key.
+          final endpoint = instance.handles.liftReadableEndpoint(
+            index + 1,
+            pair.readable,
+          );
+          expect(
+            instance.handles.lowerReadableEndpoint(index, endpoint),
+            pair.readable,
+          );
+          instance
+              .operation(WasmComponentCanonicalKind.streamDropReadable, index)
+              .streamDropReadableHandle(instance.backing(pair.readable));
+          instance
+              .operation(WasmComponentCanonicalKind.streamDropWritable, index)
+              .streamDropWritableHandle(instance.backing(pair.writable));
+          expect(store.table.activeCount, 0);
+        });
+      },
+    );
+  }
+
+  test(
+    'equivalent shared payload DAGs keep metadata bounded by type nodes',
+    () async {
+      final store = _Store();
+      await _scoped(store, () {
+        final definitions = <int>[];
+        const depth = 19;
+        for (var chain = 0; chain < 2; chain++) {
+          for (var level = 0; level < depth; level++) {
+            final child = level == 0 ? 0x7d : chain * depth + level - 1;
+            definitions.addAll([0x6f, 2, child, child]);
+          }
+        }
+        definitions.addAll([0x66, 1, depth - 1, 0x66, 1, 2 * depth - 1]);
+        final instance = _Instance(
+          store,
+          _types(definitions, 2 * depth + 2),
+          store.type(),
+        );
+        final pair = instance.stream(2 * depth);
+        final endpoint = instance.handles.liftReadableEndpoint(
+          2 * depth + 1,
+          pair.readable,
+        );
+        expect(
+          instance.handles.lowerReadableEndpoint(2 * depth, endpoint),
+          pair.readable,
+        );
+      });
+    },
+  );
+
+  for (final shape in [
+    (
+      name: 'primitive',
+      definitions: <int>[0x66, 1, 0x7d, 0x66, 1, 0x7b],
+      count: 2,
+      first: 0,
+      second: 1,
+    ),
+    (
+      name: 'fixed length',
+      definitions: <int>[0x67, 0x7d, 2, 0x67, 0x7d, 3, 0x66, 1, 0, 0x66, 1, 1],
+      count: 4,
+      first: 2,
+      second: 3,
+    ),
+    (
+      name: 'dynamic versus fixed list',
+      definitions: <int>[0x70, 0x7d, 0x67, 0x7d, 2, 0x66, 1, 0, 0x66, 1, 1],
+      count: 4,
+      first: 2,
+      second: 3,
+    ),
+    (
+      name: 'record label',
+      definitions: <int>[
+        0x72,
+        1,
+        1,
+        120,
+        0x7d,
+        0x72,
+        1,
+        1,
+        121,
+        0x7d,
+        0x66,
+        1,
+        0,
+        0x66,
+        1,
+        1,
+      ],
+      count: 4,
+      first: 2,
+      second: 3,
+    ),
+    (
+      name: 'tuple versus record',
+      definitions: <int>[
+        0x6f,
+        1,
+        0x7d,
+        0x72,
+        1,
+        1,
+        120,
+        0x7d,
+        0x66,
+        1,
+        0,
+        0x66,
+        1,
+        1,
+      ],
+      count: 4,
+      first: 2,
+      second: 3,
+    ),
+    (
+      name: 'option versus result',
+      definitions: <int>[0x6b, 0x7d, 0x6a, 1, 0x7d, 0, 0x66, 1, 0, 0x66, 1, 1],
+      count: 4,
+      first: 2,
+      second: 3,
+    ),
+  ]) {
+    test('payload structural key preserves ${shape.name}', () async {
+      final store = _Store();
+      await _scoped(store, () {
+        final instance = _Instance(
+          store,
+          _types(shape.definitions, shape.count),
+          store.type(),
+        );
+        final pair = instance.stream(shape.first);
+        expect(
+          () => instance.handles.liftReadableEndpoint(
+            shape.second,
+            pair.readable,
+          ),
+          throwsStateError,
+        );
+        final endpoint = instance.handles.liftReadableEndpoint(
+          shape.first,
+          pair.readable,
+        );
+        expect(
+          instance.handles.lowerReadableEndpoint(shape.first, endpoint),
+          pair.readable,
+        );
+      });
+    });
+  }
+
   for (final future in [false, true]) {
     test(
       '${future ? 'future' : 'stream'} readable endpoint cannot be owned by two instances',
@@ -905,8 +1083,18 @@ WasmComponent _types(List<int> definitions, int count) => WasmComponent.decode(
     1,
     0,
     7,
-    definitions.length + 1,
-    count,
+    ..._u32(definitions.length + _u32(count).length),
+    ..._u32(count),
     ...definitions,
   ]),
 );
+
+List<int> _u32(int value) {
+  final bytes = <int>[];
+  do {
+    final next = value & 0x7f;
+    value >>= 7;
+    bytes.add(next | (value == 0 ? 0 : 0x80));
+  } while (value != 0);
+  return bytes;
+}

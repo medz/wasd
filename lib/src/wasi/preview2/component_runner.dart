@@ -18,6 +18,7 @@ import '../component/async_host.dart';
 import '../component/canonical_handles.dart';
 import '../component/string_memory.dart';
 import '../component/subtask.dart';
+import '../component/task.dart';
 import '../component/waitable_set.dart';
 import '../component/wit_adapter.dart';
 import 'cli.dart';
@@ -1180,6 +1181,19 @@ final class WASIComponentNativeRuntime {
             return _handles.currentThread;
           }
           final hostArgs = _canonicalHostArgs(definition, args);
+          if (!isAsync &&
+              (definition.kind == WasmComponentCanonicalKind.streamRead ||
+                  definition.kind == WasmComponentCanonicalKind.streamWrite) &&
+              _componentHost.canonicalHost.taskHost.currentTask?.state ==
+                  WASIComponentTaskState.returned) {
+            (_handles.asyncBindings as WASIComponentAsyncValueBindingSet)
+                .requireImmediateStreamCopy(
+                  definition,
+                  hostArgs,
+                  memory: memory,
+                  realloc: realloc,
+                );
+          }
           final resultPointer =
               definition.kind ==
                   WasmComponentCanonicalKind.errorContextDebugMessage

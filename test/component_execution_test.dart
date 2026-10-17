@@ -13,6 +13,92 @@ import 'package:wasd/wasi.dart';
 import 'package:wasd/wasm.dart' hide Exception;
 
 void main() {
+  for (final write in [false, true]) {
+    for (final immediate in [false, true]) {
+      test(
+        'post-task sync stream ${write ? 'write' : 'read'} ${immediate ? 'rendezvous completes' : 'blocking requires continuation'}',
+        () async {
+          final component = await _encodeComponent(
+            _postTaskStreamCopy(write: write, immediate: immediate),
+          );
+          expect(component.validate(), isEmpty);
+          final host = WASIComponentHost();
+          final unhandled = <Object>[];
+          Object? observed;
+          Object? scopeFailure;
+          var calls = 0;
+          await runZonedGuarded(
+            () async {
+              try {
+                await host.table.runScoped(() async {
+                  final runtime = WASIComponentNativeRuntime.component(
+                    component: component,
+                    host: host,
+                    imports: {
+                      'entered': (_) {
+                        calls++;
+                        return null;
+                      },
+                    },
+                  );
+                  await runtime.initialize();
+                  expect(calls, 0);
+                  try {
+                    final result = await runtime
+                        .invokeExport('run', [])
+                        .timeout(const Duration(seconds: 1));
+                    expect(result, 42);
+                  } catch (error) {
+                    observed = error;
+                  }
+                  while (observed is WasmExecutionErrorContext) {
+                    observed = (observed as WasmExecutionErrorContext).cause;
+                  }
+                  expect(
+                    observed,
+                    immediate ? isNull : isA<UnsupportedError>(),
+                  );
+                  if (!immediate) {
+                    expect(observed.toString(), contains('continuation'));
+                  }
+                  expect(calls, 1, reason: 'the guest entry is never replayed');
+                  expect(
+                    await runtime.invokeExport('tail', []),
+                    immediate ? 1 : 0,
+                  );
+                  await Future<void>.delayed(Duration.zero);
+                  await runtime.invokeExport('cleanup', []);
+                  expect(await runtime.invokeExport('dropped', []), 7);
+                  expect(
+                    host.table.activeCount,
+                    0,
+                    reason: 'no pending copy or carrier survives failure',
+                  );
+                  expect(
+                    await runtime.invokeExport('thread', []),
+                    1,
+                    reason: 'the invocation thread was released',
+                  );
+                });
+              } catch (error) {
+                scopeFailure = error;
+              }
+              await Future<void>.delayed(Duration.zero);
+            },
+            (error, stack) {
+              unhandled.add(error);
+            },
+          );
+          expect(scopeFailure, isNull);
+          expect(calls, 1);
+          expect(observed, immediate ? isNull : isA<UnsupportedError>());
+          expect(host.table.activeCount, 0);
+          expect(unhandled, isEmpty);
+        },
+      );
+    }
+  }
+
   group('execution trap origin', () {
     for (final duringStart in [true, false]) {
       test('unreachable has a dedicated cause (start: $duringStart)', () async {
@@ -3396,4 +3482,90 @@ const _canonicalBorrowCancellation = r'''
   (func (export "finish") (canon lift (core func $m "finish")))
   (func (export "make-extra") (param "rep" u32) (result (own $exported)) (canon lift (core func $new)))
   (func (export "sum") (result u32) (canon lift (core func $state "sum"))))
+''';
+
+String _postTaskStreamCopy({required bool write, required bool immediate}) =>
+    '''
+(component
+  (import "entered" (func \$entered))
+  (core func \$entered (canon lower (func \$entered)))
+  (core module \$memory
+    (memory (export "mem") 1)
+    (func (export "dtor") (param i32)
+      i32.const 8 i32.const 8 i32.load local.get 0 i32.add i32.store))
+  (core instance \$memory (instantiate \$memory))
+  (type \$r (resource (rep i32) (dtor (core func \$memory "dtor"))))
+  (type \$s (stream u8))
+  (core func \$resource-new (canon resource.new \$r))
+  (core func \$resource-drop (canon resource.drop \$r))
+  (core func \$error-new (canon error-context.new (memory (core memory \$memory "mem"))))
+  (core func \$error-drop (canon error-context.drop))
+  (core func \$set-new (canon waitable-set.new))
+  (core func \$set-drop (canon waitable-set.drop))
+  (core func \$new (canon stream.new \$s))
+  (core func \$copy (canon stream.${write ? 'write' : 'read'} \$s (memory (core memory \$memory "mem"))))
+  (core func \$other (canon stream.${write ? 'read' : 'write'} \$s (memory (core memory \$memory "mem")) async))
+  (core func \$cancel (canon stream.cancel-${write ? 'read' : 'write'} \$s async))
+  (core func \$drop-r (canon stream.drop-readable \$s))
+  (core func \$drop-w (canon stream.drop-writable \$s))
+  (core func \$return (canon task.return (result u32)))
+  (core func \$thread (canon thread.index))
+  (core module \$m
+    (import "h" "entered" (func \$entered))
+    (import "h" "mem" (memory 1))
+    (import "h" "resource-new" (func \$resource-new (param i32) (result i32)))
+    (import "h" "resource-drop" (func \$resource-drop (param i32)))
+    (import "h" "error-new" (func \$error-new (param i32 i32) (result i32)))
+    (import "h" "error-drop" (func \$error-drop (param i32)))
+    (import "h" "set-new" (func \$set-new (result i32)))
+    (import "h" "set-drop" (func \$set-drop (param i32)))
+    (import "h" "new" (func \$new (result i64)))
+    (import "h" "copy" (func \$copy (param i32 i32 i32) (result i32)))
+    (import "h" "other" (func \$other (param i32 i32 i32) (result i32)))
+    (import "h" "cancel" (func \$cancel (param i32) (result i32)))
+    (import "h" "drop-r" (func \$drop-r (param i32)))
+    (import "h" "drop-w" (func \$drop-w (param i32)))
+    (import "h" "return" (func \$return (param i32)))
+    (import "h" "thread" (func \$thread (result i32)))
+    (global \$r (mut i32) (i32.const 0))
+    (global \$w (mut i32) (i32.const 0))
+    (global \$tail (mut i32) (i32.const 0))
+    (global \$resource (mut i32) (i32.const 0))
+    (global \$error (mut i32) (i32.const 0))
+    (global \$set (mut i32) (i32.const 0))
+    (func (export "run") (result i32) (local \$pair i64)
+      call \$entered
+      i32.const 7 call \$resource-new global.set \$resource
+      i32.const 0 i32.const 0 call \$error-new global.set \$error
+      call \$set-new global.set \$set
+      call \$new local.set \$pair
+      local.get \$pair i32.wrap_i64 global.set \$r
+      local.get \$pair i64.const 32 i64.shr_u i32.wrap_i64 global.set \$w
+      ${immediate ? 'global.get \$${write ? 'r' : 'w'} i32.const 0 i32.const 1 call \$other drop' : ''}
+      i32.const 42 call \$return
+      global.get \$${write ? 'w' : 'r'} i32.const 16 i32.const 1 call \$copy drop
+      i32.const 1 global.set \$tail i32.const 0)
+    (func (export "callback") (param i32 i32 i32) (result i32) unreachable)
+    (func (export "tail") (result i32) global.get \$tail)
+    (func (export "thread") (result i32) call \$thread)
+    (func (export "dropped") (result i32) i32.const 8 i32.load)
+    (func (export "cleanup")
+      ${immediate ? 'global.get \$${write ? 'r' : 'w'} call \$cancel drop' : ''}
+      global.get \$r call \$drop-r global.get \$w call \$drop-w
+      global.get \$set call \$set-drop global.get \$error call \$error-drop
+      global.get \$resource call \$resource-drop))
+  (core instance \$h (export "entered" (func \$entered)) (export "new" (func \$new))
+    (export "mem" (memory \$memory "mem"))
+    (export "resource-new" (func \$resource-new)) (export "resource-drop" (func \$resource-drop))
+    (export "error-new" (func \$error-new)) (export "error-drop" (func \$error-drop))
+    (export "set-new" (func \$set-new)) (export "set-drop" (func \$set-drop))
+    (export "copy" (func \$copy)) (export "other" (func \$other)) (export "cancel" (func \$cancel))
+    (export "drop-r" (func \$drop-r)) (export "drop-w" (func \$drop-w))
+    (export "return" (func \$return)) (export "thread" (func \$thread)))
+  (core instance \$m (instantiate \$m (with "h" (instance \$h))))
+  (func (export "run") async (result u32) (canon lift (core func \$m "run") async (callback (core func \$m "callback"))))
+  (func (export "tail") (result u32) (canon lift (core func \$m "tail")))
+  (func (export "dropped") (result u32) (canon lift (core func \$m "dropped")))
+  (func (export "thread") (result u32) (canon lift (core func \$m "thread")))
+  (func (export "cleanup") (canon lift (core func \$m "cleanup"))))
 ''';

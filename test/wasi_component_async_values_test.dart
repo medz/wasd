@@ -2,6 +2,42 @@ import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/async_values.dart';
 
 void main() {
+  for (final terminal in [
+    'cancel reader',
+    'cancel writer',
+    'drop reader',
+    'drop writer',
+  ]) {
+    test('terminal stream copy is immediately observable: $terminal', () async {
+      final stream = WASIComponentStream<int>(
+        'terminal',
+        maxBufferedElements: 0,
+      );
+      expect(stream.readable.canReadImmediatelyForCopy, isFalse);
+      switch (terminal) {
+        case 'cancel reader':
+          stream.readable.cancel();
+        case 'cancel writer':
+          stream.writable.cancel();
+        case 'drop reader':
+          stream.readable.drop();
+        case 'drop writer':
+          stream.writable.drop();
+      }
+      expect(stream.readable.canReadImmediatelyForCopy, isTrue);
+      if (terminal == 'drop writer') {
+        expect(await stream.readable.readWhenAvailableForCopy(1), isEmpty);
+      } else {
+        await expectLater(
+          Future.sync(() => stream.readable.readWhenAvailableForCopy(1)),
+          throwsStateError,
+        );
+      }
+      stream.readable.dispose();
+      stream.writable.dispose();
+    });
+  }
+
   group('canonical same-owner copies', () {
     test(
       'reader-first stream traps before loading a same-owner source',

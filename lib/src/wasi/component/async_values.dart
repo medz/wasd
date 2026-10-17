@@ -2933,6 +2933,9 @@ extension WASIComponentCanonicalStreamReadiness<T>
   bool get canReadImmediatelyForCopy =>
       hasQueuedValues ||
       isEndOfStream ||
+      _state.writeCancelled ||
+      isCancelled ||
+      isDropped ||
       (_state.maxBufferedElements == 0 &&
           (_state.writeWaiters?.isNotEmpty ?? false));
 }
