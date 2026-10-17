@@ -351,7 +351,7 @@ final class WASIComponentResourceTable {
       final handle = _allocateHandle();
       final slot = _slots[slotIndex];
       slot.entry = source.borrowedAlias(
-        _WASIComponentCanonicalBorrow(source, scope),
+        _WASIComponentCanonicalBorrow(sourceHandle, source, scope),
         aliasScope,
       );
       _handleToSlot[handle] = slotIndex;
@@ -367,11 +367,12 @@ final class WASIComponentResourceTable {
   }
 
   /// Records that [childHandle] must be released before [parentHandle].
+  /// Canonical borrow aliases resolve to the actual owning parent.
   void attachChild(int parentHandle, int childHandle) {
     if (parentHandle == childHandle) {
       throw StateError('A WASI component resource cannot be its own child.');
     }
-    final parent = _entryForHandle(parentHandle);
+    var parent = _entryForHandle(parentHandle);
     final child = _entryForHandle(childHandle);
     if (parent == null) {
       throw StateError(
@@ -383,6 +384,20 @@ final class WASIComponentResourceTable {
     }
     _validateScopeAccess(parentHandle, parent);
     _validateScopeAccess(childHandle, child);
+    while (parent!._canonicalBorrow != null) {
+      final borrow = parent._canonicalBorrow!;
+      parentHandle = borrow.sourceHandle;
+      parent = _entryForHandle(parentHandle);
+      if (parent == null || !identical(parent, borrow.source)) {
+        throw StateError(
+          'Unknown WASI component borrow source: $parentHandle.',
+        );
+      }
+      _validateScopeAccess(parentHandle, parent);
+    }
+    if (parentHandle == childHandle) {
+      throw StateError('A WASI component resource cannot be its own child.');
+    }
     if (!identical(parent.scope, child.scope)) {
       throw StateError(
         'WASI component parent and child resources must belong to the same '
@@ -698,8 +713,9 @@ final class _WASIComponentResourceEntry<T extends Object> {
 }
 
 final class _WASIComponentCanonicalBorrow {
-  _WASIComponentCanonicalBorrow(this.source, this.scope);
+  _WASIComponentCanonicalBorrow(this.sourceHandle, this.source, this.scope);
 
+  final int sourceHandle;
   final _WASIComponentResourceEntry source;
   final WASIComponentCanonicalBorrowScope scope;
   bool _released = false;

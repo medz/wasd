@@ -5,6 +5,97 @@ import 'package:wasd/src/wasi/component/resource_table.dart';
 
 void main() {
   group('WASIComponentResourceTable', () {
+    test('canonical borrow parents retain self and cycle checks', () {
+      final table = WASIComponentResourceTable();
+      final type = table.defineType<String>('resource');
+      final parent = table.insert(type, 'parent');
+      final child = table.insert(type, 'child');
+      table.attachChild(parent, child);
+      final call = table.createBorrowCallScope();
+      final parentAlias = call.lowerHandle(parent);
+      final childAlias = call.lowerHandle(child);
+      expect(() => table.attachChild(parentAlias, parent), throwsStateError);
+      expect(() => table.attachChild(childAlias, parent), throwsStateError);
+      call.close();
+      expect(() => table.drop(type, parent), throwsStateError);
+      table.drop(type, child);
+      table.drop(type, parent);
+      expect(table.activeCount, 0);
+    });
+
+    test(
+      'canonical borrow parents retain allocation scope boundaries',
+      () async {
+        final table = WASIComponentResourceTable();
+        final type = table.defineType<String>('resource');
+        final call = table.createBorrowCallScope();
+        late int parent, alias, child;
+        late WASIComponentResourceScopeLease parentLease, childLease;
+        await table.runScoped(() {
+          parent = table.insert(type, 'parent');
+          alias = call.lowerHandle(parent);
+          parentLease = table.retainCurrentScope();
+        });
+        await table.runScoped(() {
+          child = table.insert(type, 'child');
+          childLease = table.retainCurrentScope();
+        });
+        expect(() => table.attachChild(alias, child), throwsStateError);
+        call.close();
+        table.drop(type, child);
+        table.drop(type, parent);
+        childLease.release();
+        parentLease.release();
+        expect(table.activeCount, 0);
+      },
+    );
+
+    for (final chained in [false, true]) {
+      for (final existingChild in [false, true]) {
+        test(
+          'children derived from canonical borrows retain their owner ($chained/$existingChild)',
+          () {
+            final table = WASIComponentResourceTable();
+            final dropped = <String>[];
+            final type = table.defineType<String>(
+              'resource',
+              onDrop: dropped.add,
+            );
+            final owner = table.insert(type, 'owner');
+            final existing = existingChild
+                ? table.insert(type, 'existing')
+                : null;
+            if (existing != null) table.attachChild(owner, existing);
+            final first = table.createBorrowCallScope();
+            final firstAlias = first.lowerHandle(owner);
+            final second = chained ? table.createBorrowCallScope() : null;
+            final alias = second?.lowerHandle(firstAlias) ?? firstAlias;
+            final child = table.insert(type, 'child');
+            table.attachChild(alias, child);
+            second?.close();
+            first.close();
+            expect(table.contains(firstAlias), isFalse);
+            expect(table.contains(alias), isFalse);
+            expect(table.get(type, child), 'child');
+            expect(
+              dropped,
+              isEmpty,
+              reason: 'releasing a borrow never drops its owner or child',
+            );
+            expect(() => table.drop(type, owner), throwsStateError);
+            table.drop(type, child);
+            if (existing != null) {
+              expect(() => table.drop(type, owner), throwsStateError);
+              table.drop(type, existing);
+            }
+            table.drop(type, owner);
+            expect(dropped, ['child', if (existingChild) 'existing', 'owner']);
+            expect(table.activeCount, 0);
+          },
+        );
+      }
+    }
+
     test('allocates typed resources and rejects wrong resource types', () {
       final table = WASIComponentResourceTable();
       final cliType = table.defineType<String>('cli');
