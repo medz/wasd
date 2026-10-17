@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/memory.dart' as wasm;
 import 'current.dart';
+import 'execution.dart';
 import 'resource_table.dart';
 
 /// Resolves an externally owned component handle to a waitable, when possible.
@@ -275,7 +276,7 @@ final class WASIComponentWaitable {
     final waiter = Completer<void>();
     _pendingEventWaiter = waiter;
     try {
-      await waiter.future;
+      await WASIComponentGuestCall.suspend(waiter.future);
     } finally {
       if (identical(_pendingEventWaiter, waiter)) {
         _pendingEventWaiter = null;
@@ -339,8 +340,7 @@ final class WASIComponentWaitableSet {
   final String _name;
   final LinkedHashSet<WASIComponentWaitable> _waitables =
       LinkedHashSet<WASIComponentWaitable>.identity();
-  final Queue<Completer<WASIComponentWaitableEvent>> _waiters =
-      Queue<Completer<WASIComponentWaitableEvent>>();
+  final Queue<Completer<void>> _waiters = Queue<Completer<void>>();
 
   /// Debug label used in diagnostics.
   String get name => _name;
@@ -364,39 +364,43 @@ final class WASIComponentWaitableSet {
   }
 
   /// Waits until any member has a pending event.
-  Future<WASIComponentWaitableEvent> wait() {
-    final event = poll();
-    if (!event.isNone) {
-      return Future<WASIComponentWaitableEvent>.value(event);
+  Future<WASIComponentWaitableEvent> wait() async {
+    while (true) {
+      final event = poll();
+      if (!event.isNone) return event;
+      final waiter = Completer<void>();
+      _waiters.addLast(waiter);
+      try {
+        await WASIComponentGuestCall.suspend(waiter.future);
+      } finally {
+        _waiters.remove(waiter);
+        _completePendingWaiters();
+      }
     }
-
-    final completer = Completer<WASIComponentWaitableEvent>();
-    _waiters.addLast(completer);
-    return completer.future;
   }
 
-  /// Waits until a member has a pending event or [interrupt] completes.
-  ///
-  /// If [interrupt] wins, the internal set waiter is removed so the set can be
-  /// dropped once the interrupt event has been delivered.
+  /// Waits for readiness or interruption, delivering only on the guest's turn.
   Future<WASIComponentWaitableEvent> waitUntil(
     Future<WASIComponentWaitableEvent> interrupt,
-  ) {
-    final event = poll();
-    if (!event.isNone) {
-      return Future<WASIComponentWaitableEvent>.value(event);
-    }
-
-    final completer = Completer<WASIComponentWaitableEvent>();
-    _waiters.addLast(completer);
-    return Future.any<WASIComponentWaitableEvent>(
-      <Future<WASIComponentWaitableEvent>>[completer.future, interrupt],
-    ).then((event) {
-      if (!completer.isCompleted) {
-        _waiters.remove(completer);
+  ) async {
+    while (true) {
+      final event = poll();
+      if (!event.isNone) return event;
+      final waiter = Completer<void>();
+      _waiters.addLast(waiter);
+      try {
+        final ready = await WASIComponentGuestCall.suspend(
+          Future.any<WASIComponentWaitableEvent>([
+            waiter.future.then((_) => WASIComponentWaitableEvent.none),
+            interrupt,
+          ]),
+        );
+        if (!ready.isNone) return ready;
+      } finally {
+        _waiters.remove(waiter);
+        _completePendingWaiters();
       }
-      return event;
-    });
+    }
   }
 
   /// Validates this set can be dropped.
@@ -438,28 +442,8 @@ final class WASIComponentWaitableSet {
   }
 
   void _completePendingWaiters() {
-    while (_waiters.isNotEmpty) {
-      final waitable = _firstPendingWaitable();
-      if (waitable == null) {
-        return;
-      }
-      final waiter = _waiters.removeFirst();
-      late final WASIComponentWaitableEvent event;
-      try {
-        event = waitable.takePendingEvent();
-      } on Object catch (error, stackTrace) {
-        if (!waiter.isCompleted) {
-          waiter.completeError(error, stackTrace);
-        }
-        continue;
-      }
-      if (event.isNone) {
-        _waiters.addFirst(waiter);
-        return;
-      }
-      if (!waiter.isCompleted) {
-        waiter.complete(event);
-      }
+    if (_waiters.isNotEmpty && hasPendingEvent) {
+      _waiters.removeFirst().complete();
     }
   }
 }

@@ -70,6 +70,8 @@ final class WASIComponentTask
   int _borrowCount = 0;
   bool _hasResult = false;
   Object? _result;
+  Object? Function(Object? result)? _liftResult;
+  void Function(Object? result)? _onResolved;
 
   /// Debug label used in diagnostics.
   String get name => _name;
@@ -187,10 +189,12 @@ final class WASIComponentTask
   void returnResult({Object? result, bool hasResult = false}) {
     _requireNotResolved();
     _requireNoBorrows('return');
+    final lifted = _liftResult == null ? result : _liftResult!(result);
     _state = WASIComponentTaskState.returned;
     _hasResult = hasResult;
-    _result = result;
-    _subtask?.markReturned(result: result, hasResult: hasResult);
+    _result = lifted;
+    _subtask?.markReturned(result: lifted, hasResult: hasResult);
+    _onResolved?.call(lifted);
   }
 
   /// Executes `task.cancel`.
@@ -203,6 +207,7 @@ final class WASIComponentTask
     }
     _requireNoBorrows('cancel');
     _state = WASIComponentTaskState.cancelled;
+    _onResolved?.call(null);
     final subtask = _subtask;
     if (subtask == null) {
       return;
@@ -540,4 +545,16 @@ int _expectPointer(int canonicalIndex, Object? value) {
   throw StateError(
     'WASI component canonical task index $canonicalIndex expected a memory pointer.',
   );
+}
+
+/// Internal execution hooks for task.return snapshots and caller resolution.
+extension WASIComponentCanonicalTaskExecution on WASIComponentTask {
+  /// Installs the lift while preserving the standalone host task behavior.
+  void bindCanonicalExecution({
+    required Object? Function(Object? result) liftResult,
+    required void Function(Object? result) onResolved,
+  }) {
+    _liftResult = liftResult;
+    _onResolved = onResolved;
+  }
 }

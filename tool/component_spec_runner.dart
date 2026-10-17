@@ -51,6 +51,17 @@ const _frozenSources = {
     'returns': 13,
     'traps': 3,
   },
+  'test/async/sync-streams.wast': {
+    'path': 'test/async/sync-streams.wast',
+    'blob': '5eb1b7a02aaa0b8a94436c4fbc4573ae31530d7b',
+    'sha256':
+        'bcf37448f4495e986adbd17915060ed6b7cce7e5c0fa11b8c3a4cce2b08919e1',
+    'commands': 2,
+    'instantiations': 1,
+    'definitions': 0,
+    'returns': 1,
+    'traps': 0,
+  },
 };
 
 /// Recognizes only the three string trap categories used by the frozen file.
@@ -330,6 +341,9 @@ Future<Map<String, Object?>> executeComponentSpecScript(
   final host = WASIComponentHost();
   final definitions = <String, WasmComponent>{};
   final failedDefinitions = <String, int>{};
+  final runtimes = <WASIComponentNativeRuntime>[];
+  final observedFailures = Set<Object>.identity();
+  final lastCommands = <WASIComponentNativeRuntime, Map<String, Object?>>{};
   WASIComponentNativeRuntime? current;
   int? failedCurrent;
   final commands = script['commands'];
@@ -413,6 +427,8 @@ Future<Map<String, Object?>> executeComponentSpecScript(
                 component: component,
                 host: host,
               );
+              runtimes.add(runtime);
+              lastCommands[runtime] = record;
               record['phase'] = 'initialize';
               await runtime.initialize();
               current = runtime;
@@ -447,6 +463,8 @@ Future<Map<String, Object?>> executeComponentSpecScript(
               component: component,
               host: host,
             );
+            runtimes.add(runtime);
+            lastCommands[runtime] = record;
             record['phase'] = 'initialize';
             await runtime.initialize();
             current = runtime;
@@ -565,6 +583,12 @@ Future<Map<String, Object?>> executeComponentSpecScript(
                 await runtime.initialize();
               } catch (error) {
                 initializationError = error;
+              } finally {
+                try {
+                  await runtime.dispose();
+                } catch (error) {
+                  initializationError ??= error;
+                }
               }
             });
             if (initializationError == null) {
@@ -618,6 +642,7 @@ Future<Map<String, Object?>> executeComponentSpecScript(
               }
               throw StateError('No initialized component.');
             }
+            lastCommands[runtime] = record;
             final name = action['field'] as String;
             final context = _exportType(runtime.component, name);
             final params = context.functionType.params;
@@ -683,6 +708,7 @@ Future<Map<String, Object?>> executeComponentSpecScript(
                 await runtime.invokeExport(name, args);
               } catch (error) {
                 invocationError = error;
+                observedFailures.add(error);
               }
               if (invocationError == null) {
                 throw StateError('Invocation did not trap.');
@@ -713,12 +739,38 @@ Future<Map<String, Object?>> executeComponentSpecScript(
         record['passed'] = true;
         record['status'] = 'passed';
       } catch (error) {
+        observedFailures.add(error);
         if (error is UnsupportedError && record['status'] == 'failed') {
           record['status'] = 'unsupported';
           record['failure_kind'] = 'unsupported_feature';
         }
         record['error'] = error.toString();
         record['error_type'] = error.runtimeType.toString();
+      }
+    }
+    for (final runtime in runtimes) {
+      void recordFailure(Object error) {
+        if (!observedFailures.add(error)) return;
+        final command = lastCommands[runtime]!;
+        command.addAll({
+          'passed': false,
+          'status': 'failed',
+          'phase': 'settle',
+          'error': error.toString(),
+          'error_type': error.runtimeType.toString(),
+        });
+      }
+
+      try {
+        await runtime.settle();
+      } catch (error) {
+        recordFailure(error);
+      } finally {
+        try {
+          await runtime.dispose();
+        } catch (error) {
+          recordFailure(error);
+        }
       }
     }
   });

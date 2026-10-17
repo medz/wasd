@@ -36,6 +36,9 @@ final class WASIComponentCanonicalBorrowCallScope
   int _activeBorrows = 0;
   bool _closed = false;
 
+  /// Number of aliases still borrowed by this call.
+  int get activeBorrows => _activeBorrows;
+
   /// Lowers [sourceHandle] into this call and returns its borrowed alias.
   int lowerHandle(int sourceHandle) {
     if (_closed) {
@@ -157,6 +160,10 @@ final class WASIComponentResourceTable {
     }
     return scope.retain();
   }
+
+  /// Retains an ambient allocation scope when the embedder supplied one.
+  WASIComponentResourceScopeLease? retainCanonicalScope() =>
+      _currentScope?.retain();
 
   /// Creates an auto-cleaned canonical borrow scope for one sync call.
   WASIComponentCanonicalBorrowCallScope createBorrowCallScope() =>

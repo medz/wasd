@@ -78,6 +78,49 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    for (final interruptible in [false, true]) {
+      test(
+        'wait rechecks readiness after another poll interruptible=$interruptible',
+        () async {
+          final set = WASIComponentWaitableSet('readiness');
+          final waitable = WASIComponentWaitable('event')..join(set);
+          final interrupt = Completer<WASIComponentWaitableEvent>();
+          var completed = false;
+          final pending =
+              (interruptible ? set.waitUntil(interrupt.future) : set.wait())
+                ..then((_) {
+                  completed = true;
+                });
+          waitable.setPendingEvent(
+            () => const WASIComponentWaitableEvent(
+              code: WASIComponentWaitableEventCode.futureWrite,
+              payload1: 41,
+              payload2: 0,
+            ),
+          );
+          expect(set.poll().payload1, 41);
+          try {
+            await Future<void>.delayed(Duration.zero);
+            expect(completed, isFalse);
+          } finally {
+            waitable.setPendingEvent(
+              () => const WASIComponentWaitableEvent(
+                code: WASIComponentWaitableEventCode.futureWrite,
+                payload1: 42,
+                payload2: 0,
+              ),
+            );
+            await pending;
+            set.poll();
+            waitable.join(null);
+            set.requireDroppable();
+            set.dispose();
+          }
+          expect((await pending).payload1, 42);
+        },
+      );
+    }
+
     test('propagates pending event failures and removes the waiter', () async {
       final host = WASIComponentWaitableHost();
       final set = host.waitableSetNew();

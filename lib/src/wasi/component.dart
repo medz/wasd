@@ -3,6 +3,8 @@ export 'component/adapter_host.dart'
         liftWASIComponentCanonicalMemoryHandles,
         lowerWASIComponentCanonicalMemoryHandles,
         WASIComponentCanonicalAsyncLowerLifetime,
+        WASIComponentCanonicalLowerExecution,
+        WASIComponentCanonicalLowerResult,
         WASIComponentCanonicalValueDiscard,
         WASIComponentCanonicalAdapterBindings;
 export 'component/adapter_plan.dart';
@@ -40,7 +42,7 @@ export 'component/resource_table.dart'
         WASIComponentCanonicalHandleOwner;
 export 'component/string_memory.dart';
 export 'component/subtask.dart' hide WASIComponentCanonicalSubtaskDelivery;
-export 'component/task.dart';
+export 'component/task.dart' hide WASIComponentCanonicalTaskExecution;
 export 'component/thread.dart';
 export 'component/unicode_scalar.dart' hide WASIComponentInvalidCharException;
 export 'component/value_memory.dart'

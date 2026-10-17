@@ -823,6 +823,20 @@ void main() {
     });
   });
 
+  test('standalone Core trap leaves its instance callable', () async {
+    final bytes = base64Decode(
+      'AGFzbQEAAAABBgFgAX8BfwMCAQAHCQEFcHJvYmUAAAoMAQoAIAAEQAALQSoL',
+    );
+    final result = await WebAssembly.instantiate(bytes.buffer);
+    final probe =
+        (result.instance.exports['probe']! as FunctionImportExportValue).ref;
+    await expectLater(
+      Future<Object?>.sync(() => probe([1])),
+      throwsA(anything),
+    );
+    expect(probe([0]), 42);
+  });
+
   group('Instance exports', () {
     late Instance instance;
 

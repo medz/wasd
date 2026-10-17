@@ -38,6 +38,44 @@ Future<Map<String, Object?>> _run(Map<String, dynamic> script) =>
     runner.executeComponentSpecScript(script, directory: Directory(_fixture));
 
 void main() {
+  test('official sync-streams returns 42 after caller continuation', () async {
+    final directory = Directory('test/fixtures/component_spec/sync_streams');
+    final binary = File('${directory.path}/script.0.wasm').readAsBytesSync();
+    expect(
+      sha256.convert(binary).toString(),
+      'b8c9769becaf9aab0d89460c9c2e6fa559ece766ce812efc49b1eb13cc9cd555',
+    );
+    final scriptBytes = File('${directory.path}/script.json').readAsBytesSync();
+    expect(
+      sha256.convert(scriptBytes).toString(),
+      '3ecdacc33e0f3688a8bedbcec88b52e95fd2820163f106f023334a5dff56e02c',
+    );
+    final script = jsonDecode(utf8.decode(scriptBytes)) as Map<String, dynamic>;
+    expect(script['commands'], hasLength(2));
+    final report = await runner
+        .executeComponentSpecScript(script, directory: directory)
+        .timeout(const Duration(seconds: 2));
+    final records = report['commands'] as List;
+    expect(records, hasLength(2));
+    expect(records[0]['phase'], 'initialize');
+    expect(records[0]['status'], 'passed');
+    expect(records[1]['type'], 'assert_return');
+    expect(records[1]['export'], 'run');
+    expect(
+      records[1]['status'],
+      'passed',
+      reason:
+          'The original full call must return u32 42: ${jsonEncode(records[1])}',
+    );
+    final totals = report['totals'] as Map;
+    expect(totals['commands_seen'], 2);
+    expect(totals['commands_passed'], 2);
+    expect(totals['returns_passed'], 1);
+    expect(totals['commands_unsupported'], 0);
+    expect(totals['commands_not_executed'], 0);
+    expect(totals['commands_skipped'], 0);
+  });
+
   group('negative spec commands', () {
     late Directory directory;
     setUp(() async {
@@ -482,21 +520,21 @@ void main() {
     expect(totals['traps_passed'], 5);
   });
 
-  test('three complete frozen files execute all 59 commands', () async {
+  test('four complete frozen files execute all 61 commands', () async {
     final report = await runner.runComponentSpecManifest(
       File('test/fixtures/component_spec/manifest.json'),
       usePreparedInputs: true,
     );
     expect(report['status'], 'passed');
     final totals = report['totals'] as Map;
-    expect(totals['files_total'], 3);
-    expect(totals['files_passed'], 3);
-    expect(totals['commands_passed'], 59);
+    expect(totals['files_total'], 4);
+    expect(totals['files_passed'], 4);
+    expect(totals['commands_passed'], 61);
     expect(totals['commands_failed'], 0);
     expect(totals['commands_skipped'], 0);
-    expect(totals['instantiations_passed'], 23);
+    expect(totals['instantiations_passed'], 24);
     expect(totals['definitions_passed'], 5);
-    expect(totals['returns_passed'], 19);
+    expect(totals['returns_passed'], 20);
     expect(totals['traps_passed'], 12);
   });
 
@@ -1748,6 +1786,7 @@ Map<String, Object?> _next(String value) => {
 Future<Directory> _copyFixtures({
   bool stringsOnly = true,
   bool includeRealloc = false,
+  bool includeSyncStreams = false,
 }) async {
   final temp = await Directory.systemTemp.createTemp(
     'wasd-component-manifest-',
@@ -1765,6 +1804,11 @@ Future<Directory> _copyFixtures({
   if (stringsOnly) {
     inventory['files'] = (inventory['files'] as List)
         .where((entry) => entry['path'] == 'test/values/strings.wast')
+        .toList();
+  }
+  if (!includeSyncStreams) {
+    inventory['files'] = (inventory['files'] as List)
+        .where((entry) => entry['path'] != 'test/async/sync-streams.wast')
         .toList();
   }
   if (!includeRealloc) {
