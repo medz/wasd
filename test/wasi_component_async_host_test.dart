@@ -13,6 +13,130 @@ import 'support/component_fixtures.dart' as component_fixtures;
 import 'support/runtime_environment.dart';
 
 void main() {
+  for (final mode in ['empty', 'zero', 'prefix', 'pending']) {
+    for (final viaProgram in [false, true]) {
+      test(
+        'cancelled producer memory read: $mode program=$viaProgram',
+        () async {
+          final component = WasmComponent.decode(
+            _streamU32TypeComponentBytes(),
+          );
+          final host = WASIComponentAsyncHost()
+            ..defineStreamTypeFromComponent<int>(component, 0, 'cancelled');
+          final stream = WASIComponentStream<int>('cancelled');
+          final memory = Memory(const MemoryDescriptor(initial: 1));
+          final data = ByteData.view(memory.buffer)
+            ..setUint32(32, 0x12345678, Endian.little);
+          try {
+            await host.table.runScoped(() async {
+              final handle = host.lowerReadableEndpoint(0, stream.readable);
+              final operation = host.bindCanonicalDefinition(
+                _asyncDefinition(WasmComponentCanonicalKind.streamRead),
+              );
+              final program = WASIComponentCanonicalAsyncHandleProgram(
+                operations: [operation],
+              );
+              Future<int> read(int count) => viaProgram
+                  ? program
+                        .invokeWithMemoryAsync(0, memory, [handle, 32, count])
+                        .then((value) => value! as int)
+                  : operation
+                        .streamReadHandleToMemoryWhenAvailable(
+                          handle,
+                          memory,
+                          32,
+                          count,
+                        )
+                        .then((value) => value.packedResult);
+              if (mode == 'prefix') stream.writable.write(41);
+              if (mode != 'pending') stream.writable.cancel();
+              if (mode == 'empty') {
+                expect(
+                  operation
+                      .streamReadHandleToMemory(handle, memory, 32, 1)
+                      .packedResult,
+                  2,
+                );
+              }
+              final pending = read(mode == 'zero' ? 0 : 1);
+              if (mode == 'pending') stream.writable.cancel();
+              expect(await pending, switch (mode) {
+                'zero' => 0,
+                'prefix' => 16,
+                _ => 2,
+              });
+              expect(
+                data.getUint32(32, Endian.little),
+                mode == 'prefix' ? 41 : 0x12345678,
+              );
+              if (mode == 'zero' || mode == 'prefix') expect(await read(1), 2);
+              expect(stream.readable.requireCopyIdle, returnsNormally);
+            });
+          } finally {
+            stream.readable.dispose();
+            stream.writable.dispose();
+          }
+          expect(host.table.activeCount, 0);
+        },
+      );
+    }
+  }
+
+  for (final queued in [false, true]) {
+    test(
+      'read allocation failures stay asynchronous: queued=$queued',
+      () async {
+        final component = WasmComponent.decode(
+          _streamStringTypeComponentBytes(),
+        );
+        final host = WASIComponentAsyncHost()
+          ..defineStreamTypeFromComponent<String>(component, 0, 'strings');
+        final stream = WASIComponentStream<String>('strings');
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        final failure = StateError('allocator sentinel');
+        final originalStack = StackTrace.fromString('allocator original stack');
+        try {
+          await host.table.runScoped(() async {
+            final handle = host.lowerReadableEndpoint(0, stream.readable);
+            final operation = host.bindCanonicalDefinition(
+              _asyncDefinition(WasmComponentCanonicalKind.streamRead),
+            );
+            if (queued) stream.writable.write('go');
+            late Future<WASIComponentAsyncCopyResult> pending;
+            expect(() {
+              pending = operation.streamReadHandleToMemoryWhenAvailable(
+                handle,
+                memory,
+                32,
+                1,
+                (_, _, _, _) =>
+                    Error.throwWithStackTrace(failure, originalStack),
+              );
+            }, returnsNormally);
+            Object? observed;
+            StackTrace? observedStack;
+            final settled = pending.then<void>(
+              (_) => fail('ordinary errors must not become copy results'),
+              onError: (Object error, StackTrace stack) {
+                observed = error;
+                observedStack = stack;
+              },
+            );
+            if (!queued) stream.writable.write('go');
+            await settled;
+            expect(observed, same(failure));
+            expect(observedStack.toString(), originalStack.toString());
+            expect(stream.readable.requireCopyIdle, returnsNormally);
+          });
+        } finally {
+          stream.readable.dispose();
+          stream.writable.dispose();
+        }
+        expect(host.table.activeCount, 0);
+      },
+    );
+  }
+
   for (final mode in ['queued read', 'pending read', 'write source']) {
     test('canonical Object registry copies a host int stream: $mode', () async {
       final component = WasmComponent.decode(_streamU32TypeComponentBytes());

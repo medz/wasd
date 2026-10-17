@@ -933,9 +933,9 @@ final class _WASIComponentStreamState<T> {
           Error.throwWithStackTrace(error, stackTrace);
         },
       );
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (!deferCompletion) _resetReadCopy();
-      rethrow;
+      return Future<int>.error(error, stackTrace);
     }
   }
 

@@ -201,7 +201,11 @@ final class WASIComponentSubtask {
     _resolveDelivered = true;
     final release = _onResolveDelivered;
     _onResolveDelivered = null;
-    release?.call();
+    try {
+      release?.call();
+    } catch (_) {
+      if (_failure == null) rethrow;
+    }
     final failure = _failure;
     if (failure != null) {
       Error.throwWithStackTrace(

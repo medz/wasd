@@ -8,6 +8,83 @@ import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
 
 void main() {
+  for (final viaEvent in [false, true]) {
+    for (final failed in [false, true]) {
+      for (final cleanupFails in [false, true]) {
+        test(
+          'subtask delivery preserves failure: event=$viaEvent failed=$failed cleanup=$cleanupFails',
+          () {
+            final original = StateError('original failure');
+            final originalStack = StackTrace.fromString(
+              'original failure stack',
+            );
+            final cleanup = StateError('cleanup failure');
+            final cleanupStack = StackTrace.fromString('cleanup failure stack');
+            var releases = 0;
+            final subtask = WASIComponentSubtask();
+            subtask.retainCanonicalBorrows(() {
+              releases++;
+              if (cleanupFails) {
+                Error.throwWithStackTrace(cleanup, cleanupStack);
+              }
+            });
+            final host = WASIComponentSubtaskHost();
+            final waits = WASIComponentWaitableHost(
+              table: host.table,
+              waitableResolvers: [host.waitableForHandle],
+            );
+            final memory = Memory(const MemoryDescriptor(initial: 1));
+            final handle = viaEvent ? host.insertSubtask(subtask) : 0;
+            final set = viaEvent ? waits.waitableSetNew() : 0;
+            if (viaEvent) waits.waitableJoin(handle, set);
+            if (failed) {
+              subtask.markFailed(original, originalStack);
+            } else {
+              subtask.markReturned(result: 42, hasResult: true);
+            }
+            Object? observed;
+            StackTrace? observedStack;
+            int? result;
+            try {
+              result = viaEvent
+                  ? waits.waitableSetPollToMemory(set, memory, 32)
+                  : subtask.deliverCanonicalResolve();
+            } catch (error, stack) {
+              observed = error;
+              observedStack = stack;
+            }
+            expect(subtask.resolveDelivered, isTrue);
+            expect(releases, 1);
+            if (viaEvent) {
+              expect(waits.waitableSetPollToMemory(set, memory, 32), 0);
+              waits.waitableJoin(handle, 0);
+              waits.waitableSetDrop(set);
+              host.subtaskDrop(handle);
+            }
+            expect(() => subtask.deliverCanonicalResolve(), throwsStateError);
+            expect(releases, 1);
+            expect(host.table.activeCount, 0);
+            if (failed) {
+              expect(observed, same(original));
+              expect(observedStack.toString(), originalStack.toString());
+            } else if (cleanupFails) {
+              expect(observed, same(cleanup));
+              expect(observedStack.toString(), cleanupStack.toString());
+            } else {
+              expect(observed, isNull);
+              expect(
+                result,
+                viaEvent
+                    ? WASIComponentWaitableEventCode.subtask.value
+                    : WASIComponentSubtaskState.returned.code,
+              );
+            }
+          },
+        );
+      }
+    }
+  }
+
   group('WASIComponentSubtaskHost', () {
     test('returns already resolved subtask states from cancel', () {
       final host = WASIComponentSubtaskHost();
