@@ -13,6 +13,96 @@ import 'package:wasd/wasi.dart';
 import 'package:wasd/wasm.dart' hide Exception;
 
 void main() {
+  for (final (nested, fails) in [
+    (false, false),
+    (false, true),
+    (true, false),
+    (true, true),
+  ]) {
+    test(
+      'cancelled error-context call retains arguments until settlement nested=$nested fails=$fails',
+      () async {
+        final component = await _encodeComponent(
+          _canonicalErrorContextCancellation(fails, nested),
+          validate: true,
+        );
+        expect(component.validate(), isEmpty);
+        final host = WASIComponentHost();
+        var observed = 0;
+        var length = -1;
+        late int earlyPoll;
+        late int earlyCarriers;
+        late int finalPoll;
+        late int eventState;
+        List<int> carriers() => [
+          for (var h = 1; h <= 32; h++)
+            if (_errorContextMessage(host, h) == 'kept') h,
+        ];
+        await host.table.runScoped(() async {
+          final pressure = host.canonicalHost.asyncHost.backpressure;
+          pressure.increment();
+          final runtime = WASIComponentNativeRuntime.component(
+            component: component,
+            host: host,
+            imports: {
+              'observed': (args) {
+                observed++;
+                length = args.single as int;
+                return null;
+              },
+            },
+          );
+          try {
+            expect(await runtime.invokeExport('begin', []), 33);
+            expect(carriers(), hasLength(2));
+            expect(
+              await runtime.invokeExport('cancel', []),
+              wasiComponentSubtaskBlocked,
+            );
+            await Future<void>.delayed(Duration.zero);
+            earlyPoll = await runtime.invokeExport('poll', []) as int;
+            earlyCarriers = carriers().length;
+            pressure.decrement();
+            for (var i = 0; i < 100; i++) {
+              final waitables = [
+                for (var h = 1; h <= 32; h++)
+                  ?host.canonicalHost.subtaskHost.waitableForHandle(h),
+              ];
+              if (waitables.single.hasPendingEvent) break;
+              await Future<void>.delayed(const Duration(milliseconds: 1));
+            }
+            finalPoll = await runtime.invokeExport('poll', []) as int;
+            eventState = await runtime.invokeExport('event-state', []) as int;
+            await runtime.invokeExport('finish', []);
+            await runtime.invokeExport('drop-source', []);
+          } finally {
+            if (pressure.isActive) pressure.decrement();
+            await Future<void>.delayed(Duration.zero);
+          }
+        });
+        expect(
+          {
+            'earlyPoll': earlyPoll,
+            'earlyCarriers': earlyCarriers,
+            'observed': observed,
+            'length': length,
+            'finalPoll': finalPoll,
+            'eventState': eventState,
+            'active': host.table.activeCount,
+          },
+          {
+            'earlyPoll': 0,
+            'earlyCarriers': 2,
+            'observed': 1,
+            'length': 4,
+            'finalPoll': 1,
+            'eventState': 4,
+            'active': 0,
+          },
+        );
+      },
+    );
+  }
   for (final shape in [
     (width: 2, async: false),
     (width: 2, async: true),
@@ -4086,4 +4176,86 @@ const _canonicalMultiOwnIndirect = r'''
  (func (export "rep") (result u32) (canon lift (core func $m "rep")))
  (func (export "drop") (canon lift (core func $m "drop")))
  (func (export "valid") (param "first" (own $r)) (param "second" (own $r)) (canon lift (core func $m "valid"))))
+''';
+
+String? _errorContextMessage(WASIComponentHost host, int handle) {
+  try {
+    return host.canonicalHost.errorContextHost.debugMessage(handle);
+  } on StateError {
+    return null;
+  }
+}
+
+String _canonicalErrorContextCancellation(bool fails, bool nested) =>
+    '''
+(component
+  (import "observed" (func \$observed (param "length" u32)))
+  (component \$producer
+    (import "observed" (func \$observed (param "length" u32)))
+    (core module \$memory
+      (memory (export "mem") 1)
+      (func (export "realloc") (param i32 i32 i32 i32) (result i32) i32.const 1024))
+    (core instance \$memory (instantiate \$memory))
+    (core func \$debug (canon error-context.debug-message (memory (core memory \$memory "mem")) (realloc (core func \$memory "realloc"))))
+    (core func \$drop (canon error-context.drop))
+    (core func \$return (canon task.return (result u32)))
+    (core func \$observed (canon lower (func \$observed)))
+    (core module \$m
+      (import "h" "mem" (memory 1))
+      (import "h" "debug" (func \$debug (param i32 i32)))
+      (import "h" "drop" (func \$drop (param i32)))
+      (import "h" "return" (func \$return (param i32)))
+      (import "h" "observed" (func \$observed (param i32)))
+      (func (export "run") (param i32) (result i32)
+        local.get 0 i32.const 64 call \$debug
+        i32.const 68 i32.load call \$observed
+        local.get 0 call \$drop
+        ${fails ? 'unreachable' : 'i32.const 4 call \$return'}
+        i32.const 0)
+      (func (export "callback") (param i32 i32 i32) (result i32) i32.const 0))
+    (core instance \$h (export "mem" (memory \$memory "mem")) (export "debug" (func \$debug)) (export "drop" (func \$drop)) (export "return" (func \$return)) (export "observed" (func \$observed)))
+    (core instance \$m (instantiate \$m (with "h" (instance \$h))))
+    (func (export "read") async (param "error" ${nested ? '(tuple error-context)' : 'error-context'}) (result u32)
+      (canon lift (core func \$m "run") async (callback (core func \$m "callback")))))
+  (component \$consumer
+    (import "reader" (instance \$reader (export "read" (func async (param "error" ${nested ? '(tuple error-context)' : 'error-context'}) (result u32)))))
+    (core module \$memory (memory (export "mem") 1) (data (i32.const 0) "kept"))
+    (core instance \$memory (instantiate \$memory))
+    (core func \$new (canon error-context.new (memory (core memory \$memory "mem"))))
+    (core func \$drop (canon error-context.drop))
+    (core func \$read (canon lower (func \$reader "read") async (memory (core memory \$memory "mem"))))
+    (core func \$cancel (canon subtask.cancel async)) (core func \$subdrop (canon subtask.drop))
+    (core func \$setnew (canon waitable-set.new)) (core func \$setdrop (canon waitable-set.drop))
+    (core func \$join (canon waitable.join)) (core func \$poll (canon waitable-set.poll (memory (core memory \$memory "mem"))))
+    (core module \$m
+      (import "h" "mem" (memory 1))
+      (import "h" "new" (func \$new (param i32 i32) (result i32)))
+      (import "h" "drop" (func \$drop (param i32)))
+      (import "h" "read" (func \$read (param i32 i32) (result i32)))
+      (import "h" "cancel" (func \$cancel (param i32) (result i32))) (import "h" "subdrop" (func \$subdrop (param i32)))
+      (import "h" "setnew" (func \$setnew (result i32))) (import "h" "setdrop" (func \$setdrop (param i32)))
+      (import "h" "join" (func \$join (param i32 i32))) (import "h" "poll" (func \$poll (param i32 i32) (result i32)))
+      (global \$source (mut i32) (i32.const 0)) (global \$sub (mut i32) (i32.const 0)) (global \$set (mut i32) (i32.const 0))
+      (func (export "begin") (result i32) (local \$packed i32)
+        i32.const 0 i32.const 4 call \$new global.set \$source
+        global.get \$source i32.const 64 call \$read local.tee \$packed i32.const 4 i32.shr_u global.set \$sub
+        call \$setnew global.set \$set global.get \$sub global.get \$set call \$join local.get \$packed)
+      (func (export "cancel") (result i32) global.get \$sub call \$cancel)
+      (func (export "poll") (result i32) global.get \$set i32.const 32 call \$poll)
+      (func (export "event-state") (result i32) i32.const 36 i32.load)
+      (func (export "drop-source") global.get \$source call \$drop)
+      (func (export "finish") global.get \$sub i32.const 0 call \$join global.get \$sub call \$subdrop global.get \$set call \$setdrop))
+    (core instance \$h (export "mem" (memory \$memory "mem")) (export "new" (func \$new)) (export "drop" (func \$drop)) (export "read" (func \$read)) (export "cancel" (func \$cancel)) (export "subdrop" (func \$subdrop)) (export "setnew" (func \$setnew)) (export "setdrop" (func \$setdrop)) (export "join" (func \$join)) (export "poll" (func \$poll)))
+    (core instance \$m (instantiate \$m (with "h" (instance \$h))))
+    (func (export "begin") (result u32) (canon lift (core func \$m "begin")))
+    (func (export "cancel") (result u32) (canon lift (core func \$m "cancel")))
+    (func (export "poll") (result u32) (canon lift (core func \$m "poll")))
+    (func (export "event-state") (result u32) (canon lift (core func \$m "event-state")))
+    (func (export "drop-source") (canon lift (core func \$m "drop-source")))
+    (func (export "finish") (canon lift (core func \$m "finish"))))
+  (instance \$p (instantiate \$producer (with "observed" (func \$observed))))
+  (instance \$c (instantiate \$consumer (with "reader" (instance \$p))))
+  (export "begin" (func \$c "begin")) (export "cancel" (func \$c "cancel"))
+  (export "poll" (func \$c "poll")) (export "event-state" (func \$c "event-state"))
+  (export "drop-source" (func \$c "drop-source")) (export "finish" (func \$c "finish")))
 ''';

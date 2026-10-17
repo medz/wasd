@@ -2570,6 +2570,26 @@ bool _flatLayoutContainsHandle(
   }
 }
 
+bool _flatLayoutContainsErrorContext(
+  WASIComponentCanonicalAdapterFlatValuePlan? layout,
+) {
+  if (layout == null) return false;
+  if (layout.kind == WASIComponentCanonicalAdapterFlatValueKind.errorContext) {
+    return true;
+  }
+  if (layout.kind == WASIComponentCanonicalAdapterFlatValueKind.stream ||
+      layout.kind == WASIComponentCanonicalAdapterFlatValueKind.future) {
+    return false;
+  }
+  return layout.fields.any(
+        (field) => _flatLayoutContainsErrorContext(field.value),
+      ) ||
+      layout.cases.any((item) => _flatLayoutContainsErrorContext(item.value)) ||
+      _flatLayoutContainsErrorContext(layout.element) ||
+      _flatLayoutContainsErrorContext(layout.ok) ||
+      _flatLayoutContainsErrorContext(layout.error);
+}
+
 Object? _lowerCanonicalBorrowHandles(
   WASIComponentCanonicalAdapterFlatValuePlan layout,
   String path,
@@ -4394,12 +4414,14 @@ extension WASIComponentCanonicalAsyncLowerLifetime
   /// Releases the retained call scope exactly once.
   void releaseCanonicalBorrows() => _releaseBorrows?.call();
 
-  /// Whether cancellation must wait for the callback to stop using loans.
+  /// Whether cancellation must wait for scoped arguments or owned results.
   bool get requiresCanonicalCallbackSettlement =>
       _operation.plan.params.any(
-        (param) => param.resourceUses.any(
-          (use) => use.handleKind == WASIComponentResourceHandleKind.borrow,
-        ),
+        (param) =>
+            param.resourceUses.any(
+              (use) => use.handleKind == WASIComponentResourceHandleKind.borrow,
+            ) ||
+            _flatLayoutContainsErrorContext(param.flatLayout),
       ) ||
       (_operation.plan.result?.flatLayout != null &&
           _flatLayoutContainsHandle(_operation.plan.result!.flatLayout!));
