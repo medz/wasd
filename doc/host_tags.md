@@ -1,8 +1,8 @@
 # Public tags and exceptions
 
-Version `0.6.0-dev.2` includes numeric public `Tag`/`Exception` bindings and the
-native `CoreFeature.exceptionHandling` opt-in. Version `0.6.0-dev.1` does not
-provide these additions.
+Version `0.6.0` includes numeric public `Tag`/`Exception` bindings and the
+native `CoreFeature.exceptionHandling` opt-in, first published in
+`0.6.0-dev.2`. Earlier `0.6.0-dev.1` does not provide these additions.
 The JavaScript adapter uses its platform engine and does not accept explicit
 feature options. The native Dart VM requires the option below.
 

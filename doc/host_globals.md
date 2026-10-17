@@ -1,8 +1,9 @@
 # Numeric host globals
 
-This addition is available in the `0.6.0-dev.1` preview. The Dart VM
-adapter now accepts the existing `GlobalImportExportValue` wrapper for numeric
-globals; it adds no public type or import-map format.
+Version `0.6.0` includes numeric host-global bindings, first published in
+`0.6.0-dev.1`. The Dart VM adapter accepts the existing
+`GlobalImportExportValue` wrapper for numeric globals; it adds no public type
+or import-map format.
 
 ```dart
 import 'package:wasd/wasm.dart';

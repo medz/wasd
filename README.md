@@ -40,57 +40,39 @@ Or add manually in `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  wasd: ^0.5.2
+  wasd: ^0.6.0
 ```
 
-This preview is `0.6.0-dev.3`. The latest stable release is `0.5.2`, selected
-by the default installation above.
+This release is `0.6.0`.
 
-To opt into the preview explicitly:
+To select this version explicitly:
 
 ```bash
-dart pub add wasd:^0.6.0-dev.3
+dart pub add wasd:^0.6.0
 ```
 
-Or use:
+Version `0.6.0` includes the changes from `0.6.0-dev.1` through
+`0.6.0-dev.3`, plus the realloc checks described below. It provides Dart VM
+[multi-memory opt-in](doc/core_features.md), [numeric host globals](doc/host_globals.md),
+[unambiguous import names](doc/import_identity.md), and floating-point/GC
+initialization fixes. [Public numeric tags and exceptions](doc/host_tags.md)
+propagate between host and guest on Dart VM and Dart2js on Node and Chrome;
+native modules require `CoreFeature.exceptionHandling`.
 
-```yaml
-dependencies:
-  wasd: ^0.6.0-dev.3
-```
+It also includes [synchronous Component map adapters](doc/component_maps.md),
+Component name attributes and named WIT interfaces. The WASD execution gate
+runs three complete frozen Component value files: strings, numerics and
+realloc, with `59/59` commands. The frozen Core 3.0 gate checks all `261`
+official source files and `65,336` commands. These are distinct internal
+execution gates; public API and other runtime coverage remain separate.
 
-The preview combines Dart VM [multi-memory opt-in](doc/core_features.md),
-[typed numeric host globals](doc/host_globals.md), and
-[unambiguous Core import names](doc/import_identity.md), together with the
-previously unpublished floating-point and GC initialization fixes. Those fixes
-were prepared as `0.5.3` and are now included in this batch; a separate `0.5.3`
-release is not planned. These additions require the preview installation and
-do not establish full Core, Component Model or WASI conformance. See the [fixed standards and acceptance plan](doc/standards.md).
-
-Version `0.6.0-dev.2` adds [public numeric tags and exceptions](doc/host_tags.md),
-including host/guest propagation on Dart VM and Dart2js on Node and Chrome.
-Native modules require `CoreFeature.exceptionHandling`. It also corrects
-Preview2 TCP listen failure state and adds the Preview3 TCP and clock fixes
-described below. These additions were not included in `0.6.0-dev.1`.
-
-The frozen Core 3.0 gate now checks all `261` official source files, preserving
-their original paths. It also exposed and fixed validation of multiple
-supertypes. See the [standards plan](doc/standards.md) for the `65,336` command
-result and its execution and public API coverage boundaries.
-
-Version `0.6.0-dev.3` adds [synchronous Component map adapters](doc/component_maps.md).
-It also supports Component name attributes and named WIT interface bindings;
-see the [standards plan](doc/standards.md) for their scope.
-Its execution gate runs complete frozen Component string and numeric
-files through WASD, including nested scalar calls and strict invocation traps;
-these selected files do not establish full Component conformance.
-Version `0.6.0-dev.3` adds WASI `0.3.1` contract and linking support alongside `0.3.0`, with
-versioned WIT calls plus command/service execution tests. The official 45-case
-suite remains a separate `0.3.0` compatibility gate.
-The Preview1 gate in `0.6.0-dev.3` freezes all 72 official `wasm32-wasip1` cases and
-verifies every fixture and runner input before execution. Native Linux/macOS
-results and Node/browser regressions remain separate acceptance profiles;
-see the [standards plan](doc/standards.md) for the uncovered syscall boundaries.
+WASI `0.3.1` contract/linking support retains `0.3.0`, with versioned host calls
+and custom command/service tests. The official 45-case suite remains a
+`0.3.0` native compatibility gate. The Preview1 gate freezes all 72 selected
+official `wasm32-wasip1` cases and verifies every fixture and runner input.
+Native Linux/macOS results and Node/browser regressions remain separate
+acceptance profiles. These gates do not establish full Core, Component Model
+or WASI conformance; see the [standards and acceptance plan](doc/standards.md).
 
 ## Quick Start
 
@@ -344,12 +326,12 @@ the explicit native TCP bind/listen split that `dart:io` cannot represent; they
 fail with `not-supported`. There are no skips, expected failures, or unexpected
 passes.
 
-Version `0.6.0-dev.2` records `45/45` frozen official fixtures passed
-through the native AOT runner, with zero failures, skips, expected failures or
+Version `0.6.0` retains the `45/45` frozen official `0.3.0` fixture gate first
+qualified in `0.6.0-dev.2` through the native AOT runner, with zero failures, skips, expected failures or
 unexpected passes. The fixed input revisions and counts are recorded in
 `tool/wasi_preview3_contract.lock.json`.
 
-Version `0.6.0-dev.2` adds native Preview3 TCP bind/listen on Linux and macOS using
+Version `0.6.0` includes native Preview3 TCP bind/listen on Linux and macOS using
 the same OS socket through bind, listen or connect. Bind assigns
 a local address without starting a listener; address reuse follows the WASI
 contract and platform semantics. Monotonic waits recheck their deadlines after
@@ -405,7 +387,7 @@ Model execution. Preview3 support covers the frozen stable WASI 0.3.0
 contract and its 0.3.1 contract/linking extension; experimental proposal packages and features outside that contract
 remain out of scope.
 
-Preview1 CPU-clock queries in `0.6.0-dev.3` use host process/current OS thread CPU
+Preview1 CPU-clock queries in `0.6.0` use host process/current OS thread CPU
 time on 64-bit Linux/macOS and the corresponding Node CPU API when available.
 Unsupported CPU clocks return `INVAL` without modifying guest output. These
 are host counters; they do not isolate CPU consumption per guest. CPU-clock

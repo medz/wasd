@@ -2,8 +2,9 @@
 
 This implementation and acceptance plan retains the historical `0.5.0`
 (`528b2b828f979d08ba1798f7e8e955e892ab052d`) baseline checked on 2026-10-01.
-Release evidence below identifies `0.6.0-dev.2` and the additions in
-`0.6.0-dev.3` separately. Historical results retain their original scope.
+Current evidence describes `0.6.0`, which includes the earlier
+`0.6.0-dev.1` through `0.6.0-dev.3` changes and the realloc slice. Historical
+results retain their original versions and scope.
 A target in this document is not a support claim. Release support must be backed
 by WASD execution, validation, and host tests at the exact release commit.
 
@@ -58,7 +59,7 @@ public API, its feature selection, or other runtimes. The historical Component
 Model async gate retains its recorded `wasm-tools` `1.254.0` validator; the
 newer Core converter rejects the frozen draft's removed `cancellable` option.
 
-The `0.6.0-dev.3` Component `map` type and synchronous Canonical ABI adapter slice
+The `0.6.0` Component `map` type and synchronous Canonical ABI adapter slice
 uses source `0220da84209397d9067c19cac83dae969aa85a7b`. Its binary validation,
 memory conversion, bound callbacks and WIT binding regressions are described in
 [Component map adapters](component_maps.md). This bounded gate is separate from
@@ -78,7 +79,7 @@ labels and resource identities. These checks do not establish general
 Component composition, executable direct world functions or complete WASI
 `0.3.1` adoption.
 
-The `0.6.0-dev.3` WASI `0.3.1` contract/linking slice uses source
+The `0.6.0` WASI `0.3.1` contract/linking slice uses source
 `59e48bfe3fae9bf2480eb15abd8f55999eb3b395` and retains exact `0.3.0` support.
 It resolves six stable packages and eight worlds, reuses existing host
 implementations through exact versioned callback keys, and runs custom
@@ -89,20 +90,27 @@ Linux/macOS gate still uses `0.3.0` guests; it is compatibility evidence for
 that version, not an official `0.3.1` suite. General Component/async assertion
 execution and full package/world/platform acceptance remain open.
 
-The `0.6.0-dev.3` WASD Component execution gate covers two complete official
+The `0.6.0` WASD Component execution gate covers three complete official
 files at source `0220da84209397d9067c19cac83dae969aa85a7b`:
 
 | File | Frozen Git blob | Commands |
 | --- | --- | ---: |
 | `test/values/strings.wast` | `e96f54e97689a32ba70b05e12226e01b8dea024b` | 17 |
 | `test/values/numerics.wast` | `99fcbc03b0b352b29db247c90085ad0febbd3fe5` | 26 |
+| `test/values/realloc.wast` | `7706e03b2a1e941d2785f580f399cd2b65b08beb` | 16 |
 
-The combined gate executes `43/43` commands: 17 actual component
-initializations, one definition registration, 18 exact return assertions and
-seven invocation trap assertions. The numeric file exercises integer narrowing,
-bool normalization, Unicode scalar validation, flags masking and nested calls
-with lexical outer type aliases. Every module instance starts fresh.
-Decode, link, lookup and ordinary host errors cannot satisfy invalid-char traps.
+The combined gate executes `59/59` commands: 23 actual component
+initializations, five definition registrations, 19 exact return assertions and
+12 invocation trap assertions. The earlier `0.6.0-dev.3` two-file gate remains
+`43/43` historical evidence: 17 initializations, one definition, 18 returns and
+seven traps.
+
+The numeric file exercises integer narrowing, bool normalization, Unicode
+scalar validation, flags masking and nested calls with lexical outer type
+aliases. Every module instance starts fresh. Realloc return pointers are
+checked for alignment before bounds, including empty lists; typed ABI faults
+keep ordinary host errors from satisfying memory traps. Decode, link, lookup
+and ordinary host errors cannot satisfy invalid-char traps.
 The runner verifies independently pinned source hashes, freshly converts inputs
 with pinned `wasm-tools` `1.262.0`, and executes them through WASD's existing
 Dart interpreter and Canonical ABI adapters. The converter supplies inputs;
@@ -112,20 +120,13 @@ it is not the execution engine.
 dart run tool/component_spec_runner.dart --output-json=build/component-values.json
 ```
 
-Core CI runs these selected complete files on both Dart SDKs. This remains separate
-from the historical decode, external validation and reference-runtime results.
-General Component composition, additional value codecs, full async assertion
-execution and a portable public instance API remain open requirements.
+Core CI runs these selected complete files on both Dart SDKs. This remains
+separate from the historical decode, external validation and reference-runtime
+results. General Component composition, additional value codecs, full async
+assertion execution and a portable public instance API remain open requirements.
 Nested Component starts and concrete local resource aliases are explicitly
 rejected before execution. Imported resource identities and the numeric
 file's lexical type aliases remain supported.
-
-The unreleased realloc slice adds the complete `test/values/realloc.wast`
-at the same revision, Git blob `7706e03b2a1e941d2785f580f399cd2b65b08beb`.
-The current gate executes three files and `59/59` commands: 23 actual
-initializations, five definitions, 19 return checks and 12 invocation traps.
-Realloc return pointers are checked for alignment before bounds, including
-empty lists; typed ABI faults keep ordinary host errors from satisfying traps.
 Shared canonical-memory regressions also run on Node and Chrome. This does not
 establish JavaScript u64 memory access or general Component execution there.
 
@@ -144,7 +145,7 @@ does not close these larger requirements.
 
 ## Implementation and evidence matrix
 
-The `0.6.0-dev.3` Preview1 gate freezes official runner/source
+The `0.6.0` Preview1 gate freezes official runner/source
 `6600796756adce3632409d7e207a9834c9d99ff8` and precompiled fixtures
 `c63d52e69316d1aa2c9e7db6251892775204e7e0` in
 `tool/wasi_preview1_contract.lock.json`. It verifies all 137 fixture inputs
@@ -166,7 +167,7 @@ This selected suite does not import `fd_datasync`, `fd_sync`, `proc_raise`,
 `sock_accept`, `sock_recv` or `sock_send`; `sock_shutdown` has error cases only.
 Successful inherited-socket operations, host sync/durability and process/thread
 CPU timers and guest-specific CPU accounting still need separate acceptance.
-The `0.6.0-dev.3` CPU-clock read fix uses existing libc `clock_gettime/getres`
+The `0.6.0` CPU-clock read fix uses existing libc `clock_gettime/getres`
 on 64-bit Linux/macOS, with the correct OS clock IDs and measured resolution.
 Node uses capability-detected process/thread CPU APIs and preserves full u64
 nanosecond output. Missing, invalid or failed CPU APIs return `INVAL` without
@@ -181,9 +182,9 @@ neither profile executes these 72 official guests.
 | Core decoding and validation | Pure Dart decoder, predecoder, and validator under `lib/src/wasm/backend/native/interpreter/` | Fresh VM baseline: `260/260` official root WAST files, `65,212/65,212` commands, zero skips, at testsuite `193e551ff22663995b1ac95dc62344133669e14b`, using wasm-tools `1.254.0`. Enumerate newer specification deltas and public API feature selection |
 | Numeric, control, memory, table, reference, tail-call, SIMD, GC, exception, memory64/multiple-memory instructions | Interpreter paths exist; feature availability depends on the entrypoint/profile | Same root-suite baseline; it does not prove cross-platform parity, every valid type combination, or proposals outside that suite. GC `v128` data initialization was an uncovered gap in synchronous and forced async execution |
 | Threads and shared memory | Atomic/thread-related interpreter paths exist | Sequential instruction tests do not prove concurrent shared-memory, scheduling, or wait/notify behavior. Freeze an explicit threading profile and run real concurrency tests |
-| WASI Preview1 | VM host, in-repo Node host, browser shim and virtual filesystem | Historical unit/regression coverage; the `0.6.0-dev.3` pinned 72-case native gate above replaces the unpinned official report. Host syscall and platform boundaries remain open |
+| WASI Preview1 | VM host, in-repo Node host, browser shim and virtual filesystem | Historical unit/regression coverage; the `0.6.0` pinned 72-case native gate above replaces the unpinned official report. Host syscall and platform boundaries remain open |
 | WASI Preview2 | VM command/proxy runners, synchronous Canonical ABI, WIT adapters and host interfaces for random, clocks, io, cli, filesystem, sockets, http | Focused conformance/toolchain tests exist. Audit all stable package exports and execution worlds. A command/proxy runner is not general Component Model execution |
-| WASI Preview3 0.3.0 | VM command/service runners, async Canonical ABI, stream/future/task/resource support; six-package/eight-world lock | Historical published `0.5.0` / `0.6.0-dev.1` baseline: `39/45` fixtures passed, with six native TCP failures. The `0.6.0-dev.2` acceptance gate records `45/45` passed and zero failed, skipped, xfailed or xpassed for the Linux/macOS native AOT profile, including same-socket TCP bind/listen/connect and monotonic clock deadline checks. `tool/wasi_preview3_contract.lock.json` records this gate. Version `0.6.0-dev.3` adds 0.3.1 contract/linking; complete package/world/platform acceptance remains open |
+| WASI Preview3 0.3.0 | VM command/service runners, async Canonical ABI, stream/future/task/resource support; six-package/eight-world lock | Historical published `0.5.0` / `0.6.0-dev.1` baseline: `39/45` fixtures passed, with six native TCP failures. The `0.6.0-dev.2` acceptance gate records `45/45` passed and zero failed, skipped, xfailed or xpassed for the Linux/macOS native AOT profile, including same-socket TCP bind/listen/connect and monotonic clock deadline checks. `tool/wasi_preview3_contract.lock.json` records this gate. Version `0.6.0` retains 0.3.1 contract/linking first published in `0.6.0-dev.3`; complete package/world/platform acceptance remains open |
 | Component Model binary/WIT | Strict decoder and component/WIT/adapter machinery exist | Frozen historical async gate: WASD decode `37/37`, wasm-tools validation `31/31`, Wasmtime reference execution `31/31`. Only the first executes WASD code, and it only decodes. Add WASD assertion execution for general synchronous and async components |
 | Component Model composition | WASI runners support particular compositions and host bindings | Cover nested components, imports/exports, aliasing, types, resource ownership, canonical lift/lower, instantiation and failure semantics independently of WASI-specific runners |
 | Stable host capabilities | VM filesystem/network/HTTP adapters and browser/Node P1 adapters | Keep explicit capability contracts for platform-scoped TCP bind/listen, HTTP trailers, IPv6 metadata and filesystem race guarantees; never replace an unsupported operation with simulated success |
@@ -197,8 +198,8 @@ cross-target tests remain part of the 1.0 work. Preview2/3 currently require the
 Dart VM host. Browser permissions and missing host services must be represented
 explicitly rather than promised as identical OS capabilities.
 
-The `ffi` dependency provides native Preview1 OS facilities and, in
-`0.6.0-dev.2`, Linux/macOS native Preview3 TCP host sockets. It does not implement
+The `ffi` dependency provides native Preview1 OS facilities and Linux/macOS
+native Preview3 TCP host sockets. It does not implement
 Wasm execution or introduce a native Wasm runtime. Host adapters must state
 their OS dependencies and capabilities separately from the pure Dart interpreter.
 

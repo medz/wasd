@@ -279,10 +279,10 @@ void main() {
       final readme = File('README.md').readAsStringSync();
       final support = File('doc/wasm_wasi_todo.md').readAsStringSync();
       expect(changelog, startsWith('## $version\n'));
-      final previewVersions = RegExp(
-        r'This preview is `([^`]+)`\.',
+      final releaseVersions = RegExp(
+        r'This release is `([^`]+)`\.',
       ).allMatches(readme).map((match) => match.group(1)!).toList();
-      expect(previewVersions, <String>[version]);
+      expect(releaseVersions, <String>[version]);
       final installation = RegExp(
         r'## Installation\s+([\s\S]*?)\n## Quick Start',
       ).firstMatch(readme)!.group(1)!;

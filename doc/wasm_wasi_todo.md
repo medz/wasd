@@ -36,10 +36,23 @@ P2/P3 work starts only after these P1 gates are green.
     recorded `260/260` files, `65192/65212` commands passed, `0` failed, with
     `20` harness-level custom-section unsupported-command skips.
 
+- [x] `COMPONENT-SELECTED-VALUE-FILES`
+  - `0.6.0` executes complete frozen `strings.wast`, `numerics.wast` and
+    `realloc.wast` from source `0220da84209397d9067c19cac83dae969aa85a7b`.
+  - Evidence:
+    `dart run tool/component_spec_runner.dart --output-json=build/component-values.json`
+  - Result: three files, `59/59` commands, `0` failures and `0` skips:
+    23 initializations, five definitions, 19 return checks and 12 traps.
+    The earlier `0.6.0-dev.3` two-file gate remains `43/43` historical evidence.
+  - This accepts three of the 74 frozen files; 71 still lack equivalent full
+    WASD acceptance. General Component execution and the nine open workstreams
+    remain in the [standards plan](standards.md).
+
 - [x] `WASI-P1-OFFICIAL-WASIP1`
   - Historical evidence: `.dart_tool/wasi_testsuite_wasd_p1_current.json`
     records 72 P1 passes; its source/fixture revisions were not recorded.
-  - `0.6.0-dev.3` replacement: `tool/wasi_testsuite_preview1_gate.dart` and
+  - `0.6.0` replacement (first published in `0.6.0-dev.3`):
+    `tool/wasi_testsuite_preview1_gate.dart` and
     `tool/wasi_preview1_contract.lock.json` freeze source `6600796`, fixtures
     `c63d52e`, 137 inputs, 15 runner sources and exactly 72 unique cases.
     Linux/macOS native CI retains `build/wasi-preview1.json` and the raw
@@ -94,7 +107,7 @@ P2/P3 work starts only after these P1 gates are green.
   - Remaining acceptance includes six imports absent from the selected suite
     (`fd_datasync`, `fd_sync`, `proc_raise`, `sock_accept`, `sock_recv`,
     `sock_send`), successful inherited-socket shutdown, host sync/durability,
-    CPU timers and per-guest CPU accounting. CPU-clock reads in `0.6.0-dev.3` now
+    CPU timers and per-guest CPU accounting. CPU-clock reads in `0.6.0`
     use actual host counters on supported Linux/macOS and Node capabilities;
     missing capabilities fail explicitly rather than using elapsed wall time.
     CPU subscriptions return an event with `INVAL`. See the pinned scope and runtime
@@ -137,15 +150,15 @@ P2/P3 work starts only after these P1 gates are green.
     ContextJ/ContextO are rejected explicitly.
 
 - [x] `SUPPORT-P3`
-  - `0.6.0-dev.3` adds an explicit `0.3.1` contract/linking slice
-    retains `0.3.0`. It covers six-package/eight-world WIT resolution, exact
-    built-in callback aliases, and custom command/service execution inputs
+  - `0.6.0` includes the `0.3.1` contract/linking slice first published in
+    `0.6.0-dev.3` and retains `0.3.0`. It covers six-package/eight-world WIT
+    resolution, exact built-in callback aliases, and custom command/service execution inputs
     with actual host calls, async results and resource cleanup. Source and
     digest metadata are under `wasi_0_3_1` in the lock below. Full `0.3.1`
     acceptance remains in the [standards plan](standards.md); the official
     `45/45` result below continues to identify `0.3.0` guest inputs.
-  - Status: acceptance for `0.6.0-dev.2` covers the frozen
-    Linux/macOS native Dart VM AOT profile for stable WASI 0.3.0
+  - Status: `0.6.0` retains the gate first qualified in `0.6.0-dev.2` for the
+    frozen Linux/macOS native Dart VM AOT profile for stable WASI 0.3.0
     `wasi:cli/command` and `wasi:http/service` components.
   - Frozen WASI contract: stable WASI 0.3.0 commit
     `3ee2a590c766594ae44a54730fc74fc27da5c609`; six packages (`random`,

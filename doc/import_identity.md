@@ -1,6 +1,7 @@
 # Core import identity
 
-The `0.6.0-dev.1` preview fixes ambiguous native import keys.
+Version `0.6.0` includes the native import-key fix first published in
+`0.6.0-dev.1`.
 `("a", "b::c")` and `("a::b", "c")` used to become the same `a::b::c` key,
 allowing the wrong function, memory, table, global or tag to satisfy an import.
 The VM now supports both valid name pairs through the existing public API.

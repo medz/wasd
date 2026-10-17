@@ -1,11 +1,11 @@
 # Explicit Core options
 
-The multi-memory option is part of the `0.6.0-dev.1` preview. Stable `0.5.2`
-does not provide it. The [exception-handling option and public native tags](host_tags.md)
-and numeric public `Exception` bindings are introduced in `0.6.0-dev.2`;
-`0.6.0-dev.1` does not provide them. The previously unpublished `0.5.3`
-floating-point fixes are included in this batch; their frozen artifacts remain
-archived for restoration, with no separate `0.5.3` release planned.
+Version `0.6.0` includes the Dart VM multi-memory option,
+[numeric host globals](host_globals.md), and the
+[exception-handling option with public numeric tags and exceptions](host_tags.md).
+Multi-memory first shipped in `0.6.0-dev.1`; tag and exception bindings
+followed in `0.6.0-dev.2`. The floating-point and GC initialization fixes
+originally prepared for the unpublished `0.5.3` candidate are also included.
 
 `Module` accepts an optional set of Core extensions. Omitting the set, or passing
 an empty set, preserves the existing backend defaults. `supportedFeatures` is
@@ -47,8 +47,8 @@ their existing defaults; use `Module` when explicit options are needed.
 ## Executable acceptance matrix
 
 The frozen [Core specification source](https://github.com/WebAssembly/spec/tree/957c932e7158c5a6891be68ca424aaa0aa505f97)
-incorporates multiple memories in Release 3.0. This preview uses a subset of
-the [official testsuite](https://github.com/WebAssembly/testsuite/tree/193e551ff22663995b1ac95dc62344133669e14b)
+incorporates multiple memories in Release 3.0. The public multi-memory gate
+uses a subset of the [official testsuite](https://github.com/WebAssembly/testsuite/tree/193e551ff22663995b1ac95dc62344133669e14b)
 at `193e551ff22663995b1ac95dc62344133669e14b`. That June suite predates the frozen
 October target; this is feature acceptance evidence, not full October conformance.
 
@@ -80,6 +80,7 @@ The official `data0`/`data1` scripts are included using typed numeric host globa
 Unexpected link failures are recorded separately from expected instantiation
 traps and commands that could not run after a failure.
 
-General Component execution and WASI `0.3.1` remain subsequent acceptance work
-under the [fixed standards plan](standards.md). This option neither implements
-nor claims those contracts.
+General Component execution and complete WASI `0.3.1` package/world/platform
+acceptance remain open under the [fixed standards plan](standards.md), which
+also describes the existing versioned contract/linking support. The Core option
+does not establish those contracts.
