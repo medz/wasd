@@ -15,7 +15,10 @@ export 'component/subtask.dart';
 export 'component/task.dart';
 export 'component/thread.dart';
 export 'component/unicode_scalar.dart' hide WASIComponentInvalidCharException;
-export 'component/value_memory.dart';
+export 'component/value_memory.dart'
+    hide
+        WASIComponentMemoryBoundsException,
+        WASIComponentMemoryAlignmentException;
 export 'component/versioned_host.dart';
 export 'component/waitable_set.dart';
 export 'component/wit_adapter.dart';

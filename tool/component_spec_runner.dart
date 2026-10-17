@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/unicode_scalar.dart';
+import 'package:wasd/src/wasi/component/value_memory.dart';
 import 'package:wasd/src/wasi/preview2/component_runner.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/execution_error.dart';
@@ -27,6 +28,17 @@ const _frozenSources = {
     'definitions': 0,
     'returns': 5,
     'traps': 4,
+  },
+  'test/values/realloc.wast': {
+    'path': 'test/values/realloc.wast',
+    'blob': '7706e03b2a1e941d2785f580f399cd2b65b08beb',
+    'sha256':
+        'a6792f029779d12ede89c90443ea9b5d5071089b501f843f3fa4c0fbdef0735d',
+    'commands': 16,
+    'instantiations': 6,
+    'definitions': 4,
+    'returns': 1,
+    'traps': 5,
   },
   'test/values/numerics.wast': {
     'path': 'test/values/numerics.wast',
@@ -58,13 +70,30 @@ bool matchesComponentStringTrap(Object error, String expected) =>
 
 /// Matches only invalid core character scalars, preserving typed VM causes.
 /// Unknown wrappers, ordinary host errors and cause cycles never match.
-bool matchesComponentCharTrap(Object error) {
+bool matchesComponentCharTrap(Object error) =>
+    _componentTrapCause(error) is WASIComponentInvalidCharException;
+
+/// Matches only ABI-origin list memory faults, including preserved VM causes.
+/// Ordinary host exceptions and unknown wrappers never satisfy these traps.
+bool matchesComponentMemoryTrap(Object error, String expected) {
+  final cause = _componentTrapCause(error);
+  return switch (expected) {
+    'wasm trap: list content out-of-bounds' ||
+    'realloc return: beyond end of memory' =>
+      cause is WASIComponentMemoryBoundsException,
+    'wasm trap: unaligned pointer' || 'realloc return: result not aligned' =>
+      cause is WASIComponentMemoryAlignmentException,
+    _ => false,
+  };
+}
+
+Object? _componentTrapCause(Object error) {
   final seen = Set<Object>.identity();
   while (error is WasmExecutionErrorContext) {
-    if (!seen.add(error)) return false;
+    if (!seen.add(error)) return null;
     error = error.cause;
   }
-  return error is WASIComponentInvalidCharException;
+  return error;
 }
 
 void _checkFields(Map object, Set<String> allowed) {
@@ -115,9 +144,13 @@ String _valueTypeName(
       (index != null && index >= 0 && index < context.typeDefinitions.length
           ? context.typeDefinitions[index]
           : null);
-  if (definition?.definedValue?.kind ==
-      WasmComponentDefinedValueTypeKind.flags) {
+  final defined = definition?.definedValue;
+  if (defined?.kind == WasmComponentDefinedValueTypeKind.flags) {
     return 'flags';
+  }
+  if (defined?.kind == WasmComponentDefinedValueTypeKind.list &&
+      defined?.elementType?.primitive == WasmComponentPrimitiveValueType.u32) {
+    return 'list';
   }
   throw UnsupportedError('Unsupported Component value type.');
 }
@@ -125,8 +158,9 @@ String _valueTypeName(
 Object _decodeValue(
   Object? raw,
   WasmComponentValueType type,
-  WasmComponentFunctionTypeContext context,
-) {
+  WasmComponentFunctionTypeContext context, {
+  bool allowList = false,
+}) {
   if (raw is! Map) throw const FormatException('Expected a Component value.');
   _checkFields(raw, const {'type', 'value'});
   final name = _valueTypeName(type, context);
@@ -137,6 +171,29 @@ Object _decodeValue(
   }
   final value = raw['value'];
   switch (name) {
+    case 'list':
+      if (!allowList) {
+        throw UnsupportedError('Component list results are not supported.');
+      }
+      if (value is! List) throw const FormatException('Invalid list value.');
+      return WasmComponentValueData(
+        kind: WasmComponentValueDataKind.list,
+        rawBytes: Uint8List(0),
+        items: [
+          for (final element in value)
+            WasmComponentValueData(
+              kind: WasmComponentValueDataKind.integer,
+              rawBytes: Uint8List(0),
+              integer: _decodeValue(
+                element,
+                const WasmComponentValueType.primitive(
+                  WasmComponentPrimitiveValueType.u32,
+                ),
+                context,
+              ),
+            ),
+        ],
+      );
     case 'string':
       if (value is String) return value;
       throw const FormatException('Invalid string value.');
@@ -335,7 +392,12 @@ Future<Map<String, Object?>> executeComponentSpecScript(
             }
             final args = <Object?>[
               for (var j = 0; j < params.length; j++)
-                _decodeValue(rawArgs[j], params[j].type, context),
+                _decodeValue(
+                  rawArgs[j],
+                  params[j].type,
+                  context,
+                  allowList: true,
+                ),
             ];
             record['export'] = name;
             if (type == 'assert_return') {
@@ -362,7 +424,11 @@ Future<Map<String, Object?>> executeComponentSpecScript(
               if (expected != 'string pointer/length out of bounds of memory' &&
                   expected != 'invalid utf-8' &&
                   expected != 'incomplete utf-8 byte sequence' &&
-                  expected != 'invalid `char` bit pattern') {
+                  expected != 'invalid `char` bit pattern' &&
+                  expected != 'wasm trap: list content out-of-bounds' &&
+                  expected != 'wasm trap: unaligned pointer' &&
+                  expected != 'realloc return: beyond end of memory' &&
+                  expected != 'realloc return: result not aligned') {
                 throw UnsupportedError('Unsupported expected trap: $expected');
               }
               // Only the invocation may satisfy a trap; arguments, signature
@@ -379,9 +445,10 @@ Future<Map<String, Object?>> executeComponentSpecScript(
               final matches = expected == 'invalid `char` bit pattern'
                   ? matchesComponentCharTrap(invocationError)
                   : matchesComponentStringTrap(
-                      invocationError,
-                      expected as String,
-                    );
+                          invocationError,
+                          expected as String,
+                        ) ||
+                        matchesComponentMemoryTrap(invocationError, expected);
               if (!matches) {
                 throw StateError(
                   'Unexpected invocation error: $invocationError',
