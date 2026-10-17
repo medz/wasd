@@ -215,13 +215,22 @@ WASIComponentCanonicalAdapterCallback? _postReturnCallback(
 final class WASIComponentCanonicalAdapterProgram {
   /// Creates a canonical adapter program from ordered [operations].
   WASIComponentCanonicalAdapterProgram({required this.operations})
-    : _operationsByCanonicalIndex = _indexOperations(operations);
+    : _operationsByCanonicalIndex = _indexOperations(operations),
+      _callStates = {for (final operation in operations) operation._callState};
 
   /// Adapter operations in prepared plan order.
   final List<WASIComponentCanonicalAdapterOperation> operations;
 
   final Map<int, WASIComponentCanonicalAdapterOperation>
   _operationsByCanonicalIndex;
+  final Set<_WASIComponentCanonicalCallState> _callStates;
+
+  /// Checks whether a builtin may leave this program's component instance.
+  void requireMayLeave(int canonicalIndex) {
+    for (final state in _callStates) {
+      state.requireMayLeave(canonicalIndex);
+    }
+  }
 
   /// Invokes the adapter operation at [canonicalIndex].
   Object? invoke(int canonicalIndex, List<Object?> args) {

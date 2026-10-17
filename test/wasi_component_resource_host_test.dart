@@ -75,10 +75,8 @@ void main() {
       expect(dropped, [21]);
     });
 
-    test('binds canonical operations for imported abstract resources', () {
-      final component = WasmComponent.decode(
-        _importedResourceCanonicalProgramBytes(),
-      );
+    test('binds resource.drop for imported abstract resources', () {
+      final component = WasmComponent.decode(_importedResourceDropBytes());
       expect(component.validate(), isEmpty);
       final host = WASIComponentResourceHost();
       final dropped = <int>[];
@@ -105,11 +103,16 @@ void main() {
       expect(types.single.name, 'imported-resource[0]');
 
       final program = host.bindCanonicalDefinitions(component);
-      final handle = program.invoke(0, <Object?>[55]);
+      final handle = host.table.resourceNew(types.single, 55);
 
-      expect(program.invoke(1, <Object?>[handle]), 55);
-      expect(program.invoke(2, <Object?>[handle]), isNull);
+      expect(program.operations, hasLength(1));
+      expect(host.table.resourceRep(types.single, handle), 55);
+      expect(program.invoke(0, <Object?>[handle]), isNull);
       expect(dropped, [55]);
+      expect(
+        () => host.table.resourceRep(types.single, handle),
+        throwsStateError,
+      );
     });
 
     test('keeps imported abstract resource types nominally distinct', () {
@@ -295,30 +298,29 @@ void main() {
       },
     );
 
-    test(
-      'binds canonical operations for instantiated component resource aliases',
-      () {
-        final component = WasmComponent.decode(
-          _instantiatedComponentResourceAliasCanonicalProgramComponentBytes(),
-        );
-        expect(component.validate(), isEmpty);
-        final host = WASIComponentResourceHost();
-        final dropped = <int>[];
-        host.defineResourceTypeFromComponent<int>(
-          component,
-          0,
-          'instantiated-resource',
-          onDrop: dropped.add,
-        );
+    test('binds resource.drop for instantiated component resource aliases', () {
+      final component = WasmComponent.decode(
+        _instantiatedComponentResourceAliasDropBytes(),
+      );
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentResourceHost();
+      final dropped = <int>[];
+      final type = host.defineResourceTypeFromComponent<int>(
+        component,
+        0,
+        'instantiated-resource',
+        onDrop: dropped.add,
+      );
 
-        final program = host.bindCanonicalDefinitions(component);
-        final handle = program.invoke(0, <Object?>[144]);
+      final program = host.bindCanonicalDefinitions(component);
+      final handle = host.table.resourceNew(type, 144);
 
-        expect(program.invoke(1, <Object?>[handle]), 144);
-        expect(program.invoke(2, <Object?>[handle]), isNull);
-        expect(dropped, [144]);
-      },
-    );
+      expect(program.operations, hasLength(1));
+      expect(host.table.resourceRep(type, handle), 144);
+      expect(program.invoke(0, <Object?>[handle]), isNull);
+      expect(dropped, [144]);
+      expect(() => host.table.resourceRep(type, handle), throwsStateError);
+    });
 
     test('invokes decoded canonical resource program operations by index', () {
       final component = WasmComponent.decode(_canonicalResourceProgramBytes());
@@ -477,34 +479,29 @@ Uint8List _canonicalResourceProgramBytes() => Uint8List.fromList(const <int>[
   0x00,
 ]);
 
-Uint8List _importedResourceCanonicalProgramBytes() =>
-    Uint8List.fromList(const <int>[
-      0x00,
-      0x61,
-      0x73,
-      0x6d,
-      0x0d,
-      0x00,
-      0x01,
-      0x00,
-      0x0a,
-      0x06,
-      0x01,
-      0x00,
-      0x01,
-      0x72,
-      0x03,
-      0x01,
-      0x08,
-      0x07,
-      0x03,
-      0x02,
-      0x00,
-      0x04,
-      0x00,
-      0x03,
-      0x00,
-    ]);
+Uint8List _importedResourceDropBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x0a,
+  0x06,
+  0x01,
+  0x00,
+  0x01,
+  0x72,
+  0x03,
+  0x01,
+  0x08,
+  0x03,
+  0x01,
+  0x03,
+  0x00,
+]);
 
 Uint8List _twoImportedResourceTypesBytes() => Uint8List.fromList(const <int>[
   0x00,
@@ -575,7 +572,7 @@ Uint8List _aliasedInstanceResourceCanonicalProgramBytes() =>
       0x01,
     ]);
 
-Uint8List _instantiatedComponentResourceAliasCanonicalProgramComponentBytes() =>
+Uint8List _instantiatedComponentResourceAliasDropBytes() =>
     Uint8List.fromList(const <int>[
       0x00,
       0x61,
@@ -625,12 +622,8 @@ Uint8List _instantiatedComponentResourceAliasCanonicalProgramComponentBytes() =>
       0x01,
       0x72,
       0x08,
-      0x07,
       0x03,
-      0x02,
-      0x00,
-      0x04,
-      0x00,
+      0x01,
       0x03,
       0x00,
     ]);

@@ -359,12 +359,29 @@ final class WASIComponentNativeRuntime {
 
   void _prepareExecution() {
     final plan = _checkComponent();
+    final types = component.componentTypeIndexDefinitions;
+    final localResourceDefinitions = {
+      for (final definition in component.typeDefinitions)
+        if (definition.resource != null && !definition.resource!.isAbstract)
+          definition,
+    };
     _initializeAdapterCallbacks(plan.adapterPlans);
     _binding = plan.bind(
       coreFunctions: _adapterCoreCallbacks,
       componentFunctions: _adapterComponentCallbacks,
       maxBufferedElementsForStream: _preview3Host == null ? null : (_) => 0,
       instanceLocalAsyncValues: true,
+      onResourceDrop: (binding, representation) {
+        final definition = types[binding.componentTypeIndex];
+        // A foreign alias's destructor index belongs to its defining runtime.
+        // This membership check establishes static index provenance only.
+        if (!localResourceDefinitions.contains(definition)) return;
+        final resource = definition.resource;
+        final destructor = resource?.destructorFunctionIndex;
+        if (destructor != null) {
+          _coreFunctions[destructor].invokeSynchronously([representation]);
+        }
+      },
     );
     _adapterProgram = plan.bindAdapters(
       coreFunctions: _adapterCoreCallbacks,
@@ -385,6 +402,13 @@ final class WASIComponentNativeRuntime {
           validationErrors,
         ),
       );
+    }
+    for (final type in component.componentTypeIndexDefinitions) {
+      if (type.resource?.isAsync == true) {
+        throw const WASIPreview2ComponentExecutionException(
+          'Asynchronous resource destructors are not executable yet.',
+        );
+      }
     }
     for (final alias in component.aliases) {
       if (alias.sort.kind != WasmComponentSortKind.componentType ||
@@ -895,24 +919,30 @@ final class WASIComponentNativeRuntime {
             name: 'canonical[$canonicalIndex].lower',
             invoke: isAsync
                 ? (args) => _invokeAsyncLower(canonicalIndex, definition, args)
-                : (args) async => _coreHostResult(
-                    await _adapterProgram.invokeLoweredCoreAsync(
-                      canonicalIndex,
-                      args,
-                      memory: _canonicalMemory(definition),
-                      realloc: _canonicalRealloc(definition),
-                    ),
-                  ),
+                : (args) async {
+                    _requireMayLeave(canonicalIndex);
+                    return _coreHostResult(
+                      await _adapterProgram.invokeLoweredCoreAsync(
+                        canonicalIndex,
+                        args,
+                        memory: _canonicalMemory(definition),
+                        realloc: _canonicalRealloc(definition),
+                      ),
+                    );
+                  },
             invokeSync: isAsync
                 ? (args) => _invokeAsyncLower(canonicalIndex, definition, args)
-                : (args) => _coreHostResult(
-                    _synchronousAdapterProgram.invokeLoweredCore(
-                      canonicalIndex,
-                      args,
-                      memory: _canonicalMemory(definition),
-                      realloc: _canonicalRealloc(definition),
-                    ),
-                  ),
+                : (args) {
+                    _requireMayLeave(canonicalIndex);
+                    return _coreHostResult(
+                      _synchronousAdapterProgram.invokeLoweredCore(
+                        canonicalIndex,
+                        args,
+                        memory: _canonicalMemory(definition),
+                        realloc: _canonicalRealloc(definition),
+                      ),
+                    );
+                  },
           ),
         );
       case WasmComponentCanonicalKind.lift:
@@ -952,9 +982,8 @@ final class WASIComponentNativeRuntime {
         _coreFunctions.add(
           _CoreFunction(
             name: 'canonical[$canonicalIndex].${definition.kind.name}',
-            invoke: (args) =>
-                _binding.program.invokeAsync(canonicalIndex, args),
-            invokeSync: (args) => _binding.program.invoke(canonicalIndex, args),
+            invoke: (args) => _invokeResourceBuiltin(canonicalIndex, args),
+            invokeSync: (args) => _invokeResourceBuiltin(canonicalIndex, args),
           ),
         );
       case WasmComponentCanonicalKind.resourceDrop:
@@ -969,15 +998,15 @@ final class WASIComponentNativeRuntime {
           _coreFunctions.add(
             _CoreFunction(
               name: 'canonical[$canonicalIndex].resourceDrop',
-              invoke: (args) =>
-                  _binding.program.invokeAsync(canonicalIndex, args),
+              invoke: (args) => _invokeResourceBuiltin(canonicalIndex, args),
               invokeSync: (args) =>
-                  _binding.program.invoke(canonicalIndex, args),
+                  _invokeResourceBuiltin(canonicalIndex, args),
             ),
           );
           break;
         }
         Object? dropImportedResource(List<Object?> args) {
+          _requireMayLeave(canonicalIndex);
           if (args.length != 1 || args.single is! int) {
             throw WASIPreview2ComponentExecutionException(
               'Canonical resource.drop $canonicalIndex expected one handle.',
@@ -1092,6 +1121,16 @@ final class WASIComponentNativeRuntime {
     }
   }
 
+  void _requireMayLeave(int canonicalIndex) {
+    _adapterProgram.requireMayLeave(canonicalIndex);
+    _synchronousAdapterProgram.requireMayLeave(canonicalIndex);
+  }
+
+  Object? _invokeResourceBuiltin(int canonicalIndex, List<Object?> args) {
+    _requireMayLeave(canonicalIndex);
+    return _binding.program.invoke(canonicalIndex, args);
+  }
+
   Future<Object?> _invokeAsyncLift(
     int canonicalIndex,
     WasmComponentCanonicalDefinition definition,
@@ -1192,6 +1231,7 @@ final class WASIComponentNativeRuntime {
     WasmComponentCanonicalDefinition definition,
     List<Object?> coreArgs,
   ) {
+    _requireMayLeave(canonicalIndex);
     final canonicalHost = _componentHost.canonicalHost;
     final subtask = WASIComponentSubtask(
       name: 'canonical[$canonicalIndex].lower',
@@ -1804,9 +1844,7 @@ final class _CoreInstance {
               invokeSync: runtime.exportedFunctionSupportsSync(name)
                   ? (args) => runtime.invoke(name, args)
                   : null,
-              supportsSyncImport:
-                  allowSynchronousImports &&
-                  runtime.exportedFunctionSupportsSync(name),
+              supportsSyncImport: runtime.exportedFunctionSupportsSync(name),
             ),
           ),
         for (final name in runtime.exportedMemories)
