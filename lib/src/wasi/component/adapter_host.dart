@@ -846,7 +846,10 @@ final class WASIComponentCanonicalAdapterOperation {
   }
 
   /// Lifts an async canonical lift result captured by `task.return`.
-  Object? finishAsyncLiftResult(Object? taskResult, {wasm.Memory? memory}) {
+  Object? finishAsyncLiftResult(
+    Object? taskResult, {
+    wasm.Memory? memory,
+  }) => _withHandleLifting(() {
     _requireLiftedCoreOperation();
     if (!plan.isAsync) {
       throw StateError(
@@ -902,7 +905,7 @@ final class WASIComponentCanonicalAdapterOperation {
       );
     }
     return loaded.value;
-  }
+  });
 
   /// Invokes the adapter with parameter/result values stored in memory.
   Object? invokeWithMemory(
@@ -1055,7 +1058,10 @@ final class WASIComponentCanonicalAdapterOperation {
     return flatArgs;
   }
 
-  Object? _loadLiftedCoreResult(Object? coreResult, wasm.Memory? memory) {
+  Object? _loadLiftedCoreResult(
+    Object? coreResult,
+    wasm.Memory? memory,
+  ) => _withHandleLifting(() {
     final resultPlan = plan.result;
     if (resultPlan == null) {
       if (coreResult != null) {
@@ -1106,7 +1112,7 @@ final class WASIComponentCanonicalAdapterOperation {
       );
     }
     return loaded.value;
-  }
+  });
 
   ({int alignment, int byteLength}) _requireIndirectMemoryLayout(
     WASIComponentCanonicalAdapterValuePlan valuePlan,

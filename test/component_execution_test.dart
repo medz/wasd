@@ -13,6 +13,70 @@ import 'package:wasd/wasi.dart';
 import 'package:wasd/wasm.dart' hide Exception;
 
 void main() {
+  for (final shape in [
+    (width: 2, async: false),
+    (width: 2, async: true),
+    (width: 17, async: true),
+  ]) {
+    for (final duplicate in [false, true]) {
+      test(
+        '${shape.async ? 'task.return' : 'lift'} ${shape.width}-owner result preserves guests after ${duplicate ? 'duplicate' : 'invalid'} suffix',
+        () async {
+          final component = await _encodeComponent(
+            _canonicalOwnedResult(shape.width, asynchronous: shape.async),
+            validate: true,
+          );
+          expect(component.validate(), isEmpty);
+          final host = WASIComponentHost();
+          await host.table.runScoped(() async {
+            final runtime = WASIComponentNativeRuntime.component(
+              component: component,
+              host: host,
+            );
+            final prefixSum = shape.width * (shape.width - 1) ~/ 2;
+            var expectedSum = 0;
+            var runs = 0;
+            for (var attempt = 0; attempt < 3; attempt++) {
+              await expectLater(
+                runtime.invokeExport('make', [duplicate ? 1 : 0]),
+                throwsA(anything),
+              );
+              expect(await runtime.invokeExport('runs', []), ++runs);
+              expect(host.table.activeCount, shape.width - 1);
+              expect(await runtime.invokeExport('sum', []), expectedSum);
+              for (var i = 0; i < shape.width - 1; i++) {
+                expect(await runtime.invokeExport('rep', [i]), i + 1);
+              }
+              await runtime.invokeExport('drop-prefix', []);
+              expectedSum += prefixSum;
+              expect(await runtime.invokeExport('sum', []), expectedSum);
+              expect(host.table.activeCount, 0);
+            }
+            final owners = await runtime.invokeExport('make', [2]);
+            expect(await runtime.invokeExport('runs', []), ++runs);
+            await expectLater(
+              runtime.invokeExport('rep', [0]),
+              throwsA(anything),
+            );
+            expect(host.table.activeCount, shape.width);
+            await runtime.invokeExport('take', [owners]);
+            expectedSum += shape.width * (shape.width + 1) ~/ 2;
+            expect(await runtime.invokeExport('sum', []), expectedSum);
+            expect(await runtime.invokeExport('hits', []), 1);
+            expect(host.table.activeCount, 0);
+            await expectLater(
+              runtime.invokeExport('take', [owners]),
+              throwsA(anything),
+            );
+            expect(await runtime.invokeExport('hits', []), 1);
+            expect(await runtime.invokeExport('runs', []), runs);
+          });
+          expect(host.table.activeCount, 0);
+        },
+      );
+    }
+  }
+
   test('host resource signature follows an outer value type scope', () async {
     final component = await _encodeComponent(r'''
 (component
@@ -3693,6 +3757,74 @@ const _canonicalAsyncBorrow = r'''
  (func (export "finish") (alias export $user "finish")))
 
 ''';
+
+String _canonicalOwnedResult(int width, {required bool asynchronous}) {
+  final owners = List.filled(width, '(own \$exported)').join(' ');
+  final flat = width <= 16;
+  final takeParams = flat ? List.filled(width, 'i32').join(' ') : 'i32';
+  final taskParams = flat ? takeParams : 'i32';
+  final values = [
+    for (var i = 0; i < width; i++) 'i32.const ${64 + i * 4} i32.load',
+  ];
+  final makeResult = asynchronous
+      ? '${flat ? values.join(' ') : 'i32.const 64'} call \$return i32.const 0'
+      : 'i32.const 64';
+  return '''
+(component
+  (core module \$memory (memory (export "mem") 1)
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32) i32.const 1024))
+  (core instance \$memory (instantiate \$memory))
+  (core module \$state
+    (global \$sum (mut i32) (i32.const 0))
+    (func (export "dtor") (param i32) global.get \$sum local.get 0 i32.add global.set \$sum)
+    (func (export "sum") (result i32) global.get \$sum))
+  (core instance \$state (instantiate \$state))
+  (type \$r (resource (rep i32) (dtor (core func \$state "dtor"))))
+  (export \$exported "r" (type \$r))
+  (type \$owners (tuple $owners))
+  (core func \$new (canon resource.new \$r))
+  (core func \$rep (canon resource.rep \$r))
+  (core func \$drop (canon resource.drop \$r))
+  ${asynchronous ? '(core func \$return (canon task.return (result \$owners) (memory (core memory \$memory "mem"))))' : ''}
+  (core module \$m
+    (import "h" "mem" (memory 1))
+    (import "h" "new" (func \$new (param i32) (result i32)))
+    (import "h" "rep" (func \$rep (param i32) (result i32)))
+    (import "h" "drop" (func \$drop (param i32)))
+    ${asynchronous ? '(import "h" "return" (func \$return (param $taskParams)))' : ''}
+    (global \$runs (mut i32) (i32.const 0)) (global \$hits (mut i32) (i32.const 0))
+    (func (export "make") (param i32) (result i32)
+      global.get \$runs i32.const 1 i32.add global.set \$runs
+      ${[for (var i = 0; i < width - 1; i++) 'i32.const ${64 + i * 4} i32.const ${i + 1} call \$new i32.store'].join('\n')}
+      i32.const ${64 + (width - 1) * 4}
+      local.get 0 i32.const 2 i32.eq if (result i32) i32.const $width call \$new
+      else local.get 0 if (result i32) i32.const 64 i32.load else i32.const 0 end end i32.store
+      $makeResult)
+    (func (export "rep") (param i32) (result i32)
+      i32.const 64 local.get 0 i32.const 4 i32.mul i32.add i32.load call \$rep)
+    (func (export "drop-prefix")
+      ${values.take(width - 1).map((value) => '$value call \$drop').join('\n')})
+    (func (export "take") (param $takeParams)
+      global.get \$hits i32.const 1 i32.add global.set \$hits
+      ${[for (var i = 0; i < width; i++) '${flat ? 'local.get $i' : 'local.get 0 i32.load offset=${i * 4}'} call \$drop'].join('\n')})
+    (func (export "runs") (result i32) global.get \$runs)
+    (func (export "hits") (result i32) global.get \$hits)
+    (func (export "callback") (param i32 i32 i32) (result i32) unreachable))
+  (core instance \$h (export "mem" (memory \$memory "mem"))
+    (export "new" (func \$new)) (export "rep" (func \$rep)) (export "drop" (func \$drop))
+    ${asynchronous ? '(export "return" (func \$return))' : ''})
+  (core instance \$m (instantiate \$m (with "h" (instance \$h))))
+  (func (export "make") ${asynchronous ? 'async' : ''} (param "mode" u32) (result \$owners)
+    (canon lift (core func \$m "make") ${asynchronous ? 'async (callback (core func \$m "callback"))' : ''} (memory (core memory \$memory "mem"))))
+  (func (export "rep") (param "index" u32) (result u32) (canon lift (core func \$m "rep")))
+  (func (export "drop-prefix") (canon lift (core func \$m "drop-prefix")))
+  (func (export "take") (param "owners" \$owners)
+    (canon lift (core func \$m "take") (memory (core memory \$memory "mem")) (realloc (core func \$memory "realloc"))))
+  (func (export "runs") (result u32) (canon lift (core func \$m "runs")))
+  (func (export "hits") (result u32) (canon lift (core func \$m "hits")))
+  (func (export "sum") (result u32) (canon lift (core func \$state "sum"))))
+''';
+}
 
 String _canonicalOwnedTuple(int width, {required bool asynchronous}) {
   final owners = List.filled(width, '(own \$exported)').join(' ');

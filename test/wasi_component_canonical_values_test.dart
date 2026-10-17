@@ -2,17 +2,258 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:wasd/src/wasi/component/adapter_host.dart';
+import 'package:wasd/src/wasi/component/adapter_plan.dart';
 import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/canonical_handles.dart';
 import 'package:wasd/src/wasi/component/context.dart';
 import 'package:wasd/src/wasi/component/error_context.dart';
+import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/resource_table.dart';
+import 'package:wasd/src/wasi/component/string_memory.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
 
 import 'support/component_fixtures.dart' as fixtures;
 
 void main() {
+  for (final mode in ['sync', 'async flat', 'async indirect']) {
+    for (final duplicate in [false, true]) {
+      test(
+        'result transaction preserves $mode ${duplicate ? 'duplicate' : 'invalid'} owners',
+        () async {
+          final store = _Store();
+          await _scoped(store, () {
+            final width = mode == 'async indirect' ? 17 : 2;
+            final component = _types([
+              0x3f,
+              0x7f,
+              0,
+              0x69,
+              0,
+              0x6f,
+              width,
+              ...List.filled(width, 1),
+            ], 3);
+            final type = store.type();
+            final instance = _Instance(store, component, type);
+            final uses = [
+              for (var i = 0; i < width; i++)
+                WASIComponentResourceUse(
+                  canonicalIndex: 0,
+                  canonicalKind: WasmComponentCanonicalKind.lift,
+                  path: 'canonical[0].result.item[$i]',
+                  handleKind: WASIComponentResourceHandleKind.own,
+                  resourceTypeIndex: 0,
+                  binding: null,
+                ),
+            ];
+            const resultType = WasmComponentValueType.typeIndex(2);
+            final plan = WASIComponentCanonicalAdapterPlan(
+              canonicalIndex: 0,
+              definition: const WasmComponentCanonicalDefinition(
+                kind: WasmComponentCanonicalKind.lift,
+                coreFunctionIndex: 0,
+              ),
+              functionType: const WasmComponentFunctionType(
+                params: [],
+                result: resultType,
+              ),
+              params: const [],
+              result: WASIComponentCanonicalAdapterValuePlan(
+                path: 'canonical[0].result',
+                label: null,
+                type: resultType,
+                memoryCodec: null,
+                flatLayout: componentCanonicalFlatLayout(
+                  resultType,
+                  component.componentTypeIndexDefinitions,
+                  typeScope: component.componentTypeIndexScope,
+                ),
+                resourceUses: uses,
+              ),
+              resourceUses: uses,
+              stringEncoding: WASIComponentCanonicalStringEncoding.utf8,
+              memoryIndex: 0,
+              reallocIndex: null,
+              postReturnIndex: null,
+              callbackIndex: null,
+              isAsync: mode != 'sync',
+            );
+            final guests = [
+              for (var i = 0; i < width; i++)
+                instance.handles.newResource(0, i + 1),
+            ];
+            final memory = _memory();
+            final data = ByteData.view(memory.buffer);
+            final failing = [
+              ...guests.take(width - 1),
+              duplicate ? guests.first : 0,
+            ];
+            for (var i = 0; i < width; i++) {
+              data.setUint32(64 + i * 4, failing[i], Endian.little);
+            }
+            var calls = 0;
+            final program = const WASIComponentCanonicalAdapterHost()
+                .bindCanonicalAdapterPlans(
+                  [plan],
+                  endpointBindings: instance.handles,
+                  coreFunctions: {
+                    0: (_) {
+                      calls++;
+                      return 64;
+                    },
+                  },
+                );
+            Object? load(List<int> values) => mode == 'sync'
+                ? program.invokeLiftedCore(0, [], memory: memory)
+                : program.operations.single.finishAsyncLiftResult(
+                    mode == 'async flat' ? values : 64,
+                    memory: memory,
+                  );
+            expect(() => load(failing), throwsStateError);
+            expect(calls, mode == 'sync' ? 1 : 0);
+            for (var i = 0; i < width; i++) {
+              expect(instance.handles.resourceRep(0, guests[i]), i + 1);
+            }
+            expect(store.dropped, isEmpty);
+            for (var i = 0; i < width; i++) {
+              data.setUint32(64 + i * 4, guests[i], Endian.little);
+            }
+            final result = load(guests)! as WasmComponentValueData;
+            expect(calls, mode == 'sync' ? 2 : 0);
+            for (final guest in guests) {
+              expect(
+                () => instance.handles.resourceRep(0, guest),
+                throwsStateError,
+              );
+            }
+            for (final item
+                in result.itemValues.cast<WasmComponentValueData>()) {
+              store.table.drop(type, item.integer! as int);
+            }
+            expect(store.dropped, [for (var i = 0; i < width; i++) i + 1]);
+            expect(store.table.activeCount, 0);
+          });
+        },
+      );
+    }
+  }
+
+  for (final future in [false, true]) {
+    for (final enumeration in [false, true]) {
+      for (final difference in ['same', 'order', 'label', 'nominal']) {
+        test(
+          '${future ? 'future' : 'stream'} own-resource ${enumeration ? 'enum' : 'flags'} payload key: $difference',
+          () async {
+            final store = _Store();
+            await _scoped(store, () {
+              WasmComponent component(List<String> labels) => _types([
+                0x3f,
+                0x7f,
+                0,
+                0x69,
+                0,
+                enumeration ? 0x6d : 0x6e,
+                labels.length,
+                for (final label in labels) ...[
+                  label.length,
+                  ...label.codeUnits,
+                ],
+                0x6f,
+                2,
+                1,
+                2,
+                future ? 0x65 : 0x66,
+                1,
+                3,
+              ], 5);
+              final type = store.type();
+              final source = _Instance(
+                store,
+                component(['first', 'second']),
+                type,
+              );
+              final target = _Instance(
+                store,
+                component(switch (difference) {
+                  'order' => ['second', 'first'],
+                  'label' => ['first', 'third'],
+                  _ => ['first', 'second'],
+                }),
+                difference == 'nominal' ? store.type() : type,
+              );
+              final pair = future ? source.future(4) : source.stream(4);
+              final endpoint = source.handles.liftReadableEndpoint(
+                4,
+                pair.readable,
+              );
+              final _Instance receiver;
+              final int readable;
+              if (difference == 'same') {
+                receiver = target;
+                readable = target.handles.lowerReadableEndpoint(4, endpoint);
+              } else {
+                expect(
+                  () => target.handles.lowerReadableEndpoint(4, endpoint),
+                  throwsStateError,
+                );
+                receiver = source;
+                readable = source.handles.lowerReadableEndpoint(4, endpoint);
+              }
+              if (future) {
+                final owner = source.handles.liftResourceHandle(
+                  0,
+                  source.handles.newResource(0, 42),
+                  owned: true,
+                );
+                source
+                    .operation(WasmComponentCanonicalKind.futureWrite, 4)
+                    .futureWriteHandle(
+                      source.backing(pair.writable),
+                      WasmComponentValueData(
+                        kind: WasmComponentValueDataKind.tuple,
+                        rawBytes: Uint8List(0),
+                        items: [
+                          WasmComponentValueData(
+                            kind: WasmComponentValueDataKind.integer,
+                            rawBytes: Uint8List(0),
+                            integer: owner,
+                          ),
+                          WasmComponentValueData(
+                            kind: enumeration
+                                ? WasmComponentValueDataKind.enumeration
+                                : WasmComponentValueDataKind.flags,
+                            rawBytes: Uint8List(0),
+                            index: enumeration ? 0 : null,
+                            label: enumeration ? 'first' : null,
+                            labels: enumeration ? [] : ['first'],
+                          ),
+                        ],
+                      ),
+                    );
+                receiver
+                    .operation(WasmComponentCanonicalKind.futureDropReadable, 4)
+                    .futureDropReadableHandle(receiver.backing(readable));
+                source
+                    .operation(WasmComponentCanonicalKind.futureDropWritable, 4)
+                    .futureDropWritableHandle(source.backing(pair.writable));
+              } else {
+                receiver
+                    .operation(WasmComponentCanonicalKind.streamDropReadable, 4)
+                    .streamDropReadableHandle(receiver.backing(readable));
+                source
+                    .operation(WasmComponentCanonicalKind.streamDropWritable, 4)
+                    .streamDropWritableHandle(source.backing(pair.writable));
+              }
+              expect(store.table.activeCount, 0);
+            });
+          },
+        );
+      }
+    }
+  }
+
   test(
     'scoped numeric aliases keep same-instance rendezvous numeric',
     () async {
