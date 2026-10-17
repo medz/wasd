@@ -6,14 +6,25 @@ import 'dart:collection';
 
 import 'backpressure.dart';
 import '../../wasm/host_control_flow.dart';
+import '../../wasm/backend/native/interpreter/execution_error.dart';
 
 final _executionKey = Object();
+final _ownerKey = Object();
+final _cleanupKey = Object();
 
 final class _Failure {
-  const _Failure(this.error, this.stack);
+  const _Failure(this.error, this.stack, [this.owner]);
   final Object error;
   final StackTrace stack;
+  final Object? owner;
   Never rethrowError() => Error.throwWithStackTrace(error, stack);
+}
+
+bool _isDisposed(Object error) {
+  while (error is WasmExecutionErrorContext) {
+    error = error.cause;
+  }
+  return error is _Disposed;
 }
 
 final class _Outcome<T> {
@@ -39,18 +50,40 @@ final class WASIComponentGuestStore {
   final _ready = Queue<WASIComponentGuestCall>();
   final _live = <WASIComponentGuestCall>{};
   final _exclusive = <Object, WASIComponentGuestCall>{};
-  final _deliveries = <void Function()>{};
-  final _pendingCopies = <Future<void> Function()>{};
+  final _deliveries = <void Function(), Object?>{};
+  final _pendingCopies = <Future<void> Function(), Object?>{};
   final _aborting = <Future<void>>[];
   final _stopped = Completer<_Failure>();
   _Failure? _failure;
+  _Failure? _controlFlow;
   bool _disposed = false;
+  bool _aborted = false;
 
-  bool get stopped => _disposed || _failure != null;
+  static T withOwner<T>(Object owner, T Function() body) =>
+      runZoned(body, zoneValues: {_ownerKey: owner});
+
+  Object? get _currentOwner =>
+      WASIComponentGuestCall.current?._owner ?? Zone.current[_ownerKey];
+  Object? get failureOwner => _failure?.owner ?? _controlFlow?.owner;
+  bool get stopped => _disposed || _failure != null || _controlFlow != null;
+  bool get canRunDestructors =>
+      !_aborted && _failure == null && _controlFlow == null;
+
+  T runDestructor<T>(T Function() body) {
+    try {
+      return runZoned(body, zoneValues: {_cleanupKey: this});
+    } catch (error, stack) {
+      fail(error, stack);
+      rethrow;
+    }
+  }
 
   void check() {
     _failure?.rethrowError();
-    if (_disposed) throw const _Disposed();
+    _controlFlow?.rethrowError();
+    if (_disposed && !identical(Zone.current[_cleanupKey], this)) {
+      throw const _Disposed();
+    }
   }
 
   WASIComponentGuestCall start({
@@ -63,6 +96,7 @@ final class WASIComponentGuestStore {
     void Function()? onExit,
   }) {
     check();
+    if (_disposed) throw const _Disposed();
     final call = WASIComponentGuestCall._(
       this,
       instance,
@@ -90,12 +124,22 @@ final class WASIComponentGuestStore {
         await runZoned(() => body(call), zoneValues: {_executionKey: call});
       }
     } catch (error, stack) {
-      if (call._lockOnFailure &&
-          error is! _Disposed &&
-          error is! WasmHostControlFlowException) {
-        fail(error, stack);
+      if (call._lockOnFailure && !_isDisposed(error)) {
+        if (error is WasmHostControlFlowException) {
+          if (!stopped) {
+            _controlFlow = _Failure(error, stack, call._owner);
+            _aborted = true;
+            _stop(_controlFlow!);
+          }
+        } else {
+          fail(error, stack, owner: call._owner);
+        }
       }
-      call._resolve(_Outcome.failed(_failure ?? _Failure(error, stack)));
+      call._resolve(
+        _Outcome.failed(
+          _failure ?? _controlFlow ?? _Failure(error, stack, call._owner),
+        ),
+      );
     } finally {
       _finish(call);
     }
@@ -147,7 +191,7 @@ final class WASIComponentGuestStore {
   }
 
   void _tick() {
-    if (_running.isNotEmpty || _disposed || _failure != null) return;
+    if (_running.isNotEmpty || stopped) return;
     for (final call in _ready.toList(growable: false)) {
       if (!_eligible(call)) continue;
       _ready.remove(call);
@@ -169,7 +213,7 @@ final class WASIComponentGuestStore {
     try {
       call._onExit?.call();
     } catch (error, stack) {
-      fail(error, stack);
+      fail(error, stack, owner: call._owner);
     }
     _running.remove(call);
     _ready.remove(call);
@@ -180,9 +224,10 @@ final class WASIComponentGuestStore {
     _tick();
   }
 
-  void fail(Object error, StackTrace stack) {
-    if (_failure != null || _disposed) return;
-    _failure = _Failure(error, stack);
+  void fail(Object error, StackTrace stack, {Object? owner}) {
+    if (_failure != null) return;
+    _failure = _Failure(error, stack, owner ?? _currentOwner);
+    _aborted = true;
     _stop(_failure!);
   }
 
@@ -196,12 +241,12 @@ final class WASIComponentGuestStore {
       if (permit != null && !permit.isCompleted) permit.complete();
     }
     _ready.clear();
-    for (final abort in _pendingCopies.toList(growable: false)) {
+    for (final entry in _pendingCopies.entries.toList(growable: false)) {
       _aborting.add(
-        Future<void>.sync(abort).then<void>(
+        Future<void>.sync(entry.key).then<void>(
           (_) {},
           onError: (Object error, StackTrace stack) {
-            _failure ??= _Failure(error, stack);
+            _failure ??= _Failure(error, stack, entry.value);
           },
         ),
       );
@@ -209,7 +254,7 @@ final class WASIComponentGuestStore {
   }
 
   void Function() retainPendingCopy(Future<void> Function() abort) {
-    _pendingCopies.add(abort);
+    _pendingCopies[abort] = _currentOwner;
     return () => _pendingCopies.remove(abort);
   }
 
@@ -222,33 +267,45 @@ final class WASIComponentGuestStore {
       _deliveries.remove(deliver);
       release();
     };
-    _deliveries.add(deliver);
+    _deliveries[deliver] = _currentOwner;
     return deliver;
   }
 
-  Future<void> settle() async {
+  Future<void> settle() => _settle(includeControlFlow: true);
+
+  Future<void> _settle({required bool includeControlFlow}) async {
     while (_live.isNotEmpty) {
       await Future.wait(_live.map((call) => call._done.future));
     }
     if (stopped) {
       await Future.wait(_aborting);
-      for (final release in _deliveries.toList(growable: false)) {
+      for (final entry in _deliveries.entries.toList(growable: false)) {
         try {
-          release();
+          entry.key();
         } catch (error, stack) {
-          _failure ??= _Failure(error, stack);
+          _failure ??= _Failure(error, stack, entry.value);
         }
       }
     }
     _failure?.rethrowError();
+    if (includeControlFlow) _controlFlow?.rethrowError();
   }
 
   Future<void> dispose() async {
     if (!_disposed) {
+      _aborted =
+          _aborted ||
+          _live.isNotEmpty ||
+          _pendingCopies.isNotEmpty ||
+          _deliveries.isNotEmpty;
       _disposed = true;
-      _stop(_failure ?? _Failure(const _Disposed(), StackTrace.current));
+      _stop(
+        _failure ??
+            _controlFlow ??
+            _Failure(const _Disposed(), StackTrace.current),
+      );
     }
-    await settle();
+    await _settle(includeControlFlow: false);
   }
 }
 
@@ -262,7 +319,8 @@ final class WASIComponentGuestCall {
     this._backpressure,
     this._cancelBeforeStart,
     this._onExit,
-  );
+  ) : _owner = Zone.current[_ownerKey];
+  final Object? _owner;
   final WASIComponentGuestStore store;
   final Object _instance;
   final bool _exclusive;

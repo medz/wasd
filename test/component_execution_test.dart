@@ -2530,6 +2530,230 @@ void main() {
     });
   });
 
+  for (final blocked in [false, true]) {
+    test(
+      'continuation async lower observes sync ABI async task blocked=$blocked',
+      () async {
+        final component = await _encodeComponent(r'''(component
+  (import "visit" (func $visit (param "rep" u32)))
+  (component $provider
+    (import "visit" (func $visit (param "rep" u32)))
+    (core func $visit (canon lower (func $visit)))
+    (type $r (resource (rep i32)))
+    (export $re "r" (type $r))
+    (core func $new (canon resource.new $r))
+    (core module $m
+      (import "h" "new" (func $new (param i32) (result i32)))
+      (import "h" "visit" (func $visit (param i32)))
+      (func (export "make") (result i32) i32.const 100 call $new)
+      (func (export "inspect") (param i32) (result i32)
+        local.get 0 call $visit local.get 0))
+    (core instance $h (export "new" (func $new)) (export "visit" (func $visit)))
+    (core instance $m (instantiate $m (with "h" (instance $h))))
+    (func (export "make") (result (own $re)) (canon lift (core func $m "make")))
+    (func (export "inspect") async (param "h" (borrow $re)) (result u32)
+      (canon lift (core func $m "inspect"))))
+  (component $caller
+    (import "provider" (instance $p
+      (export "r" (type $r (sub resource)))
+      (export "make" (func (result (own $r))))
+      (export "inspect" (func async (param "h" (borrow $r)) (result u32)))))
+    (alias export $p "r" (type $r))
+    (core module $memory (memory (export "mem") 1))
+    (core instance $memory (instantiate $memory))
+    (core func $make (canon lower (func $p "make")))
+    (core func $inspect (canon lower (func $p "inspect") async (memory (core memory $memory "mem"))))
+    (core func $setnew (canon waitable-set.new))
+    (core func $join (canon waitable.join))
+    (core func $poll (canon waitable-set.poll (memory (core memory $memory "mem"))))
+    (core module $m
+      (import "h" "mem" (memory 1))
+      (import "h" "make" (func $make (result i32)))
+      (import "h" "inspect" (func $inspect (param i32 i32) (result i32)))
+      (import "h" "setnew" (func $setnew (result i32)))
+      (import "h" "join" (func $join (param i32 i32)))
+      (import "h" "poll" (func $poll (param i32 i32) (result i32)))
+      (global $owner (mut i32) (i32.const 0))
+      (global $packed (mut i32) (i32.const 0))
+      (global $set (mut i32) (i32.const 0))
+      (func (export "begin") (result i32) (local $sub i32)
+        call $make global.set $owner
+        global.get $owner i32.const 64 call $inspect global.set $packed
+        global.get $packed i32.const 4 i32.shr_u local.set $sub
+        local.get $sub if
+          call $setnew global.set $set
+          local.get $sub global.get $set call $join
+        end
+        global.get $packed)
+      (func (export "event-state") (result i32) i32.const 36 i32.load)
+      (func (export "value") (result i32) i32.const 64 i32.load)
+      (func (export "poll") (result i32)
+        global.get $set i32.eqz if (result i32) i32.const 0
+        else global.get $set i32.const 32 call $poll end))
+    (core instance $h (export "mem" (memory $memory "mem"))
+      (export "make" (func $make)) (export "inspect" (func $inspect))
+      (export "setnew" (func $setnew)) (export "join" (func $join)) (export "poll" (func $poll)))
+    (core instance $m (instantiate $m (with "h" (instance $h))))
+    (func (export "begin") (result u32) (canon lift (core func $m "begin")))
+    (func (export "event-state") (result u32) (canon lift (core func $m "event-state")))
+    (func (export "value") (result u32) (canon lift (core func $m "value")))
+    (func (export "poll") (result u32) (canon lift (core func $m "poll"))))
+  (instance $p (instantiate $provider (with "visit" (func $visit))))
+  (instance $c (instantiate $caller (with "provider" (instance $p))))
+  (func (export "begin") (alias export $c "begin"))
+  (func (export "event-state") (alias export $c "event-state"))
+  (func (export "value") (alias export $c "value"))
+  (func (export "poll") (alias export $c "poll")))
+''', validate: true);
+        final host = WASIComponentHost();
+        final release = Completer<void>();
+        final observed = <int>[];
+        await host.table.runScoped(() async {
+          final runtime = WASIComponentNativeRuntime.component(
+            component: component,
+            host: host,
+            imports: {
+              'visit': (args) {
+                observed.add(args.single as int);
+                return blocked ? release.future : null;
+              },
+            },
+          );
+          try {
+            expect(await runtime.invokeExport('begin', []), blocked ? 33 : 2);
+            expect(observed, [100]);
+            if (blocked) {
+              _expectHostOwnerLent(host, 100);
+              expect(await runtime.invokeExport('poll', []), 0);
+              release.complete();
+              await runtime.settle();
+              _expectHostOwnerLent(host, 100);
+              expect(await runtime.invokeExport('poll', []), 1);
+              expect(await runtime.invokeExport('event-state', []), 2);
+            }
+            expect(await runtime.invokeExport('value', []), 100);
+            final owner = _hostIntOwners(
+              host,
+            ).singleWhere((entry) => entry.$2 == 100).$1;
+            expect(
+              () => host.table.canonicalRequireReleasable(owner),
+              returnsNormally,
+            );
+          } finally {
+            if (!release.isCompleted) release.complete();
+            await runtime.dispose();
+          }
+        });
+        expect(host.table.activeCount, 0);
+      },
+    );
+  }
+
+  for (final cleanup in ['dispose', 'trap']) {
+    test(
+      'continuation resource cleanup distinguishes $cleanup from abort',
+      () async {
+        final component = await _encodeComponent(r'''
+(component
+  (import "host-resource" (type $host (sub resource)))
+  (core func $host-drop (canon resource.drop $host))
+  (core module $state
+    (import "h" "drop" (func $drop (param i32)))
+    (global $held (mut i32) (i32.const 0))
+    (func (export "seed") (param i32) local.get 0 global.set $held)
+    (func (export "held") (result i32) global.get $held)
+    (func (export "dtor") (param i32) local.get 0 call $drop))
+  (core instance $state-imports (export "drop" (func $host-drop)))
+  (core instance $state (instantiate $state (with "h" (instance $state-imports))))
+  (type $local (resource (rep i32) (dtor (core func $state "dtor"))))
+  (core func $new (canon resource.new $local))
+  (core module $m
+    (import "h" "new" (func $new (param i32) (result i32)))
+    (import "h" "held" (func $held (result i32)))
+    (func (export "allocate") call $held call $new drop)
+    (func (export "crash") unreachable))
+  (core instance $h (export "new" (func $new)) (export "held" (func $state "held")))
+  (core instance $m (instantiate $m (with "h" (instance $h))))
+  (func (export "seed") (param "source" (own $host)) (canon lift (core func $state "seed")))
+  (func (export "allocate") (canon lift (core func $m "allocate")))
+  (func (export "crash") (canon lift (core func $m "crash"))))
+''', validate: true);
+        final host = WASIComponentHost();
+        final dropped = <int>[];
+        final resource = host.canonicalHost.resourceHost
+            .defineResourceType<int>(0, 'host-resource', onDrop: dropped.add);
+        final runtime = WASIComponentNativeRuntime.component(
+          component: component,
+          host: host,
+        );
+        await host.table.runScoped(() async {
+          final owner = host.table.insert(resource, 7);
+          host.table.insert(resource, 11);
+          await runtime.invokeExport('seed', [owner]);
+          await runtime.invokeExport('allocate', []);
+          if (cleanup == 'trap') {
+            Object? original;
+            try {
+              await runtime.invokeExport('crash', []);
+            } catch (error) {
+              original = error;
+            }
+            expect(original, isA<WasmExecutionErrorContext>());
+            await expectLater(runtime.dispose(), throwsA(same(original)));
+          } else {
+            await runtime.dispose();
+          }
+        });
+        // The local destructor releases7 before allocation-scope cleanup of11.
+        // Fatal abort skips guest code, leaving the scope's reverse drop order.
+        expect(dropped, cleanup == 'trap' ? [11, 7] : [7, 11]);
+        expect(host.table.activeCount, 0);
+      },
+    );
+  }
+
+  for (final preview3 in [false, true]) {
+    test(
+      'continuation command cleanup executes guest destructor preview3=$preview3',
+      () async {
+        final component = await _encodeComponent('''
+(component
+  (core module \$dtor (func (export "dtor") (param i32) unreachable))
+  (core instance \$dtor (instantiate \$dtor))
+  (type \$r (resource (rep i32) (dtor (core func \$dtor "dtor"))))
+  (core func \$new (canon resource.new \$r))
+  ${preview3 ? r'(core func $return (canon task.return (result (result))))' : ''}
+  (core module \$m
+    (import "h" "new" (func \$new (param i32) (result i32)))
+    ${preview3 ? r'(import "h" "return" (func $return (param i32)))' : ''}
+    (func (export "run") (result i32)
+      i32.const 7 call \$new drop ${preview3 ? r'i32.const 0 call $return' : ''} i32.const 0)
+    (func (export "callback") (param i32 i32 i32) (result i32) unreachable))
+  (core instance \$h (export "new" (func \$new)) ${preview3 ? r'(export "return" (func $return))' : ''})
+  (core instance \$m (instantiate \$m (with "h" (instance \$h))))
+  (func (export "wasi:cli/run@${preview3 ? '0.3.1' : '0.2.0'}") ${preview3 ? 'async' : ''} (result (result))
+    (canon lift (core func \$m "run") ${preview3 ? r'async (callback (core func $m "callback"))' : ''})))
+''', validate: true);
+        final host = WASIComponentHost();
+        final runtime = WASIComponentNativeRuntime.component(
+          component: component,
+          host: host,
+        );
+        Object? original;
+        try {
+          await (preview3
+              ? runtime.runPreview3Command()
+              : runtime.runCommand());
+        } catch (error) {
+          original = error;
+        }
+        expect(original, isA<WasmExecutionErrorContext>());
+        expect(original.toString(), contains('unreachable'));
+        expect(host.table.activeCount, 0);
+      },
+    );
+  }
+
   group('resource destructors', () {
     test(
       'rejects draft async destructors before allocating host state',

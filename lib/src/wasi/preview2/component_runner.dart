@@ -283,42 +283,53 @@ final class WASIComponentNativeRuntime {
   /// Calls may depend on a later invocation; call this at a session boundary.
   Future<void> settle() => _store.settle();
 
+  /// Internal command token associated with the originating store failure.
+  Object? get failureOwner => _store.failureOwner;
+
   /// Aborts pending guest waits and releases retained execution scopes.
   ///
   /// A previously trapped store rethrows its first failure after cleanup.
   Future<void> dispose() => _store.dispose();
 
   /// Executes the Preview2 command export.
-  Future<int> runCommand() => _componentHost.table.runScoped(() async {
+  Future<int> runCommand() async {
     try {
-      _initialize();
-      final run = _findCommandRun();
-      final result = await run.invoke(const <Object?>[]);
-      await settle();
-      return _runResultExitCode(result);
-    } on WASIPreview2Exit catch (exit) {
-      return exit.statusCode;
+      return await _componentHost.table.runScoped(() async {
+        try {
+          _initialize();
+          final run = _findCommandRun();
+          final result = await run.invoke(const <Object?>[]);
+          await settle();
+          return _runResultExitCode(result);
+        } on WASIPreview2Exit catch (exit) {
+          return exit.statusCode;
+        }
+      });
     } finally {
       await dispose();
     }
-  });
+  }
 
   /// Executes the Preview3 async command export.
-  Future<int> runPreview3Command() => _componentHost.table.runScoped(() async {
+  Future<int> runPreview3Command() async {
     try {
-      _initialize();
-      final run = _findPreview3CommandRun();
-      final result = await run.invoke(const <Object?>[]);
-      await settle();
-      return _runResultExitCode(result);
-    } on WASIPreview3Exit catch (exit) {
-      return exit.statusCode;
-    } on WASIPreview2Exit catch (exit) {
-      return exit.statusCode;
+      return await _componentHost.table.runScoped(() async {
+        try {
+          _initialize();
+          final run = _findPreview3CommandRun();
+          final result = await run.invoke(const <Object?>[]);
+          await settle();
+          return _runResultExitCode(result);
+        } on WASIPreview3Exit catch (exit) {
+          return exit.statusCode;
+        } on WASIPreview2Exit catch (exit) {
+          return exit.statusCode;
+        }
+      });
     } finally {
       await dispose();
     }
-  });
+  }
 
   /// Executes a Preview2 HTTP proxy handler export.
   Future<WASIPreview2HttpResponseOutparam> handleProxy(
@@ -488,7 +499,7 @@ final class WASIComponentNativeRuntime {
       instanceLocalAsyncValues: true,
 
       onResourceDrop: (binding, representation) {
-        if (_store.stopped) return;
+        if (!_store.canRunDestructors) return;
         final definition = types[binding.componentTypeIndex];
         // A foreign alias's destructor index belongs to its defining runtime.
         // This membership check establishes static index provenance only.
@@ -496,7 +507,11 @@ final class WASIComponentNativeRuntime {
         final resource = definition.resource;
         final destructor = resource?.destructorFunctionIndex;
         if (destructor != null) {
-          _coreFunctions[destructor].invokeSynchronously([representation]);
+          _store.runDestructor(
+            () => _coreFunctions[destructor].invokeSynchronously([
+              representation,
+            ]),
+          );
         }
       },
     );
@@ -1667,6 +1682,7 @@ final class WASIComponentNativeRuntime {
               WASIComponentTask? task,
             })?;
     if (active == null ||
+        !_canonicalFunctionIsAsync(active.definition) ||
         active.task == null ||
         !identical(
           active.task,
@@ -1718,6 +1734,8 @@ final class WASIComponentNativeRuntime {
     void Function(Object? value)? onResolve,
   ) {
     final isAsync = _canonicalFunctionIsAsync(definition);
+    final isAsyncTask =
+        isAsync || _runtimeAdapterPlans[canonicalIndex]!.functionType.isAsync;
     final callbackIndex = _canonicalOptionIndex(
       definition,
       WasmComponentCanonicalOptionKind.callback,
@@ -1729,7 +1747,7 @@ final class WASIComponentNativeRuntime {
       );
     }
     final host = _componentHost.canonicalHost;
-    final task = isAsync
+    final task = isAsyncTask
         ? host.taskHost.createTask(
             name: 'canonical[$canonicalIndex].lift',
             subtask: subtask,
@@ -1739,8 +1757,8 @@ final class WASIComponentNativeRuntime {
     late WASIComponentGuestCall call;
     call = _store.start(
       instance: this,
-      exclusive: isAsync,
-      backpressure: isAsync ? host.asyncHost.backpressure : null,
+      exclusive: isAsyncTask,
+      backpressure: isAsyncTask ? host.asyncHost.backpressure : null,
       cancelBeforeStart: () {
         task!.deliverCancellation();
         task.cancel();
@@ -1753,12 +1771,14 @@ final class WASIComponentNativeRuntime {
         task?.bindCanonicalExecution(
           liftResult: (raw) {
             _requireMayLeave(canonicalIndex);
-            _handles.requireNoCallBorrows();
-            final snapshot = _adapterProgram.finishAsyncLiftResult(
-              canonicalIndex,
-              raw,
-              memory: _canonicalMemory(definition),
-            );
+            if (isAsync) _handles.requireNoCallBorrows();
+            final snapshot = !isAsync
+                ? raw
+                : _adapterProgram.finishAsyncLiftResult(
+                    canonicalIndex,
+                    raw,
+                    memory: _canonicalMemory(definition),
+                  );
             onResolve?.call(snapshot);
             return snapshot;
           },
@@ -1768,14 +1788,31 @@ final class WASIComponentNativeRuntime {
           () => _handles.withThread(
             () => _handles.withHandleCall(() async {
               if (!isAsync) {
-                final value = await _adapterProgram.invokeLiftedCoreAsync(
-                  canonicalIndex,
-                  loadArgs(),
-                  memory: _canonicalMemory(definition),
-                  realloc: _canonicalRealloc(definition),
-                );
-                onResolve?.call(value);
-                execution.resolve(value);
+                Future<void> invoke() async {
+                  task?.markStarted();
+                  final value = await _adapterProgram.invokeLiftedCoreAsync(
+                    canonicalIndex,
+                    loadArgs(),
+                    memory: _canonicalMemory(definition),
+                    realloc: _canonicalRealloc(definition),
+                  );
+                  if (task != null) {
+                    task.returnResult(
+                      result: value,
+                      hasResult:
+                          _runtimeAdapterPlans[canonicalIndex]!.result != null,
+                    );
+                  } else {
+                    onResolve?.call(value);
+                    execution.resolve(value);
+                  }
+                }
+
+                if (task == null) {
+                  await invoke();
+                } else {
+                  await host.taskHost.runWithTaskAsync(task, invoke);
+                }
                 return;
               }
               await host.taskHost.runWithTaskAsync(task!, () async {
