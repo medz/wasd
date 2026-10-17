@@ -376,3 +376,15 @@ WasmComponentValueData _errorCode(String label) {
     ),
   );
 }
+
+/// Internal canonical ABI access to this host's resource identities.
+extension WASIPreview3CliResourceTypes on WASIPreview3CliHost {
+  /// Returns the actual nominal type owned by this host.
+  WASIComponentResourceType<Object>? canonicalResourceType(
+    String resourceName,
+  ) => switch (resourceName) {
+    'terminal-input' => _terminalInputType,
+    'terminal-output' => _terminalOutputType,
+    _ => null,
+  };
+}

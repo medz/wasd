@@ -512,3 +512,35 @@ WASIComponentHost _resolvePreview3ComponentHost({
     canonicalHost: WASIComponentCanonicalHost(table: tables.first.table),
   );
 }
+
+/// Internal standard-contract access to this host's resource identities.
+extension WASIPreview3ComponentResourceTypes on WASIPreview3ComponentHost {
+  /// Resolves a standard WIT contract to its actual host-owned nominal type.
+  WASIComponentResourceType<Object>? canonicalResourceType(
+    String interfaceName,
+    String resourceName,
+  ) {
+    final separator = interfaceName.lastIndexOf('@');
+    if (separator < 0) return null;
+    final version = interfaceName.substring(separator + 1);
+    if (version != '0.3.0' && version != '0.3.1') {
+      return _preview2CompatibilityHost.canonicalResourceType(
+        interfaceName,
+        resourceName,
+      );
+    }
+    return switch ((interfaceName.substring(0, separator), resourceName)) {
+      ('wasi:cli/terminal-input', 'terminal-input') =>
+        cliHost.canonicalResourceType(resourceName),
+      ('wasi:cli/terminal-output', 'terminal-output') =>
+        cliHost.canonicalResourceType(resourceName),
+      ('wasi:filesystem/types', 'descriptor') =>
+        filesystemHost.canonicalResourceType(resourceName),
+      ('wasi:http/types', _) => httpHost.canonicalResourceType(resourceName),
+      ('wasi:sockets/types', _) => socketsHost.canonicalResourceType(
+        resourceName,
+      ),
+      _ => null,
+    };
+  }
+}

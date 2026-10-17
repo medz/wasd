@@ -49,6 +49,7 @@ final class WASIComponentSubtask {
   void Function(WASIComponentSubtask subtask)? _onCancel;
   bool _cancellationRequested = false;
   bool _resolveDelivered = false;
+  void Function()? _onResolveDelivered;
   bool _hasResult = false;
   Object? _result;
   Object? _failure;
@@ -198,6 +199,13 @@ final class WASIComponentSubtask {
       );
     }
     _resolveDelivered = true;
+    final release = _onResolveDelivered;
+    _onResolveDelivered = null;
+    try {
+      release?.call();
+    } catch (_) {
+      if (_failure == null) rethrow;
+    }
     final failure = _failure;
     if (failure != null) {
       Error.throwWithStackTrace(
@@ -525,4 +533,21 @@ int _expectHandle(int canonicalIndex, Object? value) {
   throw StateError(
     'WASI component canonical subtask index $canonicalIndex expected handle.',
   );
+}
+
+/// Runtime loan lifetime tied to final state delivery, including cancellation.
+extension WASIComponentCanonicalSubtaskDelivery on WASIComponentSubtask {
+  /// Retains the call scope until the final subtask event reaches wasm.
+  void retainCanonicalBorrows(void Function() release) {
+    final previous = _onResolveDelivered;
+    _onResolveDelivered = previous == null
+        ? release
+        : () {
+            previous();
+            release();
+          };
+  }
+
+  /// Delivers a synchronous final state through the same loan cleanup path.
+  int deliverCanonicalResolve() => _deliverResolve();
 }

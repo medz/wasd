@@ -2962,3 +2962,19 @@ const Map<String, int> _networkErrorCodeIndexes = <String, int>{
   'temporary-resolver-failure': 19,
   'permanent-resolver-failure': 20,
 };
+
+/// Internal canonical ABI access to this host's resource identities.
+extension WASIPreview2SocketsResourceTypes on WASIPreview2SocketsHost {
+  /// Returns the actual nominal type owned by this host.
+  WASIComponentResourceType<Object>? canonicalResourceType(
+    String resourceName,
+  ) => switch (resourceName) {
+    'network' => _networkType,
+    'resolve-address-stream' => _resolveAddressStreamType,
+    'tcp-socket' => _tcpSocketType,
+    'udp-socket' => _udpSocketType,
+    'incoming-datagram-stream' => _incomingDatagramStreamType,
+    'outgoing-datagram-stream' => _outgoingDatagramStreamType,
+    _ => null,
+  };
+}

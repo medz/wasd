@@ -145,6 +145,11 @@ final class WASIComponentResourceHost {
         () => index,
       );
     }
+    final bindingsByDefinition =
+        <WasmComponentTypeDefinition, WASIComponentResourceBinding>{
+          for (final entry in componentTypeIndexes.entries)
+            entry.key: ?componentBindingsByTypeIndex[entry.value],
+        };
     final uses = <WASIComponentResourceUse>[];
 
     for (
@@ -162,12 +167,17 @@ final class WASIComponentResourceHost {
       }
       final functionType = context.functionType;
       final definitions = context.typeDefinitions;
-      final bindingsByTypeIndex = _resourceBindingsForTypeContext(
-        definitions,
-        componentTypeIndexes,
-        componentBindingsByTypeIndex,
-      );
-
+      final nestedResourceIndexes =
+          Map<WasmComponentTypeDefinition, int>.identity();
+      // Nested signatures may reuse the same numeric index for distinct
+      // resources. Keep their nominal definitions distinct in adapter layouts.
+      var nextResourceIndex = componentDefinitions.length;
+      int resourceIndex(WasmComponentTypeDefinition resource) =>
+          componentTypeIndexes[resource] ??
+          nestedResourceIndexes.putIfAbsent(
+            resource,
+            () => nextResourceIndex++,
+          );
       for (
         var paramIndex = 0;
         paramIndex < functionType.params.length;
@@ -177,24 +187,28 @@ final class WASIComponentResourceHost {
         _collectResourceUses(
           param.type,
           definitions,
-          bindingsByTypeIndex,
+          bindingsByDefinition,
+          typeScope: context.typeScope,
+          resourceIndex: resourceIndex,
           canonicalIndex: canonicalIndex,
           canonicalKind: definition.kind,
           path: _canonicalParamPath(canonicalIndex, paramIndex, param.label),
           uses: uses,
-          visiting: <int>{},
+          visiting: <Object>{},
         );
       }
 
       _collectResourceUses(
         functionType.result,
         definitions,
-        bindingsByTypeIndex,
+        bindingsByDefinition,
+        typeScope: context.typeScope,
+        resourceIndex: resourceIndex,
         canonicalIndex: canonicalIndex,
         canonicalKind: definition.kind,
         path: 'canonical[$canonicalIndex].result',
         uses: uses,
-        visiting: <int>{},
+        visiting: <Object>{},
       );
     }
 
@@ -456,6 +470,7 @@ final class WASIComponentResourceUse {
     required this.handleKind,
     required this.resourceTypeIndex,
     required this.binding,
+    this.resourceTypeDefinition,
   });
 
   /// Canonical definition index containing this handle.
@@ -470,8 +485,11 @@ final class WASIComponentResourceUse {
   /// Whether this is an owned or borrowed handle.
   final WASIComponentResourceHandleKind handleKind;
 
-  /// Component type index of the referenced resource type.
+  /// Component type index, or an adapter-local index for a nested resource.
   final int resourceTypeIndex;
+
+  /// Nominal resource definition retained when a signature crosses type scopes.
+  final WasmComponentTypeDefinition? resourceTypeDefinition;
 
   /// Decoded resource binding, or `null` when the component is not valid
   /// enough to resolve the handle to a resource type.
@@ -579,16 +597,16 @@ WasmComponentFunctionTypeContext? _canonicalAdapterFunctionTypeContext(
 ) {
   switch (definition.kind) {
     case WasmComponentCanonicalKind.lift:
-      final definitions = component.componentTypeIndexDefinitions;
-      final functionType = _componentFunctionType(
-        definitions,
+      final context = component.componentTypeIndexScope.definitionContextAt(
         definition.typeIndex,
       );
+      final functionType = context?.definition.function;
       return functionType == null
           ? null
           : WasmComponentFunctionTypeContext(
               functionType: functionType,
-              typeDefinitions: definitions,
+              typeDefinitions: context!.typeScope.definitions,
+              typeScope: context.typeScope,
             );
     case WasmComponentCanonicalKind.lower:
       final functionIndex = definition.functionIndex;
@@ -604,44 +622,6 @@ WasmComponentFunctionTypeContext? _canonicalAdapterFunctionTypeContext(
   }
 }
 
-Map<int, WASIComponentResourceBinding> _resourceBindingsForTypeContext(
-  List<WasmComponentTypeDefinition> definitions,
-  Map<WasmComponentTypeDefinition, int> componentTypeIndexes,
-  Map<int, WASIComponentResourceBinding> componentBindings,
-) {
-  final bindings = <int, WASIComponentResourceBinding>{};
-  for (var index = 0; index < definitions.length; index++) {
-    final definition = definitions[index];
-    if (definition.kind != WasmComponentTypeKind.resource ||
-        definition.resource == null) {
-      continue;
-    }
-    final componentIndex = componentTypeIndexes[definition];
-    if (componentIndex == null) {
-      continue;
-    }
-    final binding = componentBindings[componentIndex];
-    if (binding != null) {
-      bindings[index] = binding;
-    }
-  }
-  return bindings;
-}
-
-WasmComponentFunctionType? _componentFunctionType(
-  List<WasmComponentTypeDefinition> definitions,
-  int? typeIndex,
-) {
-  if (typeIndex == null || typeIndex < 0 || typeIndex >= definitions.length) {
-    return null;
-  }
-  final definition = definitions[typeIndex];
-  if (definition.kind != WasmComponentTypeKind.function) {
-    return null;
-  }
-  return definition.function;
-}
-
 String _canonicalParamPath(int canonicalIndex, int paramIndex, String label) {
   final base = 'canonical[$canonicalIndex].param[$paramIndex]';
   return label.isEmpty ? base : '$base.$label';
@@ -650,12 +630,15 @@ String _canonicalParamPath(int canonicalIndex, int paramIndex, String label) {
 void _collectResourceUses(
   WasmComponentValueType? valueType,
   List<WasmComponentTypeDefinition> definitions,
-  Map<int, WASIComponentResourceBinding> bindingsByTypeIndex, {
+  Map<WasmComponentTypeDefinition, WASIComponentResourceBinding>
+  bindingsByDefinition, {
+  required WasmComponentTypeScope? typeScope,
+  required int Function(WasmComponentTypeDefinition resource) resourceIndex,
   required int canonicalIndex,
   required WasmComponentCanonicalKind canonicalKind,
   required String path,
   required List<WASIComponentResourceUse> uses,
-  required Set<int> visiting,
+  required Set<Object> visiting,
 }) {
   if (valueType == null ||
       valueType.kind == WasmComponentValueTypeKind.primitive) {
@@ -663,21 +646,25 @@ void _collectResourceUses(
   }
 
   final typeIndex = valueType.typeIndex;
+  final context = typeScope?.definitionContextAt(typeIndex);
+  final key = context ?? typeIndex;
   if (typeIndex == null ||
       typeIndex < 0 ||
-      typeIndex >= definitions.length ||
-      !visiting.add(typeIndex)) {
+      (context == null && typeIndex >= definitions.length) ||
+      !visiting.add(key!)) {
     return;
   }
 
-  final definition = definitions[typeIndex];
+  final definition = context?.definition ?? definitions[typeIndex];
   final definedValue = definition.definedValue;
   if (definition.kind == WasmComponentTypeKind.definedValue &&
       definedValue != null) {
     _collectDefinedValueResourceUses(
       definedValue,
       definitions,
-      bindingsByTypeIndex,
+      bindingsByDefinition,
+      typeScope: context?.typeScope ?? typeScope,
+      resourceIndex: resourceIndex,
       canonicalIndex: canonicalIndex,
       canonicalKind: canonicalKind,
       path: path,
@@ -685,18 +672,21 @@ void _collectResourceUses(
       visiting: visiting,
     );
   }
-  visiting.remove(typeIndex);
+  visiting.remove(key);
 }
 
 void _collectDefinedValueResourceUses(
   WasmComponentDefinedValueType definedValue,
   List<WasmComponentTypeDefinition> definitions,
-  Map<int, WASIComponentResourceBinding> bindingsByTypeIndex, {
+  Map<WasmComponentTypeDefinition, WASIComponentResourceBinding>
+  bindingsByDefinition, {
+  required WasmComponentTypeScope? typeScope,
+  required int Function(WasmComponentTypeDefinition resource) resourceIndex,
   required int canonicalIndex,
   required WasmComponentCanonicalKind canonicalKind,
   required String path,
   required List<WASIComponentResourceUse> uses,
-  required Set<int> visiting,
+  required Set<Object> visiting,
 }) {
   switch (definedValue.kind) {
     case WasmComponentDefinedValueTypeKind.own:
@@ -705,6 +695,11 @@ void _collectDefinedValueResourceUses(
       if (resourceTypeIndex == null || resourceTypeIndex < 0) {
         return;
       }
+      final resourceDefinition =
+          typeScope?.definitionAt(resourceTypeIndex) ??
+          (resourceTypeIndex < definitions.length
+              ? definitions[resourceTypeIndex]
+              : null);
       uses.add(
         WASIComponentResourceUse(
           canonicalIndex: canonicalIndex,
@@ -713,8 +708,11 @@ void _collectDefinedValueResourceUses(
           handleKind: definedValue.kind == WasmComponentDefinedValueTypeKind.own
               ? WASIComponentResourceHandleKind.own
               : WASIComponentResourceHandleKind.borrow,
-          resourceTypeIndex: resourceTypeIndex,
-          binding: bindingsByTypeIndex[resourceTypeIndex],
+          resourceTypeIndex: resourceDefinition == null
+              ? resourceTypeIndex
+              : resourceIndex(resourceDefinition),
+          resourceTypeDefinition: resourceDefinition,
+          binding: bindingsByDefinition[resourceDefinition],
         ),
       );
       return;
@@ -723,7 +721,9 @@ void _collectDefinedValueResourceUses(
         _collectResourceUses(
           field.type,
           definitions,
-          bindingsByTypeIndex,
+          bindingsByDefinition,
+          typeScope: typeScope,
+          resourceIndex: resourceIndex,
           canonicalIndex: canonicalIndex,
           canonicalKind: canonicalKind,
           path: '$path.${field.label}',
@@ -738,7 +738,9 @@ void _collectDefinedValueResourceUses(
         _collectResourceUses(
           case_.type,
           definitions,
-          bindingsByTypeIndex,
+          bindingsByDefinition,
+          typeScope: typeScope,
+          resourceIndex: resourceIndex,
           canonicalIndex: canonicalIndex,
           canonicalKind: canonicalKind,
           path: '$path.case[$i].${case_.label}',
@@ -751,7 +753,9 @@ void _collectDefinedValueResourceUses(
       _collectResourceUses(
         definedValue.keyType,
         definitions,
-        bindingsByTypeIndex,
+        bindingsByDefinition,
+        typeScope: typeScope,
+        resourceIndex: resourceIndex,
         canonicalIndex: canonicalIndex,
         canonicalKind: canonicalKind,
         path: '$path.key',
@@ -761,7 +765,9 @@ void _collectDefinedValueResourceUses(
       _collectResourceUses(
         definedValue.valueType,
         definitions,
-        bindingsByTypeIndex,
+        bindingsByDefinition,
+        typeScope: typeScope,
+        resourceIndex: resourceIndex,
         canonicalIndex: canonicalIndex,
         canonicalKind: canonicalKind,
         path: '$path.value',
@@ -777,7 +783,9 @@ void _collectDefinedValueResourceUses(
       _collectResourceUses(
         definedValue.elementType,
         definitions,
-        bindingsByTypeIndex,
+        bindingsByDefinition,
+        typeScope: typeScope,
+        resourceIndex: resourceIndex,
         canonicalIndex: canonicalIndex,
         canonicalKind: canonicalKind,
         path: '$path.element',
@@ -790,7 +798,9 @@ void _collectDefinedValueResourceUses(
         _collectResourceUses(
           definedValue.types[i],
           definitions,
-          bindingsByTypeIndex,
+          bindingsByDefinition,
+          typeScope: typeScope,
+          resourceIndex: resourceIndex,
           canonicalIndex: canonicalIndex,
           canonicalKind: canonicalKind,
           path: '$path.item[$i]',
@@ -803,7 +813,9 @@ void _collectDefinedValueResourceUses(
       _collectResourceUses(
         definedValue.okType,
         definitions,
-        bindingsByTypeIndex,
+        bindingsByDefinition,
+        typeScope: typeScope,
+        resourceIndex: resourceIndex,
         canonicalIndex: canonicalIndex,
         canonicalKind: canonicalKind,
         path: '$path.ok',
@@ -813,7 +825,9 @@ void _collectDefinedValueResourceUses(
       _collectResourceUses(
         definedValue.errorType,
         definitions,
-        bindingsByTypeIndex,
+        bindingsByDefinition,
+        typeScope: typeScope,
+        resourceIndex: resourceIndex,
         canonicalIndex: canonicalIndex,
         canonicalKind: canonicalKind,
         path: '$path.error',
@@ -927,4 +941,20 @@ int _expectHandle(int canonicalIndex, Object? value) {
   throw StateError(
     'WASI component canonical resource index $canonicalIndex expected an i32 handle.',
   );
+}
+
+/// Explicit host registrations supplied through the existing resource API.
+extension WASIComponentCanonicalRegisteredResourceTypes
+    on WASIComponentResourceHost {
+  /// Reads only explicit registrations; diagnostic names never define identity.
+  WASIComponentResourceType<Object>? canonicalRegisteredTypeAt(int index) =>
+      _resourceTypes[index]?.type;
+}
+
+/// Internal nominal lookup for the concrete definitions of one instance.
+extension WASIComponentCanonicalResourceBindingTypes<T extends Object>
+    on WASIComponentResourceBindingSet<T> {
+  /// Returns the already-created token for this local resource definition.
+  WASIComponentResourceType<Object> canonicalResourceTypeAt(int index) =>
+      _registeredTypes[index]!.type;
 }

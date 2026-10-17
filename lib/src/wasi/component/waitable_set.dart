@@ -979,3 +979,10 @@ int _expectPointer(int canonicalIndex, Object? value) {
 }
 
 const int _maxU32 = 0xffffffff;
+
+/// Runtime copy status evaluated when a pending event is delivered.
+extension WASIComponentCanonicalWaitableCopyState on WASIComponentWaitable {
+  /// Whether cancellation must take precedence when a pending event is delivered.
+  bool get isCopyCancellationRequested =>
+      _copyState == _WASIComponentWaitableCopyState.cancellingCopy;
+}

@@ -47,9 +47,13 @@ final class WASIComponentCanonicalValueMemoryCodec {
   /// nested stream/future values, or an invalid type index.
   static WASIComponentCanonicalValueMemoryCodec? fromValueType(
     WasmComponentValueType type,
-    List<WasmComponentTypeDefinition> definitions,
-  ) {
-    final layout = _LayoutResolver(definitions).resolveValueType(type);
+    List<WasmComponentTypeDefinition> definitions, {
+    WasmComponentTypeScope? typeScope,
+  }) {
+    final layout = _LayoutResolver(
+      definitions,
+      typeScope: typeScope,
+    ).resolveValueType(type);
     return layout == null
         ? null
         : WASIComponentCanonicalValueMemoryCodec._(layout);
@@ -85,11 +89,13 @@ final class WASIComponentCanonicalValueMemoryCodec {
   /// cannot extend a borrow lifetime through the byte codec.
   static WASIComponentCanonicalValueMemoryCodec? fromAsyncElementType(
     WasmComponentValueType type,
-    List<WasmComponentTypeDefinition> definitions,
-  ) {
+    List<WasmComponentTypeDefinition> definitions, {
+    WasmComponentTypeScope? typeScope,
+  }) {
     final layout = _LayoutResolver(
       definitions,
       handleMode: _ResourceHandleMemoryMode.ownOnly,
+      typeScope: typeScope,
     ).resolveValueType(type);
     return layout == null
         ? null

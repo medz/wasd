@@ -139,6 +139,36 @@ void main() {
       }
     });
 
+    test(
+      'unregistered abstract providers never learn a token from a matching handle name',
+      () async {
+        final component = await _compileComponentWat(
+          'unregistered_provider',
+          _resourceDropWat('one', 'request'),
+        );
+        final host = WASIComponentHost();
+        final type = host.table.defineType<Object>('one.request');
+        final handle = host.table.insert(type, Object());
+        final runtime = native_runtime.WASIComponentNativeRuntime.component(
+          component: component,
+          host: host,
+        );
+        await expectLater(
+          runtime.invokeExport('drop', [handle]),
+          throwsA(
+            isA<native_runtime.WASIPreview2ComponentExecutionException>()
+                .having(
+                  (error) => error.message,
+                  'message',
+                  contains('Unregistered abstract host resource'),
+                ),
+          ),
+        );
+        expect(host.table.contains(handle), isTrue);
+        host.table.drop(type, handle);
+      },
+    );
+
     test('keeps plain resource instance names nominally separate', () async {
       final component = await _compileComponentWat(
         '031_plain_resource_names',
@@ -147,7 +177,8 @@ void main() {
       final host = WASIComponentHost();
       var firstDrops = 0;
       var secondDrops = 0;
-      final first = host.table.defineType<Object>(
+      final first = host.canonicalHost.resourceHost.defineResourceType<Object>(
+        1,
         'one.request',
         onDrop: (_) => firstDrops++,
       );
@@ -196,6 +227,8 @@ void main() {
             _resourceDropWat(interface, resource),
           );
           final host = WASIComponentHost();
+          final expectedType = host.canonicalHost.resourceHost
+              .defineResourceType<Object>(1, '$interface.$resource');
           final type = host.table.defineType<Object>(legacy);
           final handle = host.table.insert(type, Object());
           final runtime = native_runtime.WASIComponentNativeRuntime.component(
@@ -207,6 +240,9 @@ void main() {
             throwsStateError,
           );
           expect(host.table.activeCount, 1);
+          final valid = host.table.insert(expectedType, Object());
+          await runtime.invokeExport('drop', [valid]);
+          expect(host.table.contains(valid), isFalse);
           host.table.drop(type, handle);
         }
       },
@@ -259,13 +295,46 @@ void main() {
       expect(host.componentHost.table.activeCount, baselineResources);
     });
 
+    test(
+      'rejects a response forged into the request parameter before guest entry',
+      () async {
+        final component = await _compileComponentWat(
+          'forged_request',
+          _serviceWat(returnsError: true),
+        );
+        final componentHost = WASIComponentHost();
+        final httpHost = _InvalidRequestHost(componentHost.table);
+        final host = WASIPreview3ComponentHost(
+          componentHost: componentHost,
+          httpHost: httpHost,
+        );
+        await expectLater(
+          WASIPreview3ServiceRunner(host).handle(
+            component,
+            WASIPreview3HttpRequest.noTrailers(
+              headers: WASIPreview3HttpFields(),
+            ),
+          ),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              contains('request'),
+            ),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(componentHost.table.activeCount, 0);
+      },
+    );
+
     test('takes successful response ownership before scope cleanup', () async {
       final component = await _compileComponentWat(
         'http_service_response',
         _serviceWat(returnsError: false),
       );
       final componentHost = WASIComponentHost();
-      final httpHost = _ResponseRequestHost(componentHost.table);
+      final httpHost = _ResponseHost(componentHost.table);
       final host = WASIPreview3ComponentHost(
         componentHost: componentHost,
         httpHost: httpHost,
@@ -290,7 +359,7 @@ void main() {
         _serviceWat(returnsError: false),
       );
       final componentHost = WASIComponentHost();
-      final httpHost = _TrailerResponseRequestHost(componentHost.table);
+      final httpHost = _TrailerResponseHost(componentHost.table);
       final host = WASIPreview3ComponentHost(
         componentHost: componentHost,
         httpHost: httpHost,
@@ -327,9 +396,7 @@ void main() {
           _serviceWat(returnsError: false),
         );
         final componentHost = WASIComponentHost();
-        final httpHost = _PendingTrailerResponseRequestHost(
-          componentHost.table,
-        );
+        final httpHost = _PendingTrailerResponseHost(componentHost.table);
         final host = WASIPreview3ComponentHost(
           componentHost: componentHost,
           httpHost: httpHost,
@@ -377,9 +444,7 @@ void main() {
           _serviceWat(returnsError: false),
         );
         final componentHost = WASIComponentHost();
-        final httpHost = _PendingTrailerResponseRequestHost(
-          componentHost.table,
-        );
+        final httpHost = _PendingTrailerResponseHost(componentHost.table);
         final host = WASIPreview3ComponentHost(
           componentHost: componentHost,
           httpHost: httpHost,
@@ -470,34 +535,49 @@ String _resourceDropWat(String interface, String resource) =>
   (import "INTERFACE" (instance $types-instance (type $types)))
   (alias export $types-instance "RESOURCE" (type $resource))
   (core func $drop (canon resource.drop $resource))
-  (func $drop-function (param "handle" u32) (canon lift (core func $drop)))
+  (func $drop-function (param "handle" (own $resource)) (canon lift (core func $drop)))
   (export "drop" (func $drop-function)))
 '''
         .replaceAll('INTERFACE', interface)
         .replaceAll('RESOURCE', resource);
 
-final class _ResponseRequestHost extends WASIPreview3HttpHost {
-  _ResponseRequestHost(WASIComponentResourceTable table) : super(table: table);
+base class _ResponseHost extends WASIPreview3HttpHost {
+  _ResponseHost(WASIComponentResourceTable table) : super(table: table);
 
   final response = WASIPreview3HttpResponse.noTrailers(
     headers: WASIPreview3HttpFields(),
   )..statusCode = 204;
 
   @override
+  Map<String, WASIComponentWitAdapterCallback> get imports => {
+    ...super.imports,
+    'fixture-response': (_) => createResponse(),
+  };
+
+  int createResponse() => insertResponse(response);
+}
+
+final class _InvalidRequestHost extends _ResponseHost {
+  _InvalidRequestHost(super.table);
+  @override
   int insertRequest(WASIPreview3HttpRequest request) {
+    request.cancel();
     return insertResponse(response);
   }
 }
 
-final class _TrailerResponseRequestHost extends WASIPreview3HttpHost {
-  _TrailerResponseRequestHost(WASIComponentResourceTable table)
-    : super(table: table);
+final class _TrailerResponseHost extends WASIPreview3HttpHost {
+  _TrailerResponseHost(WASIComponentResourceTable table) : super(table: table);
 
   late final WASIComponentFuture<WasmComponentValueData> transmission;
 
   @override
-  int insertRequest(WASIPreview3HttpRequest request) {
-    request.cancel();
+  Map<String, WASIComponentWitAdapterCallback> get imports => {
+    ...super.imports,
+    'fixture-response': (_) => createResponse(),
+  };
+
+  int createResponse() {
     final fields = insertFields(
       WASIPreview3HttpFields(
         entries: const <WASIPreview3HttpFieldEntry>[
@@ -520,8 +600,8 @@ final class _TrailerResponseRequestHost extends WASIPreview3HttpHost {
   }
 }
 
-final class _PendingTrailerResponseRequestHost extends WASIPreview3HttpHost {
-  _PendingTrailerResponseRequestHost(WASIComponentResourceTable table)
+final class _PendingTrailerResponseHost extends WASIPreview3HttpHost {
+  _PendingTrailerResponseHost(WASIComponentResourceTable table)
     : super(table: table);
 
   late final WASIComponentResourceType<_ScopeSentinel> _scopeSentinelType =
@@ -537,8 +617,12 @@ final class _PendingTrailerResponseRequestHost extends WASIPreview3HttpHost {
   var scopeDropCount = 0;
 
   @override
-  int insertRequest(WASIPreview3HttpRequest request) {
-    request.cancel();
+  Map<String, WASIComponentWitAdapterCallback> get imports => {
+    ...super.imports,
+    'fixture-response': (_) => createResponse(),
+  };
+
+  int createResponse() {
     table.insert<_ScopeSentinel>(_scopeSentinelType, const _ScopeSentinel());
     _trailers = WASIComponentFuture<WasmComponentValueData>(
       'pending-response-trailers',
@@ -675,9 +759,39 @@ String _serviceWat({required bool returnsError, int? exitCode}) {
   final taskReturn = exitCode == null
       ? returnsError
             ? 'i32.const 1\n      i32.const 0'
-            : 'i32.const 0\n      local.get 0'
+            : r'''local.get 0 call $drop-request
+      i32.const 0 call $make-response'''
       : 'i32.const $exitCode\n      call \$exit-with-code\n      unreachable';
+  final makesResponse = !returnsError && exitCode == null;
   return _serviceWatTemplate
+      .replaceFirst(
+        ';; RESPONSE_COMPONENT',
+        makesResponse
+            ? r'''
+  (import "fixture-response" (func $make-response (result (own $response))))
+  (core func $make-response-core (canon lower (func $make-response)))
+  (core func $drop-request-core (canon resource.drop $request))
+'''
+            : '',
+      )
+      .replaceFirst(
+        ';; RESPONSE_IMPORT',
+        makesResponse
+            ? r'''
+    (import "" "make-response" (func $make-response (result i32)))
+    (import "" "drop-request" (func $drop-request (param i32)))
+'''
+            : '',
+      )
+      .replaceFirst(
+        ';; RESPONSE_EXPORT',
+        makesResponse
+            ? r'''
+    (export "make-response" (func $make-response-core))
+    (export "drop-request" (func $drop-request-core))
+'''
+            : '',
+      )
       .replaceFirst(';; EXIT_COMPONENT', exitComponent)
       .replaceFirst(';; EXIT_IMPORT', exitImport)
       .replaceFirst(';; EXIT_EXPORT', exitExport)
@@ -697,6 +811,7 @@ const String _serviceWatTemplate = r'''
   (alias export $types "request" (type $request))
   (alias export $types "response" (type $response))
   (alias export $types "error-code" (type $error-code))
+  ;; RESPONSE_COMPONENT
   (type $request-future (future u32))
   (core func $request-future-new (canon future.new $request-future))
   (type $handle-result
@@ -705,6 +820,7 @@ const String _serviceWatTemplate = r'''
   (core module $main
     (import "" "task.return" (func $task-return (param i32 i32)))
     ;; EXIT_IMPORT
+    ;; RESPONSE_IMPORT
     (func (export "handle") (param i32) (result i32)
       ;; TASK_RETURN
       call $task-return
@@ -716,6 +832,7 @@ const String _serviceWatTemplate = r'''
   (core instance $builtins
     (export "task.return" (func $task-return))
     ;; EXIT_EXPORT
+    ;; RESPONSE_EXPORT
   )
   (core instance $main-instance
     (instantiate $main (with "" (instance $builtins))))

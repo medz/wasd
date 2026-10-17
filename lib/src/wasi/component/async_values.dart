@@ -20,6 +20,95 @@ final class WASIComponentAsyncEndpointStateError extends StateError {
   final WASIComponentAsyncEndpointFailure failure;
 }
 
+/// A guest buffer whose values are loaded only when a copy accepts them.
+///
+/// [readPrefix] must return exactly the requested number of values, or throw
+/// before transferring their ownership. Each call reads the next accepted prefix.
+/// This intentionally does not implement [Iterable].
+final class WASIComponentAsyncCopySource<T> {
+  /// Creates a source offering [length] values for one canonical copy.
+  WASIComponentAsyncCopySource({
+    required this.length,
+    required this.readPrefix,
+    this.owner,
+    this.checkSameOwner = false,
+  }) {
+    RangeError.checkNotNegative(length, 'length');
+  }
+
+  /// Number of values offered by the guest buffer.
+  final int length;
+
+  /// Loads and transfers only the prefix accepted by the copy.
+  final List<T> Function(int count) readPrefix;
+
+  /// Runtime component instance owning the buffer; null denotes the host.
+  final Object? owner;
+
+  /// Whether a positive same-instance copy must trap for this element type.
+  final bool checkSameOwner;
+}
+
+/// A guest buffer that receives only values actually accepted by a copy.
+final class WASIComponentAsyncCopyTarget<T> {
+  /// Creates a target accepting [length] values, one prefix at a time.
+  WASIComponentAsyncCopyTarget({
+    required this.length,
+    required void Function(List<T> values) writePrefix,
+    this.owner,
+  }) : _writePrefix = writePrefix {
+    RangeError.checkNotNegative(length, 'length');
+  }
+
+  /// Number of values the guest buffer can accept.
+  final int length;
+
+  final void Function(List<T> values) _writePrefix;
+
+  /// Stores the next accepted prefix, or throws to stop the copy.
+  void writePrefix(List<T> values) => _writePrefix(values);
+
+  /// Runtime component instance owning the buffer; null denotes the host.
+  final Object? owner;
+}
+
+void _requireCopyOwners(
+  WASIComponentAsyncCopySource<Object?>? source,
+  Object? targetOwner,
+  int count,
+) {
+  if (count != 0 &&
+      source != null &&
+      source.checkSameOwner &&
+      source.owner != null &&
+      identical(source.owner, targetOwner)) {
+    throw StateError(
+      'WASI component non-numeric values cannot be copied within the same instance.',
+    );
+  }
+}
+
+// A registry can view a host endpoint covariantly (for example int as Object?).
+// Check the accepted prefix before mutation; preserve the typed-list fast path.
+List<T> _readCopyPrefix<T>(
+  WASIComponentAsyncCopySource<Object?> source,
+  int count,
+) {
+  final values = source.readPrefix(count);
+  if (values.length != count) {
+    throw StateError(
+      'WASI component copy source returned a wrong prefix length.',
+    );
+  }
+  if (values is List<T>) return values;
+  for (final value in values) {
+    if (value is! T) {
+      throw StateError('WASI component copy source expected $T values.');
+    }
+  }
+  return values.cast<T>();
+}
+
 /// In-memory runtime state for a Component Model `stream<T>` value.
 ///
 /// This host-side primitive models readable and writable endpoints separately
@@ -182,6 +271,27 @@ final class WASIComponentReadableStream<T> {
   }
 }
 
+/// Internal canonical read-buffer access for stream copies.
+extension WASIComponentReadableStreamCopy<T> on WASIComponentReadableStream<T> {
+  /// Number of elements accepted before the pending event is delivered.
+  int get copyProgress => _state._readCopyProgress;
+
+  /// Copies an immediately available prefix into [target].
+  int readIntoForCopy(WASIComponentAsyncCopyTarget<T> target) =>
+      _state.readIntoForCopy(target);
+
+  /// Copies into [target], retaining a blocked buffer until event delivery.
+  Future<int> readIntoWhenAvailableForCopy(
+    WASIComponentAsyncCopyTarget<T> target, {
+    bool asynchronous = true,
+    bool deferCompletion = false,
+  }) => _state.readIntoWhenAvailableForCopy(
+    target,
+    asynchronous: asynchronous,
+    deferCompletion: deferCompletion,
+  );
+}
+
 /// Writable endpoint for [WASIComponentStream].
 final class WASIComponentWritableStream<T> {
   const WASIComponentWritableStream._(this._state);
@@ -220,6 +330,24 @@ final class WASIComponentWritableStream<T> {
   /// Writes values as one canonical stream copy.
   int writeAllForCopy(Iterable<T> values) {
     return _state.writeAllForCopy(values);
+  }
+
+  /// Writes the prefix of [source] that can be accepted without waiting.
+  int writeSourceForCopy(WASIComponentAsyncCopySource<Object?> source) {
+    return _state.writeSourceForCopy(source);
+  }
+
+  /// Waits to accept one prefix without loading the unaccepted remainder.
+  Future<int> writeSourceWhenAvailableForCopy(
+    WASIComponentAsyncCopySource<Object?> source, {
+    bool asynchronous = true,
+    bool deferCompletion = false,
+  }) {
+    return _state.writeSourceWhenAvailableForCopy(
+      source,
+      asynchronous: asynchronous,
+      deferCompletion: deferCompletion,
+    );
   }
 
   /// Writes values once the stream has capacity.
@@ -297,6 +425,16 @@ final class WASIComponentWritableStream<T> {
   }
 }
 
+/// Internal canonical write-buffer access for stream copies.
+extension WASIComponentWritableStreamCopy<T> on WASIComponentWritableStream<T> {
+  /// Number of elements accepted before the pending event is delivered.
+  int get copyProgress => _state._writeCopyProgress;
+
+  /// Whether at least one source element can be accepted without waiting.
+  bool canWriteSourceImmediately(int elementCount) =>
+      _state.canWriteSourceImmediately(elementCount);
+}
+
 /// In-memory runtime state for a Component Model `future<T>` value.
 final class WASIComponentFuture<T> {
   /// Creates a future with a debug [name].
@@ -339,8 +477,8 @@ final class WASIComponentReadableFuture<T> {
 
   final _WASIComponentFutureState<T> _state;
 
-  /// Whether the future has a completed value.
-  bool get isReady => _state.isReady;
+  /// Whether a completed value or pending source is ready for a reader.
+  bool get isReady => _state.isReady || _state._pendingCopySource != null;
 
   /// Whether the future has been cancelled.
   bool get isCancelled => _state.isCancelled;
@@ -426,6 +564,23 @@ final class WASIComponentReadableFuture<T> {
   }
 }
 
+/// Internal canonical read-buffer ownership for future copies.
+extension WASIComponentReadableFutureCopy<T> on WASIComponentReadableFuture<T> {
+  /// Reads a ready value into a buffer owned by [owner].
+  T readForCanonicalCopy({Object? owner}) => _state.readForCopy(owner: owner);
+
+  /// Waits for a value in a canonical buffer owned by [owner].
+  Future<T> readWhenReadyForCanonicalCopy({
+    Object? owner,
+    bool asynchronous = true,
+    bool deferCompletion = false,
+  }) => _state.readWhenReadyForCopy(
+    owner: owner,
+    asynchronous: asynchronous,
+    deferCompletion: deferCompletion,
+  );
+}
+
 /// Writable endpoint for [WASIComponentFuture].
 final class WASIComponentWritableFuture<T> {
   const WASIComponentWritableFuture._(this._state);
@@ -461,6 +616,24 @@ final class WASIComponentWritableFuture<T> {
   /// Completes the future for a canonical future copy operation.
   void completeForCopy(T value) {
     _state.completeForCopy(value);
+  }
+
+  /// Completes a canonical future only when a reader can accept its value.
+  void completeSourceForCopy(WASIComponentAsyncCopySource<Object?> source) {
+    _state.completeSourceForCopy(source);
+  }
+
+  /// Waits for a reader before loading and transferring [source]'s value.
+  Future<void> completeSourceWhenReadForCopy(
+    WASIComponentAsyncCopySource<Object?> source, {
+    bool asynchronous = true,
+    bool deferCompletion = false,
+  }) {
+    return _state.completeSourceWhenReadForCopy(
+      source,
+      asynchronous: asynchronous,
+      deferCompletion: deferCompletion,
+    );
   }
 
   /// Completes the future, consumes this host-owned producer endpoint, and
@@ -570,15 +743,42 @@ final class _WASIComponentStreamState<T> {
   bool _readCopyIsAsync = false;
   bool _writeCopyIsAsync = false;
 
+  int _readCopyProgress = 0;
+  int _writeCopyProgress = 0;
+  _WASIComponentStreamReadWaiter<T>? _retainedReadCopy;
+  _WASIComponentStreamWriteWaiter<T>? _retainedWriteCopy;
+
   bool get isDropped => readDropped && writeDropped;
 
-  List<T> readQueued(int maxElements) {
+  List<T> readQueued(
+    int maxElements, {
+    WASIComponentAsyncCopyTarget<Object?>? target,
+  }) {
     requireReadable();
     RangeError.checkNotNegative(maxElements, 'maxElements');
     if (maxElements == 0) {
       return <T>[];
     }
     if (queue.isEmpty) {
+      final writers = writeWaiters;
+      if (maxBufferedElements == 0 && writers != null && writers.isNotEmpty) {
+        final writer = writers.first;
+        final count = _minInt(maxElements, writer.length);
+        try {
+          _requireCopyOwners(writer.source, target?.owner, count);
+          final values = writer.readPrefix(count);
+          if (values.isNotEmpty) target?.writePrefix(values);
+          writer.complete(count);
+          if (!writer.keepPending) writers.removeFirst();
+          if (writers.isEmpty) writeWaiters = null;
+          return values;
+        } catch (error) {
+          writers.removeFirst();
+          if (writers.isEmpty) writeWaiters = null;
+          writer.fail(error);
+          rethrow;
+        }
+      }
       if (writeCancelled) {
         throw WASIComponentAsyncEndpointStateError(
           WASIComponentAsyncEndpointFailure.cancelled,
@@ -589,6 +789,7 @@ final class _WASIComponentStreamState<T> {
     }
 
     final values = _removeQueued(maxElements);
+    if (values.isNotEmpty) target?.writePrefix(values);
     if (writeWaiters != null || writeCapacityWaiters != null) {
       _pumpWaiters();
     }
@@ -599,6 +800,7 @@ final class _WASIComponentStreamState<T> {
     _beginReadCopy(asynchronous: false);
     try {
       final values = readQueued(maxElements);
+      _readCopyProgress = values.length;
       finishReadCopy(dropped: values.isEmpty && _readReachedEndOfStream);
       return values;
     } catch (error) {
@@ -651,6 +853,7 @@ final class _WASIComponentStreamState<T> {
     try {
       return readWhenAvailable(maxElements).then(
         (values) {
+          _readCopyProgress = values.length;
           if (!deferCompletion) {
             finishReadCopy(dropped: values.isEmpty && _readReachedEndOfStream);
           }
@@ -669,6 +872,83 @@ final class _WASIComponentStreamState<T> {
       }
       rethrow;
     }
+  }
+
+  int readIntoForCopy(WASIComponentAsyncCopyTarget<Object?> target) {
+    _beginReadCopy(asynchronous: false);
+    try {
+      final values = readQueued(target.length, target: target);
+      _readCopyProgress = values.length;
+      finishReadCopy(dropped: values.isEmpty && _readReachedEndOfStream);
+      return values.length;
+    } catch (error) {
+      _finishReadCopyError(error);
+      rethrow;
+    }
+  }
+
+  Future<int> readIntoWhenAvailableForCopy(
+    WASIComponentAsyncCopyTarget<Object?> target, {
+    required bool asynchronous,
+    required bool deferCompletion,
+  }) {
+    _beginReadCopy(asynchronous: asynchronous);
+    try {
+      requireReadable();
+      final matchesWriter =
+          target.length != 0 &&
+          maxBufferedElements == 0 &&
+          (writeWaiters?.isNotEmpty ?? false);
+      final values = matchesWriter
+          ? <T>[]
+          : readQueued(target.length, target: target);
+      Future<int> pending;
+      if (!matchesWriter &&
+          (values.isNotEmpty || target.length == 0 || writeClosed)) {
+        _readCopyProgress = values.length;
+        pending = Future<int>.value(values.length);
+      } else {
+        final completer = Completer<int>();
+        final waiter = _WASIComponentStreamReadWaiter<T>.target(
+          target,
+          completer,
+          retain: deferCompletion && !matchesWriter,
+          onProgress: (count) => _readCopyProgress += count,
+        );
+        if (deferCompletion && !matchesWriter) _retainedReadCopy = waiter;
+        (readWaiters ??= ListQueue<_WASIComponentStreamReadWaiter<T>>())
+            .addLast(waiter);
+        if (writeWaiters != null) _pumpWaiters();
+        pending = completer.future;
+      }
+      return pending.then(
+        (count) {
+          if (!deferCompletion) {
+            finishReadCopy(dropped: count == 0 && _readReachedEndOfStream);
+          }
+          return count;
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (!deferCompletion) _finishReadCopyError(error);
+          Error.throwWithStackTrace(error, stackTrace);
+        },
+      );
+    } catch (error, stackTrace) {
+      if (!deferCompletion) _resetReadCopy();
+      return Future<int>.error(error, stackTrace);
+    }
+  }
+
+  bool canWriteSourceImmediately(int elementCount) {
+    RangeError.checkNotNegative(elementCount, 'elementCount');
+    if (elementCount == 0) return true;
+    final available = _availableWriteCapacity;
+    if (available == null || available > 0) return true;
+    final readers = readWaiters;
+    return maxBufferedElements == 0 &&
+        readers != null &&
+        readers.isNotEmpty &&
+        readers.first.maxElements > 0;
   }
 
   bool canWriteImmediately(int elementCount) {
@@ -725,6 +1005,71 @@ final class _WASIComponentStreamState<T> {
       _finishWriteCopyError(error);
       rethrow;
     }
+  }
+
+  int writeSourceForCopy(WASIComponentAsyncCopySource<Object?> source) {
+    _beginWriteCopy(asynchronous: false);
+    try {
+      requireWritable();
+      final written = _writeSourceAvailable(source);
+      _writeCopyProgress = written;
+      if (written == 0 && source.length != 0) {
+        throw StateError(
+          'WASI component stream $name is not ready for writing.',
+        );
+      }
+      finishWriteCopy(dropped: false);
+      return written;
+    } catch (error) {
+      _finishWriteCopyError(error);
+      rethrow;
+    }
+  }
+
+  Future<int> writeSourceWhenAvailableForCopy(
+    WASIComponentAsyncCopySource<Object?> source, {
+    required bool asynchronous,
+    required bool deferCompletion,
+  }) {
+    _beginWriteCopy(asynchronous: asynchronous);
+    try {
+      return _writeSourceWhenAvailable(source, retain: deferCompletion).then(
+        (written) {
+          if (!deferCompletion) finishWriteCopy(dropped: false);
+          return written;
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (!deferCompletion) _finishWriteCopyError(error);
+          Error.throwWithStackTrace(error, stackTrace);
+        },
+      );
+    } catch (error) {
+      if (!deferCompletion) _resetWriteCopy();
+      rethrow;
+    }
+  }
+
+  Future<int> _writeSourceWhenAvailable(
+    WASIComponentAsyncCopySource<Object?> source, {
+    required bool retain,
+  }) {
+    requireWritable();
+    final written = _writeSourceAvailable(source);
+    _writeCopyProgress = written;
+    if (source.length == 0 || written != 0) return Future<int>.value(written);
+    final completer = Completer<int>();
+    final waiter = _WASIComponentStreamWriteWaiter<T>.source(
+      source,
+      completer,
+      retain: retain,
+      onProgress: (count) => _writeCopyProgress += count,
+    );
+    if (retain) _retainedWriteCopy = waiter;
+    (writeWaiters ??= ListQueue<_WASIComponentStreamWriteWaiter<T>>()).addLast(
+      waiter,
+    );
+    if (readWaiters != null) _pumpWaiters();
+    return completer.future;
   }
 
   Future<int> writeWhenAvailable(Iterable<T> values) {
@@ -953,7 +1298,9 @@ final class _WASIComponentStreamState<T> {
     if (waiters == null || waiters.isEmpty) {
       return;
     }
-    final waiter = waiters.removeFirst();
+    final retained = _retainedReadCopy;
+    final waiter = retained ?? waiters.first;
+    if (!waiters.remove(waiter)) return;
     if (waiters.isEmpty) {
       readWaiters = null;
     }
@@ -1026,7 +1373,9 @@ final class _WASIComponentStreamState<T> {
     if (waiters == null || waiters.isEmpty) {
       return;
     }
-    final waiter = waiters.removeFirst();
+    final retained = _retainedWriteCopy;
+    final waiter = retained ?? waiters.first;
+    if (!waiters.remove(waiter)) return;
     if (waiters.isEmpty) {
       writeWaiters = null;
     }
@@ -1053,6 +1402,7 @@ final class _WASIComponentStreamState<T> {
     _readCopyStatus = _WASIComponentAsyncCopyStatus.done;
     _readCopyIsAsync = false;
     readDropped = true;
+    _retainedReadCopy = null;
     Object? firstError;
     StackTrace? firstStackTrace;
     void cleanUp(void Function() action) {
@@ -1122,6 +1472,7 @@ final class _WASIComponentStreamState<T> {
     _writeCopyStatus = _WASIComponentAsyncCopyStatus.done;
     _writeCopyIsAsync = false;
     writeDropped = true;
+    _retainedWriteCopy = null;
     writeClosed = true;
     if (writeWaiters != null) {
       _failWriteWaiters(
@@ -1180,12 +1531,14 @@ final class _WASIComponentStreamState<T> {
     _requireCopyIdle(_readCopyStatus, 'readable');
     _readCopyStatus = _WASIComponentAsyncCopyStatus.copying;
     _readCopyIsAsync = asynchronous;
+    _readCopyProgress = 0;
   }
 
   void _beginWriteCopy({required bool asynchronous}) {
     _requireCopyIdle(_writeCopyStatus, 'writable');
     _writeCopyStatus = _WASIComponentAsyncCopyStatus.copying;
     _writeCopyIsAsync = asynchronous;
+    _writeCopyProgress = 0;
   }
 
   void finishReadCopy({required bool dropped}) {
@@ -1199,6 +1552,7 @@ final class _WASIComponentStreamState<T> {
       (status) => _readCopyStatus = status,
     );
     _readCopyIsAsync = false;
+    _clearRetainedReadCopy();
   }
 
   void finishWriteCopy({required bool dropped}) {
@@ -1212,6 +1566,23 @@ final class _WASIComponentStreamState<T> {
       (status) => _writeCopyStatus = status,
     );
     _writeCopyIsAsync = false;
+    _clearRetainedWriteCopy();
+  }
+
+  void _clearRetainedReadCopy() {
+    final retained = _retainedReadCopy;
+    if (retained == null) return;
+    readWaiters?.remove(retained);
+    if (readWaiters?.isEmpty ?? false) readWaiters = null;
+    _retainedReadCopy = null;
+  }
+
+  void _clearRetainedWriteCopy() {
+    final retained = _retainedWriteCopy;
+    if (retained == null) return;
+    writeWaiters?.remove(retained);
+    if (writeWaiters?.isEmpty ?? false) writeWaiters = null;
+    _retainedWriteCopy = null;
   }
 
   void _finishReadCopyError(Object error) {
@@ -1235,6 +1606,7 @@ final class _WASIComponentStreamState<T> {
   }
 
   void _resetReadCopy() {
+    _clearRetainedReadCopy();
     if (_readCopyStatus == _WASIComponentAsyncCopyStatus.copying ||
         _readCopyStatus == _WASIComponentAsyncCopyStatus.cancellingCopy) {
       _readCopyStatus = _WASIComponentAsyncCopyStatus.idle;
@@ -1243,6 +1615,7 @@ final class _WASIComponentStreamState<T> {
   }
 
   void _resetWriteCopy() {
+    _clearRetainedWriteCopy();
     if (_writeCopyStatus == _WASIComponentAsyncCopyStatus.copying ||
         _writeCopyStatus == _WASIComponentAsyncCopyStatus.cancellingCopy) {
       _writeCopyStatus = _WASIComponentAsyncCopyStatus.idle;
@@ -1298,6 +1671,54 @@ final class _WASIComponentStreamState<T> {
       _pumpWaiters();
     }
     return count;
+  }
+
+  int _writeSourceAvailable(WASIComponentAsyncCopySource<Object?> source) {
+    if (source.length == 0) return 0;
+    if (maxBufferedElements == 0) {
+      final readers = readWaiters;
+      if (readers == null || readers.isEmpty) return 0;
+      final reader = readers.first;
+      final count = _minInt(reader.maxElements, source.length);
+      try {
+        _requireCopyOwners(source, reader.target?.owner, count);
+        reader.complete(_readCopyPrefix<T>(source, count));
+        if (!reader.keepPending) readers.removeFirst();
+      } catch (error) {
+        readers.removeFirst();
+        reader.fail(error);
+        rethrow;
+      } finally {
+        if (readers.isEmpty) readWaiters = null;
+      }
+      return count;
+    }
+    final available = _availableWriteCapacity;
+    final count = available == null
+        ? source.length
+        : _minInt(source.length, available);
+    if (count == 0) return 0;
+    _checkWaitingCopyReader(source, count);
+    _appendValues(_readCopyPrefix<T>(source, count), count);
+    if (readWaiters != null || writeWaiters != null) _pumpWaiters();
+    return count;
+  }
+
+  void _checkWaitingCopyReader(
+    WASIComponentAsyncCopySource<Object?> source,
+    int count,
+  ) {
+    final readers = readWaiters;
+    if (readers == null || readers.isEmpty) return;
+    final reader = readers.first;
+    try {
+      _requireCopyOwners(source, reader.target?.owner, count);
+    } catch (error) {
+      readers.removeFirst();
+      if (readers.isEmpty) readWaiters = null;
+      reader.fail(error);
+      rethrow;
+    }
   }
 
   void _appendValues(List<T> values, int count) {
@@ -1394,11 +1815,21 @@ final class _WASIComponentStreamState<T> {
 
     var progressed = false;
     while (readers.isNotEmpty && writers.isNotEmpty) {
-      final reader = readers.removeFirst();
-      final writer = writers.removeFirst();
-      final count = _minInt(reader.maxElements, writer.values.length);
-      reader.complete(List<T>.of(writer.values.take(count), growable: false));
-      writer.complete(count);
+      final reader = readers.first;
+      final writer = writers.first;
+      final count = _minInt(reader.maxElements, writer.length);
+      try {
+        _requireCopyOwners(writer.source, reader.target?.owner, count);
+        reader.complete(writer.readPrefix(count));
+        writer.complete(count);
+        if (!reader.keepPending) readers.removeFirst();
+        if (!writer.keepPending) writers.removeFirst();
+      } catch (error) {
+        readers.removeFirst();
+        writers.removeFirst();
+        reader.fail(error);
+        writer.fail(error);
+      }
       progressed = true;
     }
     if (readers.isEmpty) {
@@ -1420,8 +1851,16 @@ final class _WASIComponentStreamState<T> {
     while (waiters.isNotEmpty) {
       final waiter = waiters.first;
       if (queue.isNotEmpty) {
-        waiters.removeFirst();
-        waiter.complete(_removeQueued(waiter.maxElements));
+        try {
+          waiter.complete(_removeQueued(waiter.maxElements));
+          if (!waiter.keepPending) waiters.removeFirst();
+        } catch (error) {
+          waiters.removeFirst();
+          if (waiters.isEmpty) readWaiters = null;
+          // The producer already transferred these buffered values. A receiver
+          // trap belongs to its pending copy and must not fail a host write.
+          waiter.fail(error);
+        }
         progressed = true;
       } else if (writeCancelled) {
         waiters.removeFirst();
@@ -1472,9 +1911,19 @@ final class _WASIComponentStreamState<T> {
       if (available != null && available == 0) {
         break;
       }
-      final waiter = waiters.removeFirst();
-      final written = _writeAvailable(waiter.values);
-      waiter.complete(written);
+      final waiter = waiters.first;
+      try {
+        final written = _minInt(waiter.length, available ?? waiter.length);
+        final source = waiter.source;
+        if (source != null) _checkWaitingCopyReader(source, written);
+        final values = waiter.values;
+        _appendValues(values ?? waiter.readPrefix(written), written);
+        waiter.complete(written);
+        if (!waiter.keepPending) waiters.removeFirst();
+      } catch (error) {
+        waiters.removeFirst();
+        waiter.fail(error);
+      }
       progressed = true;
     }
 
@@ -1607,40 +2056,96 @@ int _minInt(int left, int right) {
 }
 
 final class _WASIComponentStreamReadWaiter<T> {
-  const _WASIComponentStreamReadWaiter(this.maxElements, this.completer);
+  _WASIComponentStreamReadWaiter(int maxElements, this.completer)
+    : _length = maxElements,
+      target = null,
+      countCompleter = null,
+      retain = false,
+      onProgress = null;
 
-  final int maxElements;
-  final Completer<List<T>> completer;
+  _WASIComponentStreamReadWaiter.target(
+    this.target,
+    this.countCompleter, {
+    required this.retain,
+    required this.onProgress,
+  }) : _length = target!.length,
+       completer = null;
+
+  final int _length;
+  final WASIComponentAsyncCopyTarget<Object?>? target;
+  final Completer<List<T>>? completer;
+  final Completer<int>? countCompleter;
+  final bool retain;
+  final void Function(int count)? onProgress;
+  int _progress = 0;
+
+  int get maxElements => _length - _progress;
+  bool get keepPending => retain && maxElements != 0;
 
   void complete(List<T> values) {
-    if (!completer.isCompleted) {
+    if (values.isNotEmpty) target?.writePrefix(values);
+    _progress += values.length;
+    onProgress?.call(values.length);
+    if (completer case final completer? when !completer.isCompleted) {
       completer.complete(values);
+    }
+    if (countCompleter case final completer? when !completer.isCompleted) {
+      completer.complete(_progress);
     }
   }
 
   void fail(Object error) {
-    if (!completer.isCompleted) {
+    if (completer case final completer? when !completer.isCompleted) {
+      completer.completeError(error);
+    }
+    if (countCompleter case final completer? when !completer.isCompleted) {
       completer.completeError(error);
     }
   }
 }
 
 final class _WASIComponentStreamWriteWaiter<T> {
-  const _WASIComponentStreamWriteWaiter(this.values, this.completer);
+  _WASIComponentStreamWriteWaiter(this.values, this.completer)
+    : source = null,
+      retain = false,
+      onProgress = null;
+  _WASIComponentStreamWriteWaiter.source(
+    this.source,
+    this.completer, {
+    this.retain = false,
+    this.onProgress,
+  }) : values = null;
 
-  final List<T> values;
+  final List<T>? values;
+  final WASIComponentAsyncCopySource<Object?>? source;
   final Completer<int> completer;
+  final bool retain;
+  final void Function(int count)? onProgress;
+  int _progress = 0;
+
+  int get length => (source?.length ?? values!.length) - _progress;
+  bool get keepPending => retain && length != 0;
+
+  List<T> readPrefix(int count) {
+    final prefix =
+        (source == null ? null : _readCopyPrefix<T>(source!, count)) ??
+        values!.sublist(_progress, _progress + count);
+    if (prefix.length != count) {
+      throw StateError(
+        'WASI component stream source returned a wrong prefix length.',
+      );
+    }
+    _progress += count;
+    onProgress?.call(count);
+    return prefix;
+  }
 
   void complete(int count) {
-    if (!completer.isCompleted) {
-      completer.complete(count);
-    }
+    if (!completer.isCompleted) completer.complete(count);
   }
 
   void fail(Object error) {
-    if (!completer.isCompleted) {
-      completer.completeError(error);
-    }
+    if (!completer.isCompleted) completer.completeError(error);
   }
 }
 
@@ -1681,6 +2186,7 @@ final class _WASIComponentFutureState<T> {
 
   _WASIComponentFutureStatus status = _WASIComponentFutureStatus.pending;
   T? value;
+  WASIComponentAsyncCopySource<Object?>? _pendingCopySource;
   List<Completer<T>>? readWaiters;
   List<Completer<void>>? writeDeliveryWaiters;
   bool readDropped = false;
@@ -1691,6 +2197,7 @@ final class _WASIComponentFutureState<T> {
       _WASIComponentAsyncCopyStatus.idle;
   _WASIComponentAsyncCopyStatus _writeCopyStatus =
       _WASIComponentAsyncCopyStatus.idle;
+  Object? _readCopyOwner;
   bool _readCopyIsAsync = false;
   bool _writeCopyIsAsync = false;
 
@@ -1708,6 +2215,7 @@ final class _WASIComponentFutureState<T> {
 
   bool get canComplete =>
       status == _WASIComponentFutureStatus.pending &&
+      _pendingCopySource == null &&
       !readDropped &&
       !writeDropped;
 
@@ -1720,8 +2228,9 @@ final class _WASIComponentFutureState<T> {
     }
   }
 
-  Future<T> readWhenReady() {
+  Future<T> readWhenReady({Object? owner}) {
     requireReadable();
+    _acceptPendingCopySource(owner: owner);
     if (isReady) {
       final completedValue = value as T;
       markValueObserved();
@@ -1733,16 +2242,18 @@ final class _WASIComponentFutureState<T> {
     return completer.future;
   }
 
-  T readForCopy() {
-    _beginReadCopy(asynchronous: false);
+  T readForCopy({Object? owner}) {
+    _beginReadCopy(asynchronous: false, owner: owner);
     try {
       requireReadable();
+      _acceptPendingCopySource(owner: owner);
       if (!isReady) {
         throw StateError('WASI component future $name is not ready.');
       }
       final completedValue = value as T;
       markValueObserved();
       _readCopyStatus = _WASIComponentAsyncCopyStatus.done;
+      _readCopyOwner = null;
       return completedValue;
     } catch (_) {
       _resetReadCopy();
@@ -1751,12 +2262,13 @@ final class _WASIComponentFutureState<T> {
   }
 
   Future<T> readWhenReadyForCopy({
+    Object? owner,
     bool asynchronous = true,
     bool deferCompletion = false,
   }) {
-    _beginReadCopy(asynchronous: asynchronous);
+    _beginReadCopy(asynchronous: asynchronous, owner: owner);
     try {
-      return readWhenReady().then(
+      return readWhenReady(owner: owner).then(
         (value) {
           if (!deferCompletion) {
             finishReadCopy(cancelled: false);
@@ -1779,6 +2291,15 @@ final class _WASIComponentFutureState<T> {
   }
 
   void complete(T completedValue) {
+    _requireCompletable();
+    value = completedValue;
+    status = _WASIComponentFutureStatus.ready;
+    if (readWaiters != null) {
+      _completeReadWaiters(completedValue);
+    }
+  }
+
+  void _requireCompletable() {
     if (writeDropped) {
       throw StateError('WASI component future $name writable was dropped.');
     }
@@ -1788,13 +2309,96 @@ final class _WASIComponentFutureState<T> {
         'WASI component future $name readable was dropped.',
       );
     }
-    if (status != _WASIComponentFutureStatus.pending) {
+    if (status != _WASIComponentFutureStatus.pending ||
+        _pendingCopySource != null) {
       throw StateError('WASI component future $name is not pending.');
     }
-    value = completedValue;
-    status = _WASIComponentFutureStatus.ready;
-    if (readWaiters != null) {
-      _completeReadWaiters(completedValue);
+  }
+
+  void _requireSingleSource(WASIComponentAsyncCopySource<Object?> source) {
+    if (source.length != 1) {
+      throw StateError(
+        'WASI component future $name requires exactly one source value.',
+      );
+    }
+  }
+
+  void completeSourceForCopy(WASIComponentAsyncCopySource<Object?> source) {
+    _beginWriteCopy(asynchronous: false);
+    try {
+      _requireCompletable();
+      _requireSingleSource(source);
+      if (!hasPendingReadWaiters) {
+        throw StateError(
+          'WASI component future $name has no accepting reader.',
+        );
+      }
+      _pendingCopySource = source;
+      _acceptPendingCopySource(owner: _readCopyOwner);
+      _writeCopyStatus = _WASIComponentAsyncCopyStatus.done;
+    } catch (error) {
+      _finishWriteCopyError(error);
+      rethrow;
+    }
+  }
+
+  Future<void> completeSourceWhenReadForCopy(
+    WASIComponentAsyncCopySource<Object?> source, {
+    required bool asynchronous,
+    required bool deferCompletion,
+  }) {
+    _beginWriteCopy(asynchronous: asynchronous);
+    try {
+      _requireCompletable();
+      _requireSingleSource(source);
+      _pendingCopySource = source;
+      final delivered = _waitForValueObservation();
+      if (hasPendingReadWaiters) {
+        try {
+          _acceptPendingCopySource(owner: _readCopyOwner);
+        } catch (_) {
+          // The same error has already completed the reader and writer waits.
+        }
+      }
+      return delivered.then(
+        (_) {
+          if (!deferCompletion) finishWriteCopy(cancelled: false);
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (!deferCompletion) _finishWriteCopyError(error);
+          Error.throwWithStackTrace(error, stackTrace);
+        },
+      );
+    } catch (_) {
+      if (!deferCompletion) _resetWriteCopy();
+      rethrow;
+    }
+  }
+
+  void _acceptPendingCopySource({Object? owner}) {
+    final source = _pendingCopySource;
+    if (source == null) return;
+    _pendingCopySource = null;
+    T? loadedValue;
+    var loaded = false;
+    var accepted = false;
+    try {
+      _requireCopyOwners(source, owner, 1);
+      loadedValue = _readCopyPrefix<T>(source, 1).single;
+      loaded = true;
+      complete(loadedValue as T);
+      accepted = true;
+    } catch (error, stackTrace) {
+      if (loaded && !accepted) {
+        try {
+          onDiscard?.call(loadedValue as T);
+        } catch (_) {
+          // Preserve the copy failure after releasing the accepted value.
+        }
+      }
+      _failWriteDeliveryWaiters(error);
+      _failReadWaiters(error);
+      Error.throwWithStackTrace(error, stackTrace);
     }
   }
 
@@ -1892,6 +2496,7 @@ final class _WASIComponentFutureState<T> {
       throw StateError('WASI component future $name is not pending.');
     }
     status = _WASIComponentFutureStatus.cancelled;
+    _pendingCopySource = null;
     if (readWaiters != null) {
       _failReadWaiters(
         StateError('WASI component future $name was cancelled.'),
@@ -1951,6 +2556,7 @@ final class _WASIComponentFutureState<T> {
     if (waiters == null || waiters.isEmpty) {
       return;
     }
+    _readCopyOwner = null;
     final waiter = waiters.removeAt(0);
     if (waiters.isEmpty) {
       readWaiters = null;
@@ -1969,6 +2575,7 @@ final class _WASIComponentFutureState<T> {
       return;
     }
     status = _WASIComponentFutureStatus.cancelled;
+    _pendingCopySource = null;
     value = null;
     _failWriteDeliveryWaiters(
       WASIComponentAsyncEndpointStateError(
@@ -2008,6 +2615,7 @@ final class _WASIComponentFutureState<T> {
       writeDeliveryWaiters = null;
     }
     status = _WASIComponentFutureStatus.pending;
+    _pendingCopySource = null;
     value = null;
     _valueObserved = false;
     waiter.completeError(
@@ -2032,7 +2640,9 @@ final class _WASIComponentFutureState<T> {
     }
     _readCopyStatus = _WASIComponentAsyncCopyStatus.done;
     _readCopyIsAsync = false;
+    _readCopyOwner = null;
     readDropped = true;
+    _pendingCopySource = null;
     final discardValue = isReady && !_valueObserved;
     if (discardValue || writeDeliveryWaiters != null) {
       status = _WASIComponentFutureStatus.cancelled;
@@ -2090,6 +2700,16 @@ final class _WASIComponentFutureState<T> {
     _writeCopyStatus = _WASIComponentAsyncCopyStatus.done;
     _writeCopyIsAsync = false;
     writeDropped = true;
+    if (_pendingCopySource != null) {
+      _pendingCopySource = null;
+      status = _WASIComponentFutureStatus.cancelled;
+      final error = WASIComponentAsyncEndpointStateError(
+        WASIComponentAsyncEndpointFailure.dropped,
+        'WASI component future $name writable was dropped.',
+      );
+      _failReadWaiters(error);
+      _failWriteDeliveryWaiters(error);
+    }
     _maybeDrop();
   }
 
@@ -2189,10 +2809,11 @@ final class _WASIComponentFutureState<T> {
     }
   }
 
-  void _beginReadCopy({required bool asynchronous}) {
+  void _beginReadCopy({required bool asynchronous, Object? owner}) {
     _requireCopyIdle(_readCopyStatus, 'readable');
     _readCopyStatus = _WASIComponentAsyncCopyStatus.copying;
     _readCopyIsAsync = asynchronous;
+    _readCopyOwner = owner;
   }
 
   void _beginWriteCopy({required bool asynchronous}) {
@@ -2212,6 +2833,7 @@ final class _WASIComponentFutureState<T> {
       (status) => _readCopyStatus = status,
     );
     _readCopyIsAsync = false;
+    _readCopyOwner = null;
   }
 
   void finishWriteCopy({required bool cancelled}) {
@@ -2248,6 +2870,7 @@ final class _WASIComponentFutureState<T> {
   }
 
   void _resetReadCopy() {
+    _readCopyOwner = null;
     if (_readCopyStatus == _WASIComponentAsyncCopyStatus.copying ||
         _readCopyStatus == _WASIComponentAsyncCopyStatus.cancellingCopy) {
       _readCopyStatus = _WASIComponentAsyncCopyStatus.idle;
@@ -2324,4 +2947,18 @@ final class _WASIComponentFutureState<T> {
       );
     }
   }
+}
+
+/// Runtime readiness for a canonical copy, including an unbuffered writer.
+extension WASIComponentCanonicalStreamReadiness<T>
+    on WASIComponentReadableStream<T> {
+  /// Whether a canonical read can make progress without waiting.
+  bool get canReadImmediatelyForCopy =>
+      hasQueuedValues ||
+      isEndOfStream ||
+      _state.writeCancelled ||
+      isCancelled ||
+      isDropped ||
+      (_state.maxBufferedElements == 0 &&
+          (_state.writeWaiters?.isNotEmpty ?? false));
 }

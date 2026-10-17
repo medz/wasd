@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
@@ -3836,3 +3837,28 @@ const List<int> _canonicalResourceLiftComponentBytes = <int>[
   0x66,
   0x74,
 ];
+
+/// A nested instance exports `future<result<_, variant { empty, detail(tuple<u8>) }>>`.
+/// Its child type indexes differ from the receiving component's alias indexes.
+Uint8List scopedResultFutureTypeComponentBytes() => base64Decode(
+  'AGFzbQ0AAQAEvgIAYXNtDQABAAcEAW8BfQsNAQAHcGF5bG9hZAMAAAcVAXECBWVtcHR5AAAG'
+  'ZGV0YWlsAQEACwsBAAVlcnJvcgMCAAcIAmoAAQNlAQQLDQEAB3BlbmRpbmcDBQABMABhc20B'
+  'AAAAAQUBYAF/AAMCAQAHCgEGYWNjZXB0AAAKBAECAAsACQRuYW1lAAIBbQIEAQAAAAcMAUAB'
+  'BXZhbHVlBgEABgwBAAABAAZhY2NlcHQIBgEAAAAABwsMAQAGYWNjZXB0AQAAAHgOY29tcG9u'
+  'ZW50LW5hbWUABgV0eXBlcwEGABEBAAFtAQYAEgEAAW0BTwMHAAdwYXlsb2FkAQ5wdWJsaWMt'
+  'cGF5bG9hZAIFZXJyb3IDDHB1YmxpYy1lcnJvcgQGcmVzdWx0BQZmdXR1cmUGDXB1YmxpYy1m'
+  'dXR1cmUFBAEAAAAGFgIDAAAHcGVuZGluZwEAAAZhY2NlcHQIBwMVABoAGwAAVw5jb21wb25l'
+  'bnQtbmFtZQEYAAADAANuZXcBBmRyb3AtcgIGZHJvcC13AQoBAQAGYWNjZXB0AQoDAQAGZnV0'
+  'dXJlAQkEAQAFdHlwZXMBCQUBAAV0eXBlcw==',
+);
+
+/// A nested `stream<u32>` alias whose element index is outside the outer list.
+Uint8List scopedPrimitiveStreamTypeComponentBytes() => base64Decode(
+  'AGFzbQ0AAQAE/AEAYXNtDQABAAcGAkAAAQB5CwsBAAV2YWx1ZQMBAAcEAWYBAgsMAQAGdmFs'
+  'dWVzAwMAATAAYXNtAQAAAAEFAWABfwADAgEABwoBBmFjY2VwdAAACgQBAgALAAkEbmFtZQAC'
+  'AW0CBAEAAAAHDAFAAQV2YWx1ZQQBAAYMAQAAAQAGYWNjZXB0CAYBAAAAAAULDAEABmFjY2Vw'
+  'dAEAAABfDmNvbXBvbmVudC1uYW1lAAYFdHlwZXMBBgARAQABbQEGABIBAAFtATYDBQAGbWFy'
+  'a2VyAQV2YWx1ZQIMcHVibGljLXZhbHVlAwZzdHJlYW0EDXB1YmxpYy1zdHJlYW0FBAEAAAAG'
+  'FQIDAAAGdmFsdWVzAQAABmFjY2VwdAA9DmNvbXBvbmVudC1uYW1lAQoBAQAGYWNjZXB0AQoD'
+  'AQAGc3RyZWFtAQkEAQAFdHlwZXMBCQUBAAV0eXBlcw==',
+);

@@ -10,6 +10,87 @@ import 'package:wasd/src/wasi/preview3/http.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 
 void main() {
+  test(
+    'borrowed HTTP request options remain children of the owned request',
+    () async {
+      final host = WASIPreview3HttpHost();
+      final owner = host.insertRequest(
+        WASIPreview3HttpRequest.noTrailers(
+          headers: WASIPreview3HttpFields(),
+          options: WASIPreview3HttpRequestOptions(
+            connectTimeout: BigInt.from(42),
+          ),
+        ),
+      );
+      final call = host.table.createBorrowCallScope();
+      final alias = call.lowerHandle(owner);
+      final option =
+          host.imports['wasi:http/types@0.3.0.request.get-options']!([alias])!
+              as WasmComponentValueData;
+      final child = ((option.payload as WasmComponentValueData).integer! as num)
+          .toInt();
+      call.close();
+      final type = host.canonicalResourceType('request')!;
+      expect(() => host.table.drop(type, owner), throwsStateError);
+      final optionsType = host.canonicalResourceType('request-options')!;
+      final options =
+          host.table.get(optionsType, child) as WASIPreview3HttpRequestOptions;
+      expect(options.connectTimeout, BigInt.from(42));
+      host.table.drop(optionsType, child);
+      host.table.drop(type, owner);
+      await Future<void>.delayed(Duration.zero);
+      expect(host.table.activeCount, 0);
+    },
+  );
+
+  for (final response in [false, true]) {
+    for (final chained in [false, true]) {
+      test(
+        'borrowed HTTP ${response ? 'response' : 'request'} headers outlive the call ($chained)',
+        () async {
+          final host = WASIPreview3HttpHost();
+          final headers = WASIPreview3HttpFields(
+            entries: [
+              WASIPreview3HttpFieldEntry('x-borrow', [42]),
+            ],
+          );
+          final owner = response
+              ? host.insertResponse(
+                  WASIPreview3HttpResponse.noTrailers(headers: headers),
+                )
+              : host.insertRequest(
+                  WASIPreview3HttpRequest.noTrailers(headers: headers),
+                );
+          final first = host.table.createBorrowCallScope();
+          final firstAlias = first.lowerHandle(owner);
+          final second = chained ? host.table.createBorrowCallScope() : null;
+          final alias = second?.lowerHandle(firstAlias) ?? firstAlias;
+          final child =
+              host.imports['wasi:http/types@0.3.0.${response ? 'response' : 'request'}.get-headers']!(
+                    [alias],
+                  )!
+                  as int;
+          second?.close();
+          first.close();
+          final type = host.canonicalResourceType(
+            response ? 'response' : 'request',
+          )!;
+          expect(() => host.table.drop(type, owner), throwsStateError);
+          final fieldsType = host.canonicalResourceType('fields')!;
+          final fields =
+              host.table.get(fieldsType, child) as WASIPreview3HttpFields;
+          expect(fields.values('x-borrow'), [
+            [42],
+          ]);
+          host.table.drop(fieldsType, child);
+          host.table.drop(type, owner);
+          await Future<void>.delayed(Duration.zero);
+          expect(host.table.activeCount, 0);
+        },
+      );
+    }
+  }
+
   group('Preview3 HTTP fields', () {
     test('from-list rejects bytes outside HTTP field-content', () {
       final host = WASIPreview3HttpHost();

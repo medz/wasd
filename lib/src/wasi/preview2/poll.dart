@@ -148,3 +148,14 @@ WasmComponentValueData _u32List(List<int> values) {
 }
 
 const int _maxU32 = 0xffffffff;
+
+/// Internal canonical ABI access to this host's resource identities.
+extension WASIPreview2PollResourceTypes on WASIPreview2PollHost {
+  /// Returns the actual nominal type owned by this host.
+  WASIComponentResourceType<Object>? canonicalResourceType(
+    String resourceName,
+  ) => switch (resourceName) {
+    'pollable' => _pollableType,
+    _ => null,
+  };
+}

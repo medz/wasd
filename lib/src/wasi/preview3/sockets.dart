@@ -2542,3 +2542,15 @@ final BigInt _u64Max = (BigInt.one << 64) - BigInt.one;
 final BigInt _i64Max = (BigInt.one << 63) - BigInt.one;
 final RegExp _decimal = RegExp(r'^[0-9]+$');
 final RegExp _hex = RegExp(r'^[0-9a-fA-F]+$');
+
+/// Internal canonical ABI access to this host's resource identities.
+extension WASIPreview3SocketsResourceTypes on WASIPreview3SocketsHost {
+  /// Returns the actual nominal type owned by this host.
+  WASIComponentResourceType<Object>? canonicalResourceType(
+    String resourceName,
+  ) => switch (resourceName) {
+    'tcp-socket' => _tcpType,
+    'udp-socket' => _udpType,
+    _ => null,
+  };
+}

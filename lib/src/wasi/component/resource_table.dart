@@ -351,7 +351,7 @@ final class WASIComponentResourceTable {
       final handle = _allocateHandle();
       final slot = _slots[slotIndex];
       slot.entry = source.borrowedAlias(
-        _WASIComponentCanonicalBorrow(source, scope),
+        _WASIComponentCanonicalBorrow(sourceHandle, source, scope),
         aliasScope,
       );
       _handleToSlot[handle] = slotIndex;
@@ -367,11 +367,12 @@ final class WASIComponentResourceTable {
   }
 
   /// Records that [childHandle] must be released before [parentHandle].
+  /// Canonical borrow aliases resolve to the actual owning parent.
   void attachChild(int parentHandle, int childHandle) {
     if (parentHandle == childHandle) {
       throw StateError('A WASI component resource cannot be its own child.');
     }
-    final parent = _entryForHandle(parentHandle);
+    var parent = _entryForHandle(parentHandle);
     final child = _entryForHandle(childHandle);
     if (parent == null) {
       throw StateError(
@@ -383,6 +384,20 @@ final class WASIComponentResourceTable {
     }
     _validateScopeAccess(parentHandle, parent);
     _validateScopeAccess(childHandle, child);
+    while (parent!._canonicalBorrow != null) {
+      final borrow = parent._canonicalBorrow!;
+      parentHandle = borrow.sourceHandle;
+      parent = _entryForHandle(parentHandle);
+      if (parent == null || !identical(parent, borrow.source)) {
+        throw StateError(
+          'Unknown WASI component borrow source: $parentHandle.',
+        );
+      }
+      _validateScopeAccess(parentHandle, parent);
+    }
+    if (parentHandle == childHandle) {
+      throw StateError('A WASI component resource cannot be its own child.');
+    }
     if (!identical(parent.scope, child.scope)) {
       throw StateError(
         'WASI component parent and child resources must belong to the same '
@@ -524,6 +539,9 @@ final class WASIComponentResourceTable {
     if (parentHandle != null) {
       _entryForHandle(parentHandle)?.childHandles.remove(handle);
     }
+    final owner = entry.canonicalOwner;
+    entry.canonicalOwner = null;
+    owner?.canonicalHandleRemoved(handle);
   }
 
   void _requireOwnedHandle(int handle, _WASIComponentResourceEntry entry) {
@@ -669,6 +687,7 @@ final class _WASIComponentResourceEntry<T extends Object> {
   final _WASIComponentCanonicalBorrow? _canonicalBorrow;
   final Set<int> childHandles = <int>{};
   int? parentHandle;
+  WASIComponentCanonicalHandleOwner? canonicalOwner;
   int borrowCount = 0;
 
   bool get isCanonicalBorrow => _canonicalBorrow != null;
@@ -694,8 +713,9 @@ final class _WASIComponentResourceEntry<T extends Object> {
 }
 
 final class _WASIComponentCanonicalBorrow {
-  _WASIComponentCanonicalBorrow(this.source, this.scope);
+  _WASIComponentCanonicalBorrow(this.sourceHandle, this.source, this.scope);
 
+  final int sourceHandle;
   final _WASIComponentResourceEntry source;
   final WASIComponentCanonicalBorrowScope scope;
   bool _released = false;
@@ -799,4 +819,103 @@ final class _WASIComponentResourceScope {
       Error.throwWithStackTrace(firstError, firstStackTrace!);
     }
   }
+}
+
+/// Internal access for the guest handle view; host handles remain monotonic.
+extension WASIComponentCanonicalResourceAccess on WASIComponentResourceTable {
+  /// Reads an endpoint identity without depending on its debug type name.
+  Object canonicalValueOf(int handle) {
+    final entry = _entryForHandle(handle);
+    if (entry == null) {
+      throw StateError('Unknown WASI component resource handle: $handle.');
+    }
+    _validateScopeAccess(handle, entry);
+    return entry.resource;
+  }
+
+  /// Returns a live handle's actual nominal token after scope validation.
+  WASIComponentResourceType<Object> canonicalTypeOf(int handle) {
+    final entry = _entryForHandle(handle);
+    if (entry == null) {
+      throw StateError('Unknown WASI component resource handle: $handle.');
+    }
+    _validateScopeAccess(handle, entry);
+    return entry.type;
+  }
+
+  /// Checks ownership and all preconditions before moving an owner.
+  void canonicalRequireOwned(int handle) {
+    final entry = _entryForHandle(handle);
+    if (entry == null) {
+      throw StateError('Unknown WASI component resource handle: $handle.');
+    }
+    _validateScopeAccess(handle, entry);
+    _requireOwnedHandle(handle, entry);
+    if (entry.borrowCount != 0) {
+      throw StateError('Cannot release lent WASI component resource: $handle.');
+    }
+    // Moving G keeps the same H entry and child dependencies alive. Only
+    // deleting that entry must wait for its children to be released.
+  }
+
+  /// Checks all conditions that can fail before removal or destructor execution.
+  void canonicalRequireReleasable(int handle) {
+    final entry = _entryForHandle(handle);
+    if (entry == null) {
+      throw StateError('Unknown WASI component resource handle: $handle.');
+    }
+    _validateScopeAccess(handle, entry);
+    if (entry.borrowCount != 0) {
+      throw StateError('Cannot release lent WASI component resource: $handle.');
+    }
+    if (entry.childHandles.isNotEmpty) {
+      throw StateError(
+        'Cannot release WASI component resource with live children: $handle.',
+      );
+    }
+  }
+
+  /// Whether this host handle is an existing call/task-scoped borrow.
+  bool canonicalIsBorrow(int handle) =>
+      _entryForHandle(handle)?.isCanonicalBorrow ?? false;
+
+  /// Rejects an owner that is still installed in a guest handle table.
+  void canonicalRequireUnclaimed(int handle) {
+    final entry = _entryForHandle(handle);
+    if (entry == null || entry.canonicalOwner != null) {
+      throw StateError('Canonical resource is already owned by an instance.');
+    }
+  }
+
+  /// Associates a host entry with its sole guest owner.
+  void canonicalClaim(int handle, WASIComponentCanonicalHandleOwner owner) {
+    final entry = _entryForHandle(handle);
+    if (entry == null) {
+      throw StateError('Unknown WASI component resource handle: $handle.');
+    }
+    _validateScopeAccess(handle, entry);
+    if (entry.canonicalOwner != null) {
+      throw StateError(
+        'WASI component resource is already owned by a guest: $handle.',
+      );
+    }
+    entry.canonicalOwner = owner;
+  }
+
+  /// Removes a guest claim while preserving the host entry.
+  void canonicalRelease(int handle, WASIComponentCanonicalHandleOwner owner) {
+    final entry = _entryForHandle(handle);
+    if (entry == null || !identical(entry.canonicalOwner, owner)) {
+      throw StateError(
+        'WASI component resource has a different guest owner: $handle.',
+      );
+    }
+    entry.canonicalOwner = null;
+  }
+}
+
+/// Receives removal notifications for the guest view of a host handle.
+abstract interface class WASIComponentCanonicalHandleOwner {
+  /// Removes the guest index before any host destructor can reenter.
+  void canonicalHandleRemoved(int handle);
 }
