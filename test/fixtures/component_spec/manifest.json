@@ -105,6 +105,44 @@
           "sha256": "a46e5112ff35a07f64dbca5ba19ade03f7fe9e0733e0620cb9c3cdc8a85714e6"
         }
       ]
+    },
+    {
+      "path": "test/values/realloc.wast",
+      "source": "realloc/realloc.wast",
+      "blob": "7706e03b2a1e941d2785f580f399cd2b65b08beb",
+      "sha256": "a6792f029779d12ede89c90443ea9b5d5071089b501f843f3fa4c0fbdef0735d",
+      "prepared": "realloc/script.json",
+      "commands": 16,
+      "instantiations": 6,
+      "definitions": 4,
+      "returns": 1,
+      "traps": 5,
+      "inputs": [
+        {
+          "path": "realloc/script.0.wasm",
+          "sha256": "28e4f17530b5d3428007045232616c52bf6eba2d052430d49535b62f1b4f8197"
+        },
+        {
+          "path": "realloc/script.1.wasm",
+          "sha256": "c56dbfbda7a4ca1b697236b47c7d3ff9c3acfc011442d1f71413bfb145a25a0a"
+        },
+        {
+          "path": "realloc/script.2.wasm",
+          "sha256": "5cc01391b6a7c839ee1dea9e517e0b80771cc403c802daa67db66f8320eada02"
+        },
+        {
+          "path": "realloc/script.3.wasm",
+          "sha256": "b6d94da0679c260aa01af3b84d0b2f676689b2aeb292500f5de01985515cb7be"
+        },
+        {
+          "path": "realloc/script.4.wasm",
+          "sha256": "abd840096aaa28139c664fd19c0b20728b186f664e3e1056f9f049ebef1f6102"
+        },
+        {
+          "path": "realloc/script.json",
+          "sha256": "8ee98c8cdd0061ad8cd987f4c5d1ed33bc76cb9ea0f79d72b9c271fd7d6bbfea"
+        }
+      ]
     }
   ]
 }

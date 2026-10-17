@@ -850,6 +850,7 @@ void main() {
     });
 
     test('loads and stores variants with aligned payloads', () {
+      const isJs = bool.fromEnvironment('dart.library.js_interop');
       final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
         const WasmComponentValueType.typeIndex(0),
         [
@@ -862,7 +863,10 @@ void main() {
                 WasmComponentVariantCase(
                   label: 'number',
                   type: WasmComponentValueType.primitive(
-                    WasmComponentPrimitiveValueType.u64,
+                    // dart2js lacks Uint64 accessors; f64 has the same layout.
+                    isJs
+                        ? WasmComponentPrimitiveValueType.f64
+                        : WasmComponentPrimitiveValueType.u64,
                   ),
                 ),
               ],
@@ -872,16 +876,25 @@ void main() {
       )!;
       final memory = Memory(const MemoryDescriptor(initial: 1));
       final data = ByteData.view(memory.buffer);
+      final payload = isJs
+          ? 0x02030405060708
+          : int.parse('0102030405060708', radix: 16);
       final value = WasmComponentValueData(
         kind: WasmComponentValueDataKind.variant,
         rawBytes: Uint8List(0),
         index: 1,
         label: 'number',
-        associatedValue: WasmComponentValueData(
-          kind: WasmComponentValueDataKind.integer,
-          rawBytes: Uint8List(0),
-          integer: 0x0102030405060708,
-        ),
+        associatedValue: isJs
+            ? WasmComponentValueData(
+                kind: WasmComponentValueDataKind.floatingPoint,
+                rawBytes: Uint8List(0),
+                floatingPoint: payload.toDouble(),
+              )
+            : WasmComponentValueData(
+                kind: WasmComponentValueDataKind.integer,
+                rawBytes: Uint8List(0),
+                integer: payload,
+              ),
       );
 
       codec.store(memory, 32, value);
@@ -890,10 +903,20 @@ void main() {
       expect(codec.byteLength, 16);
       expect(codec.alignment, 8);
       expect(data.getUint8(32), 1);
-      expect(data.getUint64(40, Endian.little), 0x0102030405060708);
+      expect(
+        isJs
+            ? data.getFloat64(40, Endian.little)
+            : data.getUint64(40, Endian.little),
+        payload,
+      );
       expect(loaded.index, 1);
       expect(loaded.label, 'number');
-      expect(loaded.associatedValue!.integer, 0x0102030405060708);
+      expect(
+        isJs
+            ? loaded.associatedValue!.floatingPoint
+            : loaded.associatedValue!.integer,
+        payload,
+      );
     });
 
     test('rejects invalid variant payloads before writing memory', () {
@@ -980,8 +1003,8 @@ void main() {
         )!;
         final memory = Memory(const MemoryDescriptor(initial: 1));
         final data = ByteData.view(memory.buffer);
+        final bytes = Uint8List.view(memory.buffer)..fillRange(40, 48, 0xff);
         data.setUint8(32, 0xff);
-        data.setUint64(40, 0xffffffffffffffff, Endian.little);
         final conflicting = WasmComponentValueData(
           kind: WasmComponentValueDataKind.variant,
           rawBytes: Uint8List(0),
@@ -996,7 +1019,7 @@ void main() {
 
         expect(() => codec.store(memory, 32, conflicting), throwsStateError);
         expect(data.getUint8(32), 0xff);
-        expect(data.getUint64(40, Endian.little), 0xffffffffffffffff);
+        expect(bytes.sublist(40, 48), everyElement(0xff));
       },
     );
 
@@ -1088,6 +1111,208 @@ void main() {
       expect(allocations, 1);
       expect(data.getUint32(64, Endian.little), 4);
       expect(data.getUint32(68, Endian.little), 0);
+    });
+
+    for (final flat in [false, true]) {
+      for (final length in [0, 2]) {
+        test(
+          'checks realloc alignment before bounds for length $length, flat $flat',
+          () {
+            final codec = _u32ListCodec();
+            final value = _runtimeComposite(
+              WasmComponentValueDataKind.list,
+              List<int>.generate(length, (index) => index + 1),
+            );
+            for (final pointer in [-1, 2, 65538]) {
+              final memory = Memory(const MemoryDescriptor(initial: 1));
+              final bytes = Uint8List.view(memory.buffer)
+                ..fillRange(32, 40, 0xaa);
+              final calls = <(int, int, int, int)>[];
+              int realloc(
+                int oldPointer,
+                int oldSize,
+                int alignment,
+                int newSize,
+              ) {
+                calls.add((oldPointer, oldSize, alignment, newSize));
+                return pointer;
+              }
+
+              expect(
+                () => flat
+                    ? codec.storeFlatList(memory, value, realloc: realloc)
+                    : codec.store(memory, 32, value, realloc: realloc),
+                throwsA(isA<WASIComponentMemoryAlignmentException>()),
+                reason: 'pointer $pointer',
+              );
+              expect(calls, [(0, 0, 4, length * 4)]);
+              expect(bytes.sublist(32, 40), everyElement(0xaa));
+            }
+          },
+        );
+
+        test(
+          'rejects aligned realloc bounds failures for length $length, flat $flat',
+          () {
+            final codec = _u32ListCodec();
+            final value = _runtimeComposite(
+              WasmComponentValueDataKind.list,
+              List<int>.generate(length, (index) => index + 1),
+            );
+            for (final pointer in [-4, 65540, if (length > 0) 65536]) {
+              final memory = Memory(const MemoryDescriptor(initial: 1));
+              final calls = <(int, int, int, int)>[];
+              int realloc(
+                int oldPointer,
+                int oldSize,
+                int alignment,
+                int newSize,
+              ) {
+                calls.add((oldPointer, oldSize, alignment, newSize));
+                return pointer;
+              }
+
+              expect(
+                () => flat
+                    ? codec.storeFlatList(memory, value, realloc: realloc)
+                    : codec.store(memory, 32, value, realloc: realloc),
+                throwsA(isA<WASIComponentMemoryBoundsException>()),
+                reason: 'pointer $pointer',
+              );
+              expect(calls, [(0, 0, 4, length * 4)]);
+            }
+          },
+        );
+      }
+
+      test(
+        'keeps realloc arguments and valid boundary pointers, flat $flat',
+        () {
+          final codec = _u32ListCodec();
+          for (final length in [0, 2]) {
+            final value = _runtimeComposite(
+              WasmComponentValueDataKind.list,
+              List<int>.generate(length, (index) => index + 1),
+            );
+            for (final pointer in [0, if (length == 0) 65536]) {
+              final memory = Memory(const MemoryDescriptor(initial: 1));
+              final calls = <(int, int, int, int)>[];
+              int realloc(
+                int oldPointer,
+                int oldSize,
+                int alignment,
+                int newSize,
+              ) {
+                calls.add((oldPointer, oldSize, alignment, newSize));
+                return pointer;
+              }
+
+              final WasmComponentValueData loaded;
+              if (flat) {
+                final stored = codec.storeFlatList(
+                  memory,
+                  value,
+                  realloc: realloc,
+                );
+                expect(stored, (pointer: pointer, length: length));
+                loaded = codec.loadFlatList(
+                  memory,
+                  stored.pointer,
+                  stored.length,
+                );
+              } else {
+                codec.store(memory, 32, value, realloc: realloc);
+                final data = ByteData.view(memory.buffer);
+                expect(data.getUint32(32, Endian.little), pointer);
+                expect(data.getUint32(36, Endian.little), length);
+                loaded = codec.load(memory, 32) as WasmComponentValueData;
+              }
+              expect(calls, [(0, 0, 4, length * 4)]);
+              expect(
+                loaded.items.map((item) => item.integer),
+                value.itemValues,
+              );
+            }
+          }
+        },
+      );
+
+      test('validates realloc against grown list memory, flat $flat', () {
+        final codec = _u32ListCodec();
+        final memory = Memory(const MemoryDescriptor(initial: 1, maximum: 2));
+        final value = _runtimeComposite(WasmComponentValueDataKind.list, [
+          1,
+          2,
+        ]);
+        final calls = <(int, int, int, int)>[];
+        int realloc(int oldPointer, int oldSize, int alignment, int newSize) {
+          calls.add((oldPointer, oldSize, alignment, newSize));
+          expect(memory.grow(1), 1);
+          return 65536;
+        }
+
+        final WasmComponentValueData loaded;
+        if (flat) {
+          final stored = codec.storeFlatList(memory, value, realloc: realloc);
+          expect(stored, (pointer: 65536, length: 2));
+          loaded = codec.loadFlatList(memory, stored.pointer, stored.length);
+        } else {
+          codec.store(memory, 32, value, realloc: realloc);
+          loaded = codec.load(memory, 32) as WasmComponentValueData;
+        }
+        expect(calls, [(0, 0, 4, 8)]);
+        expect(memory.buffer.lengthInBytes, 131072);
+        expect(loaded.items.map((item) => item.integer), value.itemValues);
+      });
+    }
+
+    test('keeps callback and caller errors separate from realloc traps', () {
+      final codec = _u32ListCodec();
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final value = _runtimeComposite(WasmComponentValueDataKind.list, [1]);
+      for (final error in [
+        RangeError('host realloc failure'),
+        StateError('pointer must be 4-byte aligned.'),
+      ]) {
+        expect(
+          () => codec.storeFlatList(
+            memory,
+            value,
+            realloc: (_, _, _, _) => throw error,
+          ),
+          throwsA(same(error)),
+        );
+      }
+      expect(
+        () => codec.loadFlatList(memory, 0, -1),
+        throwsA(
+          isA<RangeError>().having(
+            (error) => error is WASIComponentMemoryBoundsException,
+            'realloc bounds error',
+            isFalse,
+          ),
+        ),
+      );
+      expect(
+        () => codec.store(memory, 2, value),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error is WASIComponentMemoryAlignmentException,
+            'realloc alignment error',
+            isFalse,
+          ),
+        ),
+      );
+      expect(
+        () => codec.load(memory, 65536),
+        throwsA(
+          isA<RangeError>().having(
+            (error) => error is WASIComponentMemoryBoundsException,
+            'realloc bounds error',
+            isFalse,
+          ),
+        ),
+      );
     });
 
     test('loads and stores strings through canonical records', () {
@@ -1218,6 +1443,22 @@ List<WasmComponentTypeDefinition> _u32StringMapDefinitions() =>
         0x73,
       ]),
     ).componentTypeIndexDefinitions;
+
+WASIComponentCanonicalValueMemoryCodec _u32ListCodec() =>
+    WASIComponentCanonicalValueMemoryCodec.fromValueType(
+      const WasmComponentValueType.typeIndex(0),
+      const [
+        WasmComponentTypeDefinition(
+          kind: WasmComponentTypeKind.definedValue,
+          definedValue: WasmComponentDefinedValueType(
+            kind: WasmComponentDefinedValueTypeKind.list,
+            elementType: WasmComponentValueType.primitive(
+              WasmComponentPrimitiveValueType.u32,
+            ),
+          ),
+        ),
+      ],
+    )!;
 
 WASIComponentCanonicalValueMemoryCodec _u32StringMapCodec() =>
     WASIComponentCanonicalValueMemoryCodec.fromValueType(

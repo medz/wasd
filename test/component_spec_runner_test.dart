@@ -1,15 +1,27 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/unicode_scalar.dart';
+import 'package:wasd/src/wasi/component/value_memory.dart';
+import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
+import 'package:wasd/wasm.dart' show Memory, MemoryDescriptor;
 import 'package:wasd/src/wasm/backend/native/interpreter/execution_error.dart';
 
 import '../tool/component_spec_runner.dart' as runner;
 
 const _fixture = 'test/fixtures/component_spec/strings';
 const _numerics = 'test/fixtures/component_spec/numerics';
+const _realloc = 'test/fixtures/component_spec/realloc';
+
+Map<String, dynamic> _reallocScript() =>
+    jsonDecode(File('$_realloc/script.json').readAsStringSync())
+        as Map<String, dynamic>;
+
+Future<Map<String, Object?>> _runRealloc(Map<String, dynamic> script) =>
+    runner.executeComponentSpecScript(script, directory: Directory(_realloc));
 
 Map<String, dynamic> _script() =>
     jsonDecode(File('$_fixture/script.json').readAsStringSync())
@@ -69,23 +81,387 @@ void main() {
     expect(totals['traps_passed'], 3);
   });
 
-  test('both complete frozen files execute all 43 commands', () async {
+  test(
+    'original two complete frozen files still execute all 43 commands',
+    () async {
+      final temp = await _copyFixtures(stringsOnly: false);
+      addTearDown(() => temp.delete(recursive: true));
+      final report = await runner.runComponentSpecManifest(
+        File('${temp.path}/manifest.json'),
+        usePreparedInputs: true,
+      );
+      expect(report['status'], 'passed');
+      final totals = report['totals'] as Map;
+      expect(totals['files_total'], 2);
+      expect(totals['files_passed'], 2);
+      expect(totals['commands_passed'], 43);
+      expect(totals['commands_failed'], 0);
+      expect(totals['commands_skipped'], 0);
+      expect(totals['instantiations_passed'], 17);
+      expect(totals['definitions_passed'], 1);
+      expect(totals['returns_passed'], 18);
+      expect(totals['traps_passed'], 7);
+    },
+  );
+
+  test('complete frozen realloc file executes 6 initializations, '
+      '4 definitions, 1 return, and 5 traps through WASD', () async {
+    final report = await _runRealloc(_reallocScript());
+    expect(report['status'], 'passed');
+    final totals = report['totals'] as Map;
+    expect(totals['commands_seen'], 16);
+    expect(totals['commands_passed'], 16);
+    expect(totals['commands_failed'], 0);
+    expect(totals['commands_skipped'], 0);
+    expect(totals['instantiations_passed'], 6);
+    expect(totals['definitions_passed'], 4);
+    expect(totals['returns_passed'], 1);
+    expect(totals['traps_passed'], 5);
+  });
+
+  test('three complete frozen files execute all 59 commands', () async {
     final report = await runner.runComponentSpecManifest(
       File('test/fixtures/component_spec/manifest.json'),
       usePreparedInputs: true,
     );
     expect(report['status'], 'passed');
     final totals = report['totals'] as Map;
-    expect(totals['files_total'], 2);
-    expect(totals['files_passed'], 2);
-    expect(totals['commands_passed'], 43);
+    expect(totals['files_total'], 3);
+    expect(totals['files_passed'], 3);
+    expect(totals['commands_passed'], 59);
     expect(totals['commands_failed'], 0);
     expect(totals['commands_skipped'], 0);
-    expect(totals['instantiations_passed'], 17);
-    expect(totals['definitions_passed'], 1);
-    expect(totals['returns_passed'], 18);
-    expect(totals['traps_passed'], 7);
+    expect(totals['instantiations_passed'], 23);
+    expect(totals['definitions_passed'], 5);
+    expect(totals['returns_passed'], 19);
+    expect(totals['traps_passed'], 12);
   });
+
+  for (final (name, argument) in <(String, Object?)>[
+    ('wrong outer type', {'type': 'tuple', 'value': <Object>[]}),
+    ('non-list payload', {'type': 'list', 'value': 1}),
+    (
+      'non-value element',
+      {
+        'type': 'list',
+        'value': [1],
+      },
+    ),
+    (
+      'wrong element type',
+      {
+        'type': 'list',
+        'value': [
+          {'type': 'u8', 'value': '1'},
+        ],
+      },
+    ),
+    (
+      'negative element',
+      {
+        'type': 'list',
+        'value': [
+          {'type': 'u32', 'value': '-1'},
+        ],
+      },
+    ),
+    (
+      'overflow element',
+      {
+        'type': 'list',
+        'value': [
+          {'type': 'u32', 'value': '4294967296'},
+        ],
+      },
+    ),
+    (
+      'numeric JSON element',
+      {
+        'type': 'list',
+        'value': [
+          {'type': 'u32', 'value': 1},
+        ],
+      },
+    ),
+    (
+      'nondecimal element',
+      {
+        'type': 'list',
+        'value': [
+          {'type': 'u32', 'value': '0x1'},
+        ],
+      },
+    ),
+    (
+      'unknown outer field',
+      {'type': 'list', 'value': <Object>[], 'extra': true},
+    ),
+    (
+      'unknown element field',
+      {
+        'type': 'list',
+        'value': [
+          {'type': 'u32', 'value': '1', 'extra': true},
+        ],
+      },
+    ),
+  ]) {
+    test(
+      'realloc trap rejects malformed list argument $name before invocation',
+      () async {
+        final commands = _reallocScript()['commands'] as List;
+        final assertion = commands[10] as Map;
+        assertion['action']['args'] = [argument];
+        final report = await _runRealloc({
+          'commands': [commands[8], commands[9], assertion],
+        });
+        final records = report['commands'] as List;
+        expect(records[0]['passed'], true);
+        expect(records[1]['passed'], true);
+        expect(records[2]['passed'], false);
+        expect(
+          records[2]['error_type'],
+          anyOf('FormatException', 'UnsupportedError'),
+        );
+        expect(
+          records[2]['error'],
+          isNot(contains('Unexpected invocation error')),
+        );
+      },
+    );
+  }
+
+  for (final elements in <List<String>>[
+    [],
+    ['0'],
+    ['4294967295'],
+  ]) {
+    test(
+      'realloc list arguments accept u32 boundary values $elements',
+      () async {
+        final commands = _reallocScript()['commands'] as List;
+        commands[10]['action']['args'] = [
+          {
+            'type': 'list',
+            'value': [
+              for (final value in elements) {'type': 'u32', 'value': value},
+            ],
+          },
+        ];
+        final report = await _runRealloc({
+          'commands': [commands[8], commands[9], commands[10]],
+        });
+        expect(report['status'], 'passed');
+        expect((report['totals'] as Map)['commands_passed'], 3);
+      },
+    );
+  }
+
+  test(
+    'memory trap categories only accept ABI-origin errors through typed causes',
+    () {
+      final bounds = _listReallocError(-4);
+      final alignment = _listReallocError(-1);
+      expect(bounds, isA<WASIComponentMemoryBoundsException>());
+      expect(alignment, isA<WASIComponentMemoryAlignmentException>());
+      for (final expected in [
+        'wasm trap: list content out-of-bounds',
+        'realloc return: beyond end of memory',
+      ]) {
+        expect(runner.matchesComponentMemoryTrap(bounds, expected), true);
+        expect(
+          runner.matchesComponentMemoryTrap(
+            _ExecutionError(_ExecutionError(bounds)),
+            expected,
+          ),
+          true,
+        );
+        expect(runner.matchesComponentMemoryTrap(alignment, expected), false);
+      }
+      for (final expected in [
+        'wasm trap: unaligned pointer',
+        'realloc return: result not aligned',
+      ]) {
+        expect(runner.matchesComponentMemoryTrap(alignment, expected), true);
+        expect(
+          runner.matchesComponentMemoryTrap(
+            _ExecutionError(_ExecutionError(alignment)),
+            expected,
+          ),
+          true,
+        );
+        expect(runner.matchesComponentMemoryTrap(bounds, expected), false);
+      }
+      expect(runner.matchesComponentMemoryTrap(bounds, 'any error'), false);
+      final cycle = _ExecutionError(bounds);
+      cycle.cause = cycle;
+      for (final error in [
+        _listReallocError(
+          -4,
+          callbackError: RangeError.range(-4, 0, 65536, 'pointer + byteLength'),
+        ),
+        _listReallocError(
+          -1,
+          callbackError: StateError('pointer must be 4-byte aligned.'),
+        ),
+        _ExecutionError(StateError('pointer must be 4-byte aligned.')),
+        _ExecutionError(RangeError.range(-4, 0, 65536, 'pointer + byteLength')),
+        _UnknownCause(bounds),
+        _UnknownCause(alignment),
+        cycle,
+        TypeError(),
+        const FormatException('unaligned pointer'),
+        UnsupportedError('realloc return: beyond end of memory'),
+      ]) {
+        for (final expected in [
+          'wasm trap: list content out-of-bounds',
+          'realloc return: beyond end of memory',
+          'wasm trap: unaligned pointer',
+          'realloc return: result not aligned',
+        ]) {
+          expect(runner.matchesComponentMemoryTrap(error, expected), false);
+        }
+      }
+    },
+  );
+
+  test('an empty list cannot hide a non-u32 export element type', () async {
+    final temp = await Directory.systemTemp.createTemp(
+      'wasd-component-list-type-',
+    );
+    addTearDown(() => temp.delete(recursive: true));
+    final bytes = await File('$_realloc/script.3.wasm').readAsBytes();
+    final lists = [
+      for (var i = 0; i + 1 < bytes.length; i++)
+        if (bytes[i] == 0x70 && bytes[i + 1] == 0x79) i,
+    ];
+    expect(lists, hasLength(1));
+    bytes[lists.single + 1] =
+        0x7d; // Change only the list element from u32 to u8.
+    await File('${temp.path}/list-u8.wasm').writeAsBytes(bytes);
+    final report = await runner.executeComponentSpecScript({
+      'commands': [
+        {'type': 'module', 'filename': 'list-u8.wasm'},
+        {
+          'type': 'assert_trap',
+          'action': {
+            'type': 'invoke',
+            'field': 'f',
+            'args': [
+              {'type': 'list', 'value': <Object>[]},
+            ],
+          },
+          'text': 'realloc return: beyond end of memory',
+        },
+      ],
+    }, directory: temp);
+    final records = report['commands'] as List;
+    expect(records[0]['passed'], true);
+    expect(records[1]['passed'], false);
+    expect(records[1]['error'], contains('Unsupported Component value type'));
+  });
+
+  for (final (index, wrongTrap) in [
+    (4, 'wasm trap: unaligned pointer'),
+    (7, 'wasm trap: list content out-of-bounds'),
+    (10, 'realloc return: result not aligned'),
+    (15, 'realloc return: beyond end of memory'),
+  ]) {
+    test(
+      'realloc invocation at command $index cannot satisfy $wrongTrap',
+      () async {
+        final commands = _reallocScript()['commands'] as List;
+        commands[index]['text'] = wrongTrap;
+        final report = await _runRealloc({
+          'commands': commands.sublist(0, index + 1),
+        });
+        final record = (report['commands'] as List).last as Map;
+        expect(record['passed'], false);
+        expect(record['error'], contains('Unexpected invocation error'));
+      },
+    );
+  }
+
+  test(
+    'memory traps reject missing exports and successful invocations',
+    () async {
+      for (final field in ['absent', 'run']) {
+        final commands = _reallocScript()['commands'] as List;
+        final report = await _runRealloc({
+          'commands': [
+            commands.first,
+            {
+              'type': 'assert_trap',
+              'action': {'type': 'invoke', 'field': field, 'args': <Object>[]},
+              'text': 'realloc return: beyond end of memory',
+            },
+          ],
+        });
+        final records = report['commands'] as List;
+        expect(records.first['passed'], true);
+        expect(records.last['passed'], false);
+        expect(
+          records.last['error'],
+          contains(field == 'absent' ? 'not found' : 'did not trap'),
+        );
+      }
+    },
+  );
+
+  for (final corruption in [
+    'source-and-hashes',
+    'missing-binary-hash',
+    'command-count',
+  ]) {
+    test('realloc frozen manifest rejects $corruption', () async {
+      final temp = await _copyFixtures(
+        stringsOnly: false,
+        includeRealloc: true,
+      );
+      addTearDown(() => temp.delete(recursive: true));
+      final manifest = File('${temp.path}/manifest.json');
+      final inventory = jsonDecode(await manifest.readAsString()) as Map;
+      final entry =
+          (inventory['files'] as List).firstWhere(
+                (entry) => entry['path'] == 'test/values/realloc.wast',
+              )
+              as Map;
+      inventory['files'] = [entry];
+      if (corruption == 'source-and-hashes') {
+        final source = File('${temp.path}/${entry['source']}');
+        await source.writeAsString(
+          '${await source.readAsString()}\n;; drift\n',
+        );
+        final bytes = await source.readAsBytes();
+        entry['sha256'] = sha256.convert(bytes).toString();
+        entry['blob'] = sha1.convert([
+          ...utf8.encode('blob ${bytes.length}\u0000'),
+          ...bytes,
+        ]).toString();
+      } else if (corruption == 'missing-binary-hash') {
+        (entry['inputs'] as List).removeWhere(
+          (input) => input['path'] == 'realloc/script.3.wasm',
+        );
+      } else {
+        entry['commands'] = 15;
+      }
+      await manifest.writeAsString(jsonEncode(inventory));
+      final report = await runner.runComponentSpecManifest(
+        manifest,
+        usePreparedInputs: true,
+      );
+      expect(report['status'], 'failed');
+      final file = (report['files'] as List).single as Map;
+      expect(
+        file['error'],
+        contains(
+          corruption == 'missing-binary-hash'
+              ? 'Binary has no verified hash'
+              : 'Frozen Component source identity mismatch',
+        ),
+      );
+    });
+  }
 
   test('definition registration retains current state and each instance '
       'initializes fresh even with the same name', () async {
@@ -420,6 +796,8 @@ void main() {
       '$_fixture/script.json',
       '$_numerics/numerics.wast',
       '$_numerics/script.json',
+      '$_realloc/realloc.wast',
+      '$_realloc/script.json',
     ];
     await File('.gitattributes').copy('${checkout.path}/.gitattributes');
     for (final path in paths) {
@@ -616,7 +994,12 @@ void main() {
     ).writeAsBytes([0, 97, 115, 109, 13, 0, 1, 0, 1, 127]);
     for (final (name, trap) in [
       for (final name in ['unlinked.wasm', 'truncated.wasm'])
-        for (final trap in ['invalid utf-8', 'invalid `char` bit pattern'])
+        for (final trap in [
+          'invalid utf-8',
+          'invalid `char` bit pattern',
+          'wasm trap: list content out-of-bounds',
+          'realloc return: result not aligned',
+        ])
           (name, trap),
     ]) {
       final report = await runner.executeComponentSpecScript({
@@ -841,7 +1224,10 @@ esac
   }
 }
 
-Future<Directory> _copyFixtures({bool stringsOnly = true}) async {
+Future<Directory> _copyFixtures({
+  bool stringsOnly = true,
+  bool includeRealloc = false,
+}) async {
   final temp = await Directory.systemTemp.createTemp(
     'wasd-component-manifest-',
   );
@@ -860,8 +1246,47 @@ Future<Directory> _copyFixtures({bool stringsOnly = true}) async {
         .where((entry) => entry['path'] == 'test/values/strings.wast')
         .toList();
   }
+  if (!includeRealloc) {
+    inventory['files'] = (inventory['files'] as List)
+        .where((entry) => entry['path'] != 'test/values/realloc.wast')
+        .toList();
+  }
   await manifest.writeAsString(jsonEncode(inventory));
   return temp;
+}
+
+Object _listReallocError(int pointer, {Object? callbackError}) {
+  final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+    const WasmComponentValueType.typeIndex(0),
+    const [
+      WasmComponentTypeDefinition(
+        kind: WasmComponentTypeKind.definedValue,
+        definedValue: WasmComponentDefinedValueType(
+          kind: WasmComponentDefinedValueTypeKind.list,
+          elementType: WasmComponentValueType.primitive(
+            WasmComponentPrimitiveValueType.u32,
+          ),
+        ),
+      ),
+    ],
+  )!;
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  try {
+    codec.storeFlatList(
+      memory,
+      WasmComponentValueData(
+        kind: WasmComponentValueDataKind.list,
+        rawBytes: Uint8List(0),
+      ),
+      realloc: (_, _, _, _) {
+        if (callbackError != null) throw callbackError;
+        return pointer;
+      },
+    );
+  } catch (error) {
+    return error;
+  }
+  throw StateError('Expected canonical list realloc to fail.');
 }
 
 final class _ExecutionError implements WasmExecutionErrorContext {

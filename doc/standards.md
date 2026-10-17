@@ -120,6 +120,28 @@ Nested Component starts and concrete local resource aliases are explicitly
 rejected before execution. Imported resource identities and the numeric
 file's lexical type aliases remain supported.
 
+The unreleased realloc slice adds the complete `test/values/realloc.wast`
+at the same revision, Git blob `7706e03b2a1e941d2785f580f399cd2b65b08beb`.
+The current gate executes three files and `59/59` commands: 23 actual
+initializations, five definitions, 19 return checks and 12 invocation traps.
+Realloc return pointers are checked for alignment before bounds, including
+empty lists; typed ABI faults keep ordinary host errors from satisfying traps.
+Shared canonical-memory regressions also run on Node and Chrome. This does not
+establish JavaScript u64 memory access or general Component execution there.
+
+The frozen Component source contains 74 WAST files. The three complete files
+above leave 71 without equivalent complete WASD acceptance: 45 async,
+13 validation, four linking, three resource, five other value and one binary
+file. Existing implementation and focused tests do not replace those gates.
+These are file coverage counts, not a percentage of feature completion.
+
+The [full-goal tracker](https://github.com/medz/wasd/issues/108) retains nine
+open feature/acceptance workstreams: Core semantics/public features, public
+Core adapters, Component execution, Preview1, WASI 0.2.12, WASI 0.3.1,
+WASI 0.3.2 adoption, host capabilities and the full runtime matrix. Release
+verification and cleanup repeat for each batch. Passing the selected suites
+does not close these larger requirements.
+
 ## Implementation and evidence matrix
 
 The `0.6.0-dev.3` Preview1 gate freezes official runner/source
@@ -184,6 +206,9 @@ their OS dependencies and capabilities separately from the pure Dart interpreter
 
 These are candidate batches, not preannounced release dates or completed work.
 Each may be split into smaller independently tested 0.x releases.
+Ongoing work uses regular `0.x.y` releases. Use a prerelease suffix only for an
+explicitly requested prerelease phase; incomplete standards coverage stays
+visible in the support matrix rather than determining the version suffix.
 
 | Candidate | Deliverable and required acceptance |
 | --- | --- |

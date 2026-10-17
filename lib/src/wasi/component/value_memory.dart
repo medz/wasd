@@ -6,6 +6,21 @@ import 'integer_bounds.dart';
 import 'string_memory.dart';
 import 'unicode_scalar.dart';
 
+/// A canonical list realloc result outside guest memory.
+final class WASIComponentMemoryBoundsException extends RangeError {
+  WASIComponentMemoryBoundsException._(
+    int invalidValue,
+    int memoryByteLength,
+    String name,
+  ) : super.range(invalidValue, 0, memoryByteLength, name);
+}
+
+/// A canonical list realloc result that violates element alignment.
+final class WASIComponentMemoryAlignmentException extends StateError {
+  WASIComponentMemoryAlignmentException._(int alignment)
+    : super('pointer must be $alignment-byte aligned.');
+}
+
 /// Canonical ABI memory codec for one component value type.
 ///
 /// It implements the Canonical ABI `alignment`/`elem_size`/`load`/`store` path
@@ -1950,15 +1965,20 @@ void _checkDataRange(
   int byteLength,
   int alignment,
 ) {
-  RangeError.checkNotNegative(pointer, 'pointer');
   if (alignment > 1 && pointer % alignment != 0) {
-    throw StateError('pointer must be $alignment-byte aligned.');
+    throw WASIComponentMemoryAlignmentException._(alignment);
+  }
+  if (pointer < 0) {
+    throw WASIComponentMemoryBoundsException._(
+      pointer,
+      data.lengthInBytes,
+      'pointer',
+    );
   }
   if (pointer > data.lengthInBytes ||
       byteLength > data.lengthInBytes - pointer) {
-    throw RangeError.range(
+    throw WASIComponentMemoryBoundsException._(
       pointer + byteLength,
-      0,
       data.lengthInBytes,
       'pointer + byteLength',
     );
