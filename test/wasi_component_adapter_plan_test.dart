@@ -1345,6 +1345,32 @@ void main() {
         final canonicalHost = WASIComponentCanonicalHost();
         canonicalHost.asyncHost.defineStreamType<Object?>(0, 'test-stream');
         canonicalHost.asyncHost.defineFutureType<Object?>(1, 'test-future');
+        final component = WasmComponent.decode(
+          Uint8List.fromList([
+            0x00,
+            0x61,
+            0x73,
+            0x6d,
+            0x0d,
+            0x00,
+            0x01,
+            0x00,
+            0x07,
+            0x07,
+            0x02,
+            0x66,
+            0x01,
+            0x79,
+            0x65,
+            0x01,
+            0x79,
+          ]),
+        );
+        expect(component.validate(), isEmpty);
+        final scoped = canonicalHost.asyncHost
+            .createAsyncValueBindingSet<Object?>(
+              canonicalHost.asyncHost.componentAsyncValueBindings(component),
+            );
         const streamLayout =
             WASIComponentCanonicalAdapterFlatValuePlan.asyncValue(
               kind: WASIComponentCanonicalAdapterFlatValueKind.stream,
@@ -1401,19 +1427,44 @@ void main() {
         );
         final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
         final data = ByteData.view(memory.buffer);
-        final program = canonicalHost.adapterHost.bindAdapterPlans(
-          [plan],
-          componentFunctions: {
-            0: (_) => [stream.readable, future.readable],
-          },
-        );
+        for (final instanceLocal in [false, true]) {
+          final program = canonicalHost.adapterHost.bindAdapterPlans(
+            [plan],
+            asyncValueBindingSet: instanceLocal ? scoped : null,
+            componentFunctions: {
+              0: (_) => [stream.readable, future.readable],
+            },
+          );
 
-        expect(
-          program.invokeLoweredCore(0, const [64], memory: memory),
-          isEmpty,
-        );
-        expect(data.getUint32(64, Endian.little), greaterThan(0));
-        expect(data.getUint32(68, Endian.little), greaterThan(0));
+          expect(
+            program.invokeLoweredCore(0, const [64], memory: memory),
+            isEmpty,
+          );
+          expect(data.getUint32(64, Endian.little), greaterThan(0));
+          expect(data.getUint32(68, Endian.little), greaterThan(0));
+          final WASIComponentAsyncEndpointBindings endpoints = instanceLocal
+              ? scoped
+              : canonicalHost.asyncHost;
+          expect(
+            endpoints.liftReadableEndpoint(
+              0,
+              data.getUint32(64, Endian.little),
+            ),
+            same(stream.readable),
+          );
+          expect(
+            endpoints.liftReadableEndpoint(
+              1,
+              data.getUint32(68, Endian.little),
+            ),
+            same(future.readable),
+          );
+          expect(canonicalHost.table.activeCount, 0);
+        }
+        stream.readable.dispose();
+        stream.writable.dispose();
+        future.readable.dispose();
+        future.writable.dispose();
       },
     );
 
@@ -1421,6 +1472,32 @@ void main() {
       final canonicalHost = WASIComponentCanonicalHost();
       canonicalHost.asyncHost.defineStreamType<Object?>(0, 'test-stream');
       canonicalHost.asyncHost.defineFutureType<Object?>(1, 'test-future');
+      final component = WasmComponent.decode(
+        Uint8List.fromList([
+          0x00,
+          0x61,
+          0x73,
+          0x6d,
+          0x0d,
+          0x00,
+          0x01,
+          0x00,
+          0x07,
+          0x07,
+          0x02,
+          0x66,
+          0x01,
+          0x79,
+          0x65,
+          0x01,
+          0x79,
+        ]),
+      );
+      expect(component.validate(), isEmpty);
+      final scoped = canonicalHost.asyncHost
+          .createAsyncValueBindingSet<Object?>(
+            canonicalHost.asyncHost.componentAsyncValueBindings(component),
+          );
       const streamLayout =
           WASIComponentCanonicalAdapterFlatValuePlan.asyncValue(
             kind: WASIComponentCanonicalAdapterFlatValueKind.stream,
@@ -1448,17 +1525,6 @@ void main() {
       final stream = WASIComponentStream<Object?>('host-stream');
       final future = WASIComponentFuture<Object?>('host-future');
       final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
-      ByteData.view(memory.buffer)
-        ..setUint32(
-          64,
-          canonicalHost.asyncHost.lowerReadableEndpoint(0, stream.readable),
-          Endian.little,
-        )
-        ..setUint32(
-          68,
-          canonicalHost.asyncHost.lowerReadableEndpoint(1, future.readable),
-          Endian.little,
-        );
       final plan = WASIComponentCanonicalAdapterPlan(
         canonicalIndex: 0,
         definition: const WasmComponentCanonicalDefinition(
@@ -1486,19 +1552,41 @@ void main() {
         callbackIndex: null,
         isAsync: false,
       );
-      final program = canonicalHost.adapterHost.bindAdapterPlans(
-        [plan],
-        coreFunctions: {0: (_) => 64},
-      );
+      for (final instanceLocal in [false, true]) {
+        final WASIComponentAsyncEndpointBindings endpoints = instanceLocal
+            ? scoped
+            : canonicalHost.asyncHost;
+        ByteData.view(memory.buffer)
+          ..setUint32(
+            64,
+            endpoints.lowerReadableEndpoint(0, stream.readable),
+            Endian.little,
+          )
+          ..setUint32(
+            68,
+            endpoints.lowerReadableEndpoint(1, future.readable),
+            Endian.little,
+          );
+        final program = canonicalHost.adapterHost.bindAdapterPlans(
+          [plan],
+          asyncValueBindingSet: instanceLocal ? scoped : null,
+          coreFunctions: {0: (_) => 64},
+        );
 
-      final result =
-          program.invokeLiftedCore(0, const <Object?>[], memory: memory)!
-              as WasmComponentValueData;
+        final result =
+            program.invokeLiftedCore(0, const <Object?>[], memory: memory)!
+                as WasmComponentValueData;
 
-      expect(result.kind, WasmComponentValueDataKind.tuple);
-      expect(result.items, isEmpty);
-      expect(result.itemValues[0], same(stream.readable));
-      expect(result.itemValues[1], same(future.readable));
+        expect(result.kind, WasmComponentValueDataKind.tuple);
+        expect(result.items, isEmpty);
+        expect(result.itemValues[0], same(stream.readable));
+        expect(result.itemValues[1], same(future.readable));
+        expect(canonicalHost.table.activeCount, 0);
+      }
+      stream.readable.dispose();
+      stream.writable.dispose();
+      future.readable.dispose();
+      future.writable.dispose();
     });
 
     test(

@@ -153,6 +153,7 @@ final class WASIComponentCanonicalHost {
     List<WasmComponentTypeDefinition> typeDefinitions = const [],
     WasmComponentTypeScope? typeScope,
     WASIComponentResourceBindingSet<Object>? resourceBindingSet,
+    WASIComponentAsyncValueBindingSet? asyncValueBindingSet,
     Map<int, WASIComponentCanonicalAdapterOperation> adapterOperations =
         const <int, WASIComponentCanonicalAdapterOperation>{},
   }) {
@@ -169,6 +170,7 @@ final class WASIComponentCanonicalHost {
           typeDefinitions: typeDefinitions,
           typeScope: typeScope,
           resourceBindingSet: resourceBindingSet,
+          asyncValueBindingSet: asyncValueBindingSet,
           adapterOperations: adapterOperations,
         ),
       );
@@ -253,6 +255,7 @@ final class WASIComponentCanonicalHost {
       typeDefinitions: const <WasmComponentTypeDefinition>[],
       typeScope: null,
       resourceBindingSet: null,
+      asyncValueBindingSet: null,
       adapterOperations: const <int, WASIComponentCanonicalAdapterOperation>{},
     );
   }
@@ -263,6 +266,7 @@ final class WASIComponentCanonicalHost {
     required List<WasmComponentTypeDefinition> typeDefinitions,
     required WasmComponentTypeScope? typeScope,
     required WASIComponentResourceBindingSet<Object>? resourceBindingSet,
+    required WASIComponentAsyncValueBindingSet? asyncValueBindingSet,
     required Map<int, WASIComponentCanonicalAdapterOperation> adapterOperations,
   }) {
     switch (definition.kind) {
@@ -289,7 +293,7 @@ final class WASIComponentCanonicalHost {
       case WasmComponentCanonicalKind.futureCancelWrite:
       case WasmComponentCanonicalKind.futureDropReadable:
       case WasmComponentCanonicalKind.futureDropWritable:
-        return _bindAsync(definition);
+        return _bindAsync(definition, asyncValueBindingSet);
       case WasmComponentCanonicalKind.waitableSetNew:
       case WasmComponentCanonicalKind.waitableSetWait:
       case WasmComponentCanonicalKind.waitableSetPoll:
@@ -393,9 +397,13 @@ final class WASIComponentCanonicalHost {
 
   WASIComponentCanonicalOperation _bindAsync(
     WasmComponentCanonicalDefinition definition,
+    WASIComponentAsyncValueBindingSet? asyncValueBindingSet,
   ) {
     final program = WASIComponentCanonicalAsyncHandleProgram(
-      operations: [asyncHost.bindCanonicalDefinition(definition)],
+      operations: [
+        asyncValueBindingSet?.bindCanonicalDefinition(definition) ??
+            asyncHost.bindCanonicalDefinition(definition),
+      ],
     );
     return WASIComponentCanonicalOperation._(
       kind: definition.kind,
@@ -557,6 +565,7 @@ final class WASIComponentCanonicalBindingPlan {
   WASIComponentCanonicalProgram bindWithAdapterOperations(
     Iterable<WASIComponentCanonicalAdapterOperation> adapterOperations, {
     WASIComponentResourceBindingSet<Object>? resourceBindingSet,
+    WASIComponentAsyncValueBindingSet? asyncValueBindingSet,
   }) {
     if (validationErrors.isNotEmpty) {
       throw WASIComponentCanonicalHostValidationException(validationErrors);
@@ -576,6 +585,7 @@ final class WASIComponentCanonicalBindingPlan {
       typeDefinitions: typeDefinitions,
       typeScope: typeScope,
       resourceBindingSet: resourceBindingSet,
+      asyncValueBindingSet: asyncValueBindingSet,
       adapterOperations: Map.unmodifiable(adaptersByCanonicalIndex),
     );
   }

@@ -13,6 +13,347 @@ import 'support/component_fixtures.dart' as component_fixtures;
 import 'support/runtime_environment.dart';
 
 void main() {
+  test('equivalent async types retain each descriptor allocation policy', () {
+    final owner = WASIComponentAsyncHost();
+    final component = WasmComponent.decode(
+      component_fixtures.duplicateU32StreamTypeComponentBytes(),
+    );
+    final dropped = <int>[];
+    final discarded = <(int, Object?)>[];
+    final scoped = owner.createAsyncValueBindingSet<Object?>(
+      owner.componentAsyncValueBindings(component),
+      nameForBinding: (b) => 'alias-${b.componentTypeIndex}',
+      maxBufferedElementsForStream: (b) => b.componentTypeIndex == 0 ? 0 : 2,
+      onDrop: (b) => dropped.add(b.componentTypeIndex),
+      onDiscard: (b, value) => discarded.add((b.componentTypeIndex, value)),
+    );
+    for (final index in [0, 1]) {
+      final handles = scoped
+          .bindCanonicalDefinition(
+            _asyncDefinition(WasmComponentCanonicalKind.streamNew, index),
+          )
+          .streamNewHandles();
+      final endpoint =
+          scoped.liftReadableEndpoint(1 - index, handles.readable)
+              as WASIComponentReadableStream<Object?>;
+      final write = scoped.bindCanonicalDefinition(
+        _asyncDefinition(WasmComponentCanonicalKind.streamWrite, 1 - index),
+      );
+      if (index == 0) {
+        expect(
+          () => write.streamWriteHandle(handles.writable, [42]),
+          throwsStateError,
+        );
+        expect(discarded, isEmpty);
+      } else {
+        expect(write.streamWriteHandle(handles.writable, [42, 43]), 2);
+        expect(endpoint.read(1), [42]);
+      }
+      endpoint.dispose();
+      scoped
+          .bindCanonicalDefinition(
+            _asyncDefinition(
+              WasmComponentCanonicalKind.streamDropWritable,
+              1 - index,
+            ),
+          )
+          .streamDropWritableHandle(handles.writable);
+    }
+    expect(dropped, [0, 1]);
+    expect(discarded, [(1, 43)]);
+    expect(owner.table.activeCount, 0);
+  });
+
+  test('resource-bearing payload indexes keep independent backing', () {
+    final owner = WASIComponentAsyncHost();
+    final component = WasmComponent.decode(
+      Uint8List.fromList([
+        0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00,
+        0x07, 0x14, 0x07,
+        0x3f, 0x7f, 0x00, // resource A
+        0x3f, 0x7f, 0x00, // resource B
+        0x69, 0x00, // own<A>
+        0x69, 0x01, // own<B>
+        0x66, 0x01, 0x02, // stream<own<A>>
+        0x66, 0x01, 0x02, // equivalent stream<own<A>>
+        0x66, 0x01, 0x03, // stream<own<B>>
+      ]),
+    );
+    expect(component.validate(), isEmpty);
+    final scoped = owner.createAsyncValueBindingSet<Object?>(
+      owner.componentAsyncValueBindings(component),
+    );
+    final a = scoped
+        .bindCanonicalDefinition(
+          _asyncDefinition(WasmComponentCanonicalKind.streamNew, 4),
+        )
+        .streamNewHandles();
+    final b = scoped
+        .bindCanonicalDefinition(
+          _asyncDefinition(WasmComponentCanonicalKind.streamNew, 6),
+        )
+        .streamNewHandles();
+    final dropEquivalent = scoped.bindCanonicalDefinition(
+      _asyncDefinition(WasmComponentCanonicalKind.streamDropReadable, 5),
+    );
+    expect(
+      () => dropEquivalent.streamDropReadableHandle(b.readable),
+      throwsStateError,
+    );
+    expect(
+      () => dropEquivalent.streamDropReadableHandle(a.readable),
+      throwsStateError,
+    );
+    scoped
+        .bindCanonicalDefinition(
+          _asyncDefinition(WasmComponentCanonicalKind.streamDropReadable, 4),
+        )
+        .streamDropReadableHandle(a.readable);
+    scoped
+        .bindCanonicalDefinition(
+          _asyncDefinition(WasmComponentCanonicalKind.streamDropWritable, 4),
+        )
+        .streamDropWritableHandle(a.writable);
+    scoped
+        .bindCanonicalDefinition(
+          _asyncDefinition(WasmComponentCanonicalKind.streamDropReadable, 6),
+        )
+        .streamDropReadableHandle(b.readable);
+    scoped
+        .bindCanonicalDefinition(
+          _asyncDefinition(WasmComponentCanonicalKind.streamDropWritable, 6),
+        )
+        .streamDropWritableHandle(b.writable);
+    expect(owner.table.activeCount, 0);
+  });
+
+  test('instance registries transfer the same endpoint and clean aliases', () {
+    final owner = WASIComponentAsyncHost();
+    final component = WasmComponent.decode(
+      component_fixtures.canonicalU32StreamMemoryComponentBytes(),
+    );
+    final descriptors = owner.componentAsyncValueBindings(component);
+    var drops = 0;
+    final a = owner.createAsyncValueBindingSet<Object?>(
+      descriptors,
+      onDrop: (_) => drops++,
+    );
+    final b = owner.createAsyncValueBindingSet<Object?>(descriptors);
+    final handles = a
+        .bindCanonicalDefinition(
+          _asyncDefinition(WasmComponentCanonicalKind.streamNew),
+        )
+        .streamNewHandles();
+    final endpoint =
+        a.liftReadableEndpoint(0, handles.readable)
+            as WASIComponentReadableStream<Object?>;
+    expect(owner.table.contains(handles.readable), isFalse);
+    expect(owner.waitableForHandle(handles.readable), isNull);
+    final transferred = b.lowerReadableEndpoint(0, endpoint);
+    expect(b.liftReadableEndpoint(0, transferred), same(endpoint));
+    expect(owner.waitableForHandle(transferred), isNull);
+    a
+        .bindCanonicalDefinition(
+          _asyncDefinition(WasmComponentCanonicalKind.streamWrite),
+        )
+        .streamWriteHandle(handles.writable, [42]);
+    expect(endpoint.read(1), [42]);
+    endpoint.drop();
+    a
+        .bindCanonicalDefinition(
+          _asyncDefinition(WasmComponentCanonicalKind.streamDropWritable),
+        )
+        .streamDropWritableHandle(handles.writable);
+    expect(drops, 1);
+    expect(owner.table.activeCount, 0);
+  });
+
+  test('local registry never falls back to a legacy type index', () {
+    final owner = WASIComponentAsyncHost()
+      ..defineFutureType<Object?>(7, 'legacy');
+    final component = WasmComponent.decode(
+      component_fixtures.canonicalU32StreamMemoryComponentBytes(),
+    );
+    final scoped = owner.createAsyncValueBindingSet<Object?>(
+      owner.componentAsyncValueBindings(component),
+    );
+    final future = WASIComponentFuture<Object?>('host');
+    expect(() => scoped.lowerReadableEndpoint(7, future), throwsStateError);
+    expect(() => scoped.liftReadableEndpoint(7, 1), throwsStateError);
+    expect(
+      () => scoped.bindCanonicalDefinition(
+        _asyncDefinition(WasmComponentCanonicalKind.futureNew, 7),
+      ),
+      throwsStateError,
+    );
+    expect(owner.table.activeCount, 0);
+    future.readable.dispose();
+    future.writable.dispose();
+  });
+
+  test('local metadata failures allocate no nominal types or handles', () {
+    final owner = WASIComponentAsyncHost();
+    final component = WasmComponent.decode(
+      component_fixtures.duplicateU32StreamTypeComponentBytes(),
+    );
+    final descriptors = owner.componentAsyncValueBindings(component);
+    var metadataCalls = 0;
+    var drops = 0;
+    var discards = 0;
+    final before = owner.table.defineType<Object>('before').id;
+    expect(
+      () => owner.createAsyncValueBindingSet<Object?>(
+        [descriptors.first, descriptors.first],
+        nameForBinding: (_) {
+          metadataCalls++;
+          return 'unused';
+        },
+      ),
+      throwsStateError,
+    );
+    expect(metadataCalls, 0);
+    final failure = StateError('second buffering callback');
+    expect(
+      () => owner.createAsyncValueBindingSet<Object?>(
+        descriptors,
+        maxBufferedElementsForStream: (_) {
+          if (++metadataCalls == 2) throw failure;
+          return 0;
+        },
+        onDrop: (_) => drops++,
+        onDiscard: (_, _) => discards++,
+      ),
+      throwsA(same(failure)),
+    );
+    expect(
+      () => owner.createAsyncValueBindingSet<Object?>(
+        descriptors,
+        maxBufferedElementsForStream: (_) => -1,
+      ),
+      throwsRangeError,
+    );
+    expect(owner.table.defineType<Object>('after').id, before + 1);
+    expect(owner.table.activeCount, 0);
+    expect(drops, 0);
+    expect(discards, 0);
+  });
+
+  test('instance sets retain distinct backing endpoint types', () {
+    final owner = WASIComponentAsyncHost();
+    final component = WasmComponent.decode(
+      component_fixtures.canonicalU32StreamMemoryComponentBytes(),
+    );
+    final descriptors = owner.componentAsyncValueBindings(component);
+    expect(descriptors.single.componentTypeIndex, 0);
+    final a = owner.createAsyncValueBindingSet<Object?>(
+      descriptors,
+      nameForBinding: (_) => 'same-debug-name',
+    );
+    final b = owner.createAsyncValueBindingSet<Object?>(
+      descriptors,
+      nameForBinding: (_) => 'same-debug-name',
+    );
+    final ah = a
+        .bindCanonicalDefinition(
+          _asyncDefinition(WasmComponentCanonicalKind.streamNew),
+        )
+        .streamNewHandles();
+    final bh = b
+        .bindCanonicalDefinition(
+          _asyncDefinition(WasmComponentCanonicalKind.streamNew),
+        )
+        .streamNewHandles();
+    final dropA = a.bindCanonicalDefinition(
+      _asyncDefinition(WasmComponentCanonicalKind.streamDropReadable),
+    );
+    final dropB = b.bindCanonicalDefinition(
+      _asyncDefinition(WasmComponentCanonicalKind.streamDropReadable),
+    );
+    expect(() => dropA.streamDropReadableHandle(bh.readable), throwsStateError);
+    expect(() => dropB.streamDropReadableHandle(ah.readable), throwsStateError);
+    expect(owner.table.activeCount, 4);
+    dropA.streamDropReadableHandle(ah.readable);
+    dropB.streamDropReadableHandle(bh.readable);
+    a
+        .bindCanonicalDefinition(
+          _asyncDefinition(WasmComponentCanonicalKind.streamDropWritable),
+        )
+        .streamDropWritableHandle(ah.writable);
+    b
+        .bindCanonicalDefinition(
+          _asyncDefinition(WasmComponentCanonicalKind.streamDropWritable),
+        )
+        .streamDropWritableHandle(bh.writable);
+    expect(owner.table.activeCount, 0);
+    // A set lookup may not fall back to an owner's unrelated legacy index.
+    expect(
+      () => a.bindCanonicalDefinition(
+        _asyncDefinition(WasmComponentCanonicalKind.futureNew),
+      ),
+      throwsStateError,
+    );
+  });
+
+  test(
+    'local factory failure leaves legacy and other instance bindings intact',
+    () {
+      final owner = WASIComponentAsyncHost()
+        ..defineStreamType<int>(7, 'legacy');
+      final component = WasmComponent.decode(
+        component_fixtures.duplicateU32StreamTypeComponentBytes(),
+      );
+      final descriptors = owner.componentAsyncValueBindings(component);
+      expect(descriptors, hasLength(2));
+      var names = 0;
+      final failure = StateError('second metadata callback failed');
+      expect(
+        () => owner.createAsyncValueBindingSet<Object?>(
+          descriptors,
+          nameForBinding: (_) {
+            if (++names == 2) throw failure;
+            return 'prepared-only';
+          },
+        ),
+        throwsA(same(failure)),
+      );
+      expect(names, 2);
+      expect(owner.table.activeCount, 0);
+      // Same actual descriptors must now bind successfully in a fresh set.
+      final good = owner.createAsyncValueBindingSet<Object?>(descriptors);
+      final h = good
+          .bindCanonicalDefinition(
+            _asyncDefinition(WasmComponentCanonicalKind.streamNew),
+          )
+          .streamNewHandles();
+      good
+          .bindCanonicalDefinition(
+            _asyncDefinition(WasmComponentCanonicalKind.streamDropReadable),
+          )
+          .streamDropReadableHandle(h.readable);
+      good
+          .bindCanonicalDefinition(
+            _asyncDefinition(WasmComponentCanonicalKind.streamDropWritable),
+          )
+          .streamDropWritableHandle(h.writable);
+      final legacy = owner
+          .bindCanonicalDefinition(
+            _asyncDefinition(WasmComponentCanonicalKind.streamNew, 7),
+          )
+          .streamNewHandles();
+      owner
+          .bindCanonicalDefinition(
+            _asyncDefinition(WasmComponentCanonicalKind.streamDropReadable, 7),
+          )
+          .streamDropReadableHandle(legacy.readable);
+      owner
+          .bindCanonicalDefinition(
+            _asyncDefinition(WasmComponentCanonicalKind.streamDropWritable, 7),
+          )
+          .streamDropWritableHandle(legacy.writable);
+      expect(owner.table.activeCount, 0);
+    },
+  );
+
   group('WASIComponentAsyncHost', () {
     test('binds decoded canonical backpressure definitions', () {
       final component = WasmComponent.decode(_canonicalBackpressureBytes());
@@ -4756,3 +5097,8 @@ WASIComponentAsyncEndpointHandles _unpackHandles(Object? packed) {
   expect(value, isA<int>());
   return WASIComponentAsyncEndpointHandles.unpack(value as int);
 }
+
+WasmComponentCanonicalDefinition _asyncDefinition(
+  WasmComponentCanonicalKind kind, [
+  int typeIndex = 0,
+]) => WasmComponentCanonicalDefinition(kind: kind, typeIndex: typeIndex);

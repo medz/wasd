@@ -1,6 +1,6 @@
 export 'component/adapter_host.dart';
 export 'component/adapter_plan.dart';
-export 'component/async_host.dart';
+export 'component/async_host.dart' hide WASIComponentAsyncEndpointBindings;
 export 'component/async_values.dart';
 export 'component/backpressure.dart';
 export 'component/canonical_host.dart';

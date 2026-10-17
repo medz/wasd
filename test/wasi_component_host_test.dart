@@ -12,6 +12,147 @@ import 'package:wasd/src/wasm/memory.dart';
 import 'support/component_fixtures.dart' as component_fixtures;
 
 void main() {
+  test('missing adapter callbacks do not allocate local async types', () {
+    final host = WASIComponentHost();
+    final component = WasmComponent.decode(
+      component_fixtures.importedScopedOptionStreamComponentBytes(),
+    );
+    final plan = host.prepareComponent(component);
+    expect(plan.validationErrors, isEmpty);
+    expect(plan.adapterPlans, isNotEmpty);
+    expect(plan.asyncValueBindings, isNotEmpty);
+    final before = host.table.defineType<Object>('before').id;
+    var metadataCalls = 0;
+    expect(
+      () => plan.bind(
+        instanceLocalAsyncValues: true,
+        asyncValueName: (_) {
+          metadataCalls++;
+          return 'unused';
+        },
+      ),
+      throwsStateError,
+    );
+    expect(metadataCalls, 0);
+    expect(host.table.defineType<Object>('after').id, before + 1);
+    expect(host.table.activeCount, 0);
+  });
+
+  test(
+    'local stream rendezvous uses the shared scheduler and cleans failures',
+    () async {
+      final host = WASIComponentHost();
+      final component = WasmComponent.decode(
+        component_fixtures.canonicalU32StreamMemoryComponentBytes(),
+      );
+      var drops = 0;
+      final binding = host
+          .prepareComponent(component)
+          .bind(
+            instanceLocalAsyncValues: true,
+            maxBufferedElementsForStream: (_) => 0,
+            onAsyncValueDrop: (_) => drops++,
+          );
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer)
+        ..setUint32(32, 42, Endian.little);
+      final waitables = host.canonicalHost.waitableHost;
+      late int readable;
+      late int writable;
+      late WASIComponentWaitable endpointWaitable;
+      final failure = StateError('component failed');
+      await expectLater(
+        host.table.runScoped<void>(() async {
+          final handles = WASIComponentAsyncEndpointHandles.unpack(
+            binding.program.invoke(0, [])! as int,
+          );
+          readable = handles.readable;
+          writable = handles.writable;
+          final set = waitables.waitableSetNew();
+          waitables.waitableJoin(readable, set);
+          endpointWaitable = host.canonicalHost.asyncHost.waitableForHandle(
+            readable,
+          )!;
+          expect(
+            binding.program.invokeWithMemoryEvent(1, memory, [readable, 96, 1]),
+            wasiComponentAsyncBlocked,
+          );
+          final write = binding.program.invokeWithMemoryAsync(2, memory, [
+            writable,
+            32,
+            1,
+          ]);
+          expect(
+            await waitables.waitableSetWaitToMemory(set, memory, 128),
+            WASIComponentWaitableEventCode.streamRead.value,
+          );
+          expect(await write, 1 << 4);
+          expect(data.getUint32(96, Endian.little), 42);
+          expect(data.getUint32(128, Endian.little), readable);
+          throw failure;
+        }),
+        throwsA(same(failure)),
+      );
+      expect(drops, 1);
+      expect(endpointWaitable.inWaitableSet, isFalse);
+      expect(host.table.activeCount, 0);
+      expect(host.canonicalHost.asyncHost.waitableForHandle(readable), isNull);
+      expect(host.canonicalHost.asyncHost.waitableForHandle(writable), isNull);
+    },
+  );
+
+  test(
+    'instance-local future events reach the shared waitable resolver',
+    () async {
+      final host = WASIComponentHost();
+      final component = WasmComponent.decode(
+        component_fixtures.canonicalU32FutureMemoryComponentBytes(),
+      );
+      final binding = host
+          .prepareComponent(component)
+          .bind(instanceLocalAsyncValues: true);
+      final handles = WASIComponentAsyncEndpointHandles.unpack(
+        binding.program.invoke(0, [])! as int,
+      );
+      final waitables = host.canonicalHost.waitableHost;
+      final set = waitables.waitableSetNew();
+      waitables.waitableJoin(handles.readable, set);
+      expect(
+        host.canonicalHost.asyncHost.waitableForHandle(handles.readable),
+        isNotNull,
+      );
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer)
+        ..setUint32(32, 42, Endian.little);
+      expect(
+        binding.program.invokeWithMemoryEvent(1, memory, [
+          handles.readable,
+          96,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        binding.program.invokeWithMemory(2, memory, [handles.writable, 32]),
+        0,
+      );
+      expect(
+        await waitables.waitableSetWaitToMemory(set, memory, 128),
+        WASIComponentWaitableEventCode.futureRead.value,
+      );
+      expect(data.getUint32(96, Endian.little), 42);
+      expect(data.getUint32(128, Endian.little), handles.readable);
+      waitables.waitableJoin(handles.readable, 0);
+      waitables.waitableSetDrop(set);
+      binding.program.invoke(3, [handles.readable]);
+      binding.program.invoke(4, [handles.writable]);
+      expect(host.table.activeCount, 0);
+      expect(
+        host.canonicalHost.asyncHost.waitableForHandle(handles.readable),
+        isNull,
+      );
+    },
+  );
+
   group('WASIComponentHost', () {
     test('binds component resources and canonical builtins together', () {
       final component = WasmComponent.decode(_canonicalResourceProgramBytes());

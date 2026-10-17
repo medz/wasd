@@ -360,6 +360,12 @@ final class WASIComponentNativeRuntime {
   void _prepareExecution() {
     final plan = _checkComponent();
     _initializeAdapterCallbacks(plan.adapterPlans);
+    _binding = plan.bind(
+      coreFunctions: _adapterCoreCallbacks,
+      componentFunctions: _adapterComponentCallbacks,
+      maxBufferedElementsForStream: _preview3Host == null ? null : (_) => 0,
+      instanceLocalAsyncValues: true,
+    );
     _adapterProgram = plan.bindAdapters(
       coreFunctions: _adapterCoreCallbacks,
       componentFunctions: _adapterComponentCallbacks,
@@ -367,11 +373,6 @@ final class WASIComponentNativeRuntime {
     _synchronousAdapterProgram = plan.bindAdapters(
       coreFunctions: _synchronousAdapterCoreCallbacks,
       componentFunctions: _synchronousAdapterComponentCallbacks,
-    );
-    _binding = plan.bind(
-      coreFunctions: _adapterCoreCallbacks,
-      componentFunctions: _adapterComponentCallbacks,
-      maxBufferedElementsForStream: _preview3Host == null ? null : (_) => 0,
     );
   }
 
