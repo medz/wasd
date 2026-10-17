@@ -1039,7 +1039,7 @@ final class WasmInstance {
       try {
         switch (instruction.opcode) {
           case Opcodes.unreachable:
-            throw StateError('unreachable trap');
+            throw WasmUnreachableTrap();
 
           case Opcodes.nop:
             pc++;
