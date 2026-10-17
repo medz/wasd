@@ -243,7 +243,7 @@ final class WASIComponentCanonicalHandles
     for (var index = 0; index < plan.params.length; index++) {
       final param = plan.params[index];
       if (param.resourceUses.isEmpty &&
-          !WASIComponentCanonicalLowerExecution.containsErrorContext(
+          !WASIComponentCanonicalLowerExecution.containsHandles(
             param.flatLayout,
           )) {
         continue;
@@ -811,6 +811,7 @@ final class _PayloadHandleBindings
   final WASIComponentCanonicalResourceIdentity Function(int index) identity;
   final _PayloadMode mode;
   final Set<int> seen = {};
+  Set<Object>? _seenReadableEndpoints;
   final List<int> created = [];
   Object? _discardError;
   StackTrace? _discardStackTrace;
@@ -931,7 +932,26 @@ final class _PayloadHandleBindings
 
   @override
   int lowerReadableEndpoint(int index, Object endpoint) {
-    if (mode == _PayloadMode.checkLower) return 0;
+    if (mode == _PayloadMode.checkLower) {
+      final readable = switch (endpoint) {
+        WASIComponentStream() => endpoint.readable,
+        WASIComponentFuture() => endpoint.readable,
+        WASIComponentReadableStream() ||
+        WASIComponentReadableFuture() => endpoint,
+        _ => throw StateError('Expected an owned readable endpoint argument.'),
+      };
+      if (_ownedReadableEndpoints[readable] == true) {
+        throw StateError(
+          'Readable endpoint is already owned by a component instance.',
+        );
+      }
+      if (!(_seenReadableEndpoints ??= Set<Object>.identity()).add(readable)) {
+        throw StateError(
+          'Canonical arguments repeat an owned readable endpoint.',
+        );
+      }
+      return 0;
+    }
     if (mode != _PayloadMode.discard) {
       throw StateError('Unsupported nested async payload.');
     }

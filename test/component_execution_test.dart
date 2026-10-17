@@ -446,6 +446,142 @@ void main() {
     },
   );
 
+  for (final kind in ['stream', 'future']) {
+    for (final nested in [false, true]) {
+      for (final repeated in [false, true]) {
+        test(
+          'continuation host $kind ownership preflight nested=$nested repeated=$repeated',
+          () async {
+            final component = await _encodeComponent('''
+(component
+  (type \$value ($kind u32))
+  (type \$pair (tuple \$value \$value))
+  (core func \$drop (canon $kind.drop-readable \$value))
+  (core module \$m
+    (import "h" "drop" (func \$drop (param i32)))
+    (global \$first (mut i32) (i32.const 0))
+    (global \$second (mut i32) (i32.const 0))
+    (global \$entries (mut i32) (i32.const 0))
+    (func \$enter global.get \$entries i32.const 1 i32.add global.set \$entries)
+    (func (export "hold") (param i32) (result i32)
+      call \$enter local.get 0 global.set \$first i32.const 42)
+    (func (export "take") (param i32 i32) (result i32)
+      call \$enter local.get 0 global.set \$first local.get 1 global.set \$second i32.const 42)
+    (func (export "release") global.get \$first call \$drop)
+    (func (export "release-pair") global.get \$first call \$drop global.get \$second call \$drop)
+    (func (export "ping") (result i32) i32.const 42)
+    (func (export "entries") (result i32) global.get \$entries))
+  (core instance \$h (export "drop" (func \$drop)))
+  (core instance \$m (instantiate \$m (with "h" (instance \$h))))
+  (func (export "hold") (param "value" \$value) (result u32) (canon lift (core func \$m "hold")))
+  (func (export "take") ${nested ? r'(param "pair" $pair)' : r'(param "first" $value) (param "second" $value)'} (result u32)
+    (canon lift (core func \$m "take")))
+  (func (export "release") (canon lift (core func \$m "release")))
+  (func (export "release-pair") (canon lift (core func \$m "release-pair")))
+  (func (export "ping") (result u32) (canon lift (core func \$m "ping")))
+  (func (export "entries") (result u32) (canon lift (core func \$m "entries"))))
+''', validate: true);
+            final host = WASIComponentHost();
+            var dropped = 0;
+            final channels = <Object>[
+              for (var index = 0; index < 2; index++)
+                kind == 'stream'
+                    ? WASIComponentStream<Object?>(
+                        'host$index',
+                        onDrop: () => dropped++,
+                      )
+                    : WASIComponentFuture<Object?>(
+                        'host$index',
+                        onDrop: () => dropped++,
+                      ),
+            ];
+            Object readable(Object channel) => switch (channel) {
+              WASIComponentStream() => channel.readable,
+              WASIComponentFuture() => channel.readable,
+              _ => throw StateError('not a channel'),
+            };
+            final first = readable(channels.first);
+            final second = readable(channels.last);
+            List<Object?> pair(Object first, Object second) => nested
+                ? [
+                    WasmComponentValueData(
+                      kind: WasmComponentValueDataKind.tuple,
+                      rawBytes: Uint8List(0),
+                      runtimeItems: [first, second],
+                    ),
+                  ]
+                : [first, second];
+            await host.table.runScoped(() async {
+              final runtime = WASIComponentNativeRuntime.component(
+                component: component,
+                host: host,
+              );
+              if (repeated) {
+                expect(await runtime.invokeExport('hold', [first]), 42);
+              }
+              await expectLater(
+                runtime.invokeExport(
+                  repeated ? 'hold' : 'take',
+                  repeated ? [first] : pair(first, first),
+                ),
+                throwsA(isA<StateError>()),
+              );
+              expect(await runtime.invokeExport('ping', []), 42);
+              expect(
+                await runtime.invokeExport('entries', []),
+                repeated ? 1 : 0,
+                reason: 'rejected host transfers never enter the guest',
+              );
+              expect(
+                host.table.activeCount,
+                repeated ? 1 : 0,
+                reason: 'preflight does not register or move endpoints',
+              );
+              if (repeated) {
+                await runtime.invokeExport('release', []);
+                expect(host.table.activeCount, 0);
+                // A freshly created pair still transfers into the same runtime.
+                channels.add(
+                  kind == 'stream'
+                      ? WASIComponentStream<Object?>(
+                          'replacement',
+                          onDrop: () => dropped++,
+                        )
+                      : WASIComponentFuture<Object?>(
+                          'replacement',
+                          onDrop: () => dropped++,
+                        ),
+                );
+              }
+              final freshFirst = repeated ? readable(channels.last) : first;
+              expect(
+                await runtime.invokeExport('take', pair(freshFirst, second)),
+                42,
+              );
+              expect(
+                await runtime.invokeExport('entries', []),
+                repeated ? 2 : 1,
+              );
+              expect(host.table.activeCount, 2);
+              await runtime.invokeExport('release-pair', []);
+              await runtime.dispose();
+              expect(host.table.activeCount, 0);
+            });
+            for (final channel in channels) {
+              switch (channel) {
+                case WASIComponentStream():
+                  channel.writable.dispose();
+                case WASIComponentFuture():
+                  channel.writable.dispose();
+              }
+            }
+            expect(dropped, channels.length);
+          },
+        );
+      }
+    }
+  }
+
   for (final nested in [false, true]) {
     test(
       'continuation invalid host error-context token is recoverable nested=$nested',
