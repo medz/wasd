@@ -13,6 +13,255 @@ import 'package:wasd/wasi.dart';
 import 'package:wasd/wasm.dart' hide Exception;
 
 void main() {
+  group('resource destructors', () {
+    test(
+      'rejects draft async destructors before allocating host state',
+      () async {
+        final component = _asyncResourceDestructorComponent();
+        expect(component.validate(), isEmpty);
+        final host = WASIComponentHost();
+        await expectLater(
+          WASIComponentNativeRuntime.component(
+            component: component,
+            host: host,
+          ).initialize(),
+          throwsA(
+            isA<WASIPreview2ComponentExecutionException>().having(
+              (error) => error.message,
+              'message',
+              contains('Asynchronous resource destructors are not executable'),
+            ),
+          ),
+        );
+        expect(host.table.activeCount, 0);
+      },
+    );
+
+    for (final external in [false, true]) {
+      test(
+        'synchronous destructor reentry (external callback: $external)',
+        () async {
+          final component = await _encodeComponent(
+            '(component ${_resourceDestructorSourceBody(reenter: true, external: external)})',
+          );
+          expect(component.validate(), isEmpty);
+          final host = WASIComponentHost();
+          var callbacks = 0;
+          final unhandled = <Object>[];
+          Object? observedError;
+          Object? count;
+          await runZonedGuarded(() async {
+            try {
+              await host.table.runScoped(() async {
+                final runtime = WASIComponentNativeRuntime.component(
+                  component: component,
+                  host: host,
+                  imports: {
+                    'blocked': (_) async {
+                      callbacks++;
+                      await Future<void>.delayed(Duration.zero);
+                      return 42;
+                    },
+                  },
+                );
+                final handle = await runtime.invokeExport('new', [7]);
+                try {
+                  await runtime.invokeExport('drop', [handle]);
+                } catch (error) {
+                  observedError = error;
+                }
+                count = await runtime.invokeExport('count', []);
+              });
+            } catch (error) {
+              observedError ??= error;
+            }
+            await Future<void>.delayed(Duration.zero);
+          }, (error, stack) => unhandled.add(error));
+          expect(observedError, external ? isNotNull : isNull);
+          expect(count, 7);
+          expect(host.table.activeCount, 0);
+          expect(callbacks, 0);
+          expect(unhandled, isEmpty);
+        },
+      );
+    }
+
+    for (final trigger in ['post-return', 'realloc']) {
+      for (final operation in ['new', 'rep', 'drop']) {
+        for (final nested in operation == 'drop' ? [false, true] : [false]) {
+          test(
+            'blocks resource.$operation during $trigger before side effects (nested: $nested)',
+            () async {
+              final component = await _encodeComponent(
+                _resourceMayLeaveSource(trigger, operation, nested: nested),
+              );
+              expect(component.validate(), isEmpty);
+              final host = WASIComponentHost();
+              final runtime = WASIComponentNativeRuntime.component(
+                component: component,
+                host: host,
+              );
+              await host.table.runScoped(() async {
+                if (trigger == 'realloc') {
+                  await runtime.invokeExport('seed', [11]);
+                }
+                await expectLater(
+                  runtime.invokeExport(
+                    trigger == 'realloc' ? 'accept' : 'run',
+                    trigger == 'realloc' ? ['abc'] : [],
+                  ),
+                  throwsA(
+                    isA<WasmExecutionErrorContext>().having(
+                      (error) => error.cause,
+                      'cause',
+                      isA<StateError>().having(
+                        (error) => error.message,
+                        'message',
+                        contains('cannot leave'),
+                      ),
+                    ),
+                  ),
+                );
+                expect(host.table.activeCount, 1);
+                expect(await runtime.invokeExport('count', []), 0);
+              });
+              expect(host.table.activeCount, 0);
+              expect(
+                await runtime.invokeExport('count', []),
+                trigger == 'realloc' ? 11 : 7,
+              );
+            },
+          );
+        }
+      }
+    }
+
+    test('dropping a borrow does not invoke the owned destructor', () async {
+      final component = await _encodeComponent(_resourceDestructorSource());
+      final host = WASIComponentHost();
+      await host.table.runScoped(() async {
+        final runtime = WASIComponentNativeRuntime.component(
+          component: component,
+          host: host,
+        );
+        final owned = await runtime.invokeExport('new', [13]) as int;
+        final scope = host.table.createBorrowCallScope();
+        final borrowed = scope.lowerHandle(owned);
+        await runtime.invokeExport('drop', [borrowed]);
+        expect(await runtime.invokeExport('count', []), 0);
+        expect(host.table.activeCount, 1);
+        scope.close();
+        await runtime.invokeExport('drop', [owned]);
+        expect(await runtime.invokeExport('count', []), 13);
+        expect(host.table.activeCount, 0);
+      });
+    });
+
+    test('passes the representation and drops each handle once', () async {
+      final component = await _encodeComponent(_resourceDestructorSource());
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentHost();
+      await host.table.runScoped(() async {
+        final runtime = WASIComponentNativeRuntime.component(
+          component: component,
+          host: host,
+        );
+        final first = await runtime.invokeExport('new', [7]);
+        final second = await runtime.invokeExport('new', [11]);
+        await runtime.invokeExport('drop', [first]);
+        expect(await runtime.invokeExport('count', []), 7);
+        await expectLater(
+          runtime.invokeExport('drop', [first]),
+          throwsA(anything),
+        );
+        expect(await runtime.invokeExport('count', []), 7);
+        await runtime.invokeExport('drop', [second]);
+        expect(await runtime.invokeExport('count', []), 18);
+        expect(host.table.activeCount, 0);
+      });
+      expect(host.table.activeCount, 0);
+    });
+
+    test('scope cleanup invokes the defining instance destructor', () async {
+      final component = await _encodeComponent(_resourceDestructorSource());
+      final host = WASIComponentHost();
+      final runtime = WASIComponentNativeRuntime.component(
+        component: component,
+        host: host,
+      );
+      await host.table.runScoped(() async {
+        await runtime.invokeExport('new', [13]);
+        expect(await runtime.invokeExport('count', []), 0);
+      });
+      expect(await runtime.invokeExport('count', []), 13);
+      expect(host.table.activeCount, 0);
+    });
+
+    test(
+      'fresh component instances retain their own destructor core closure',
+      () async {
+        final component = await _encodeComponent('''
+(component
+  (component \$child ${_resourceDestructorSourceBody()})
+  (instance \$a (instantiate \$child))
+  (instance \$b (instantiate \$child))
+  (func (export "new-a") (alias export \$a "new"))
+  (func (export "drop-a") (alias export \$a "drop"))
+  (func (export "count-a") (alias export \$a "count"))
+  (func (export "new-b") (alias export \$b "new"))
+  (func (export "drop-b") (alias export \$b "drop"))
+  (func (export "count-b") (alias export \$b "count")))
+''');
+        expect(component.validate(), isEmpty);
+        final host = WASIComponentHost();
+        await host.table.runScoped(() async {
+          final runtime = WASIComponentNativeRuntime.component(
+            component: component,
+            host: host,
+          );
+          final a = await runtime.invokeExport('new-a', [7]);
+          final b = await runtime.invokeExport('new-b', [11]);
+          await runtime.invokeExport('drop-b', [b]);
+          expect(await runtime.invokeExport('count-a', []), 0);
+          expect(await runtime.invokeExport('count-b', []), 11);
+          await runtime.invokeExport('drop-a', [a]);
+          expect(await runtime.invokeExport('count-a', []), 7);
+          expect(await runtime.invokeExport('count-b', []), 11);
+        });
+        expect(host.table.activeCount, 0);
+      },
+    );
+
+    test(
+      'a trapping destructor releases its handle before propagating',
+      () async {
+        final component = await _encodeComponent(
+          _resourceDestructorSource(trap: true),
+        );
+        final host = WASIComponentHost();
+        await host.table.runScoped(() async {
+          final runtime = WASIComponentNativeRuntime.component(
+            component: component,
+            host: host,
+          );
+          final handle = await runtime.invokeExport('new', [7]);
+          await expectLater(
+            runtime.invokeExport('drop', [handle]),
+            throwsA(anything),
+          );
+          expect(await runtime.invokeExport('count', []), 7);
+          expect(host.table.activeCount, 0);
+          await expectLater(
+            runtime.invokeExport('drop', [handle]),
+            throwsA(anything),
+          );
+          expect(await runtime.invokeExport('count', []), 7);
+        });
+        expect(host.table.activeCount, 0);
+      },
+    );
+  });
+
   for (final kind in ['stream', 'future']) {
     test(
       'fresh child resource identities reject foreign $kind endpoints',
@@ -1056,6 +1305,108 @@ Future<WasmComponent> _encodeComponent(String source) async {
   expect(result.exitCode, 0, reason: '${result.stdout}${result.stderr}');
   return WasmComponent.decode(await output.readAsBytes());
 }
+
+String _resourceDestructorSource({bool trap = false}) =>
+    '(component ${_resourceDestructorSourceBody(trap: trap)})';
+
+WasmComponent _asyncResourceDestructorComponent() => _component([
+  _section(1, [
+    0,
+    97,
+    115,
+    109,
+    1,
+    0,
+    0,
+    0,
+    ..._section(1, [1, 0x60, 1, 0x7f, 0]),
+    ..._section(3, [1, 0]),
+    ..._section(7, [1, ..._name('dtor'), 0, 0]),
+    ..._section(10, [1, 2, 0, 0x0b]),
+  ]),
+  _section(2, [1, 0, 0, 0]),
+  _section(6, [1, 0, 0, 1, 0, ..._name('dtor')]),
+  _section(7, [1, 0x3e, 0x7f, 0, 0]),
+]);
+
+String _resourceMayLeaveSource(
+  String trigger,
+  String operation, {
+  bool nested = false,
+}) =>
+    '''
+(component
+  ${nested ? '''
+  (component \$child ${_resourceDestructorSourceBody()})
+  (instance \$child (instantiate \$child))
+  (func (export "count") (alias export \$child "count"))
+  (core func \$new (canon lower (func \$child "new")))
+  (core func \$drop (canon lower (func \$child "drop")))
+  ''' : '''
+  ${_resourceDestructorSourceBody()}
+  (core func \$rep (canon resource.rep \$r))
+  '''}
+  (core module \$driver
+    (import "h" "new" (func \$new (param i32) (result i32)))
+    (import "h" "op" (func \$op (param i32) ${operation == 'drop' ? '' : '(result i32)'}))
+    (global \$h (mut i32) (i32.const 0))
+    ${trigger == 'post-return' ? '''
+    (func (export "run") (result i32) i32.const 7 call \$new global.set \$h i32.const 0)
+    (func (export "post") (param i32) global.get \$h call \$op ${operation == 'drop' ? '' : 'drop'})
+    ''' : '''
+    (memory (export "memory") 1)
+    (func (export "seed") (param i32) local.get 0 call \$new global.set \$h)
+    (func (export "accept") (param i32 i32))
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+      global.get \$h call \$op ${operation == 'drop' ? '' : 'drop'} i32.const 64)
+    '''})
+  (core instance \$h (export "new" (func \$new)) (export "op" (func \$$operation)))
+  (core instance \$driver (instantiate \$driver (with "h" (instance \$h))))
+  ${trigger == 'post-return' ? '''
+  (func (export "run") (result u32) (canon lift (core func \$driver "run") (post-return (core func \$driver "post"))))
+  ''' : '''
+  (func (export "seed") (param "rep" u32) (canon lift (core func \$driver "seed")))
+  (func (export "accept") (param "text" string) (canon lift (core func \$driver "accept")
+    (memory (core memory \$driver "memory")) (realloc (core func \$driver "realloc"))))
+  '''})
+''';
+
+String _resourceDestructorSourceBody({
+  bool trap = false,
+  bool reenter = false,
+  bool external = false,
+}) =>
+    '''
+  ${external ? '(import "blocked" (func \$blocked (result u32)))' : ''}
+  (core module \$state
+    (global \$count (mut i32) (i32.const 0))
+    (func (export "dtor") (param i32)
+      global.get \$count local.get 0 i32.add global.set \$count
+      ${trap ? 'unreachable' : ''})
+    (func (export "count") (result i32) global.get \$count))
+  (core instance \$state (instantiate \$state))
+  (alias core export \$state "dtor" (core func \$dtor))
+  (alias core export \$state "count" (core func \$count))
+  (func \$padding (result u32) (canon lift (core func \$count)))
+  ${reenter ? '''
+  (core func \$read (canon lower (func ${external ? '\$blocked' : '\$padding'})))
+  (core module \$recursive
+    (import "h" "dtor" (func \$dtor (param i32)))
+    (import "h" "read" (func \$read (result i32)))
+    (func (export "dtor") (param i32) local.get 0 call \$dtor call \$read drop))
+  (core instance \$recursive-imports (export "dtor" (func \$dtor)) (export "read" (func \$read)))
+  (core instance \$recursive (instantiate \$recursive (with "h" (instance \$recursive-imports))))
+  (alias core export \$recursive "dtor" (core func \$recursive-dtor))
+  ''' : ''}
+  (type \$r (resource (rep i32) (dtor ${reenter ? '\$recursive-dtor' : '\$dtor'})))
+  (core func \$new (canon resource.new \$r))
+  (core func \$drop (canon resource.drop \$r))
+  (func (export "new") (param "rep" u32) (result u32)
+    (canon lift (core func \$new)))
+  (func (export "drop") (param "handle" u32)
+    (canon lift (core func \$drop)))
+  (func (export "count") (result u32) (canon lift (core func \$count)))
+''';
 
 WasmComponent _callbackComponent() => _component([
   _section(7, [1, 0x40, 0, 0, 0x79]),

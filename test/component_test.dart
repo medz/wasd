@@ -6,6 +6,205 @@ import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/features.dart';
 
 void main() {
+  group('resource destructor validation', () {
+    test('uses core function indexes without component functions', () {
+      expect(
+        WasmComponent.decode(_resourceDestructorCoreFunctionBytes()).validate(),
+        isEmpty,
+      );
+    });
+
+    for (final params in [
+      <int>[],
+      [0x7e],
+      [0x7f, 0x7f],
+    ]) {
+      test('rejects core destructor parameter codes $params', () {
+        final component = WasmComponent.decode(
+          _resourceDestructorCoreFunctionBytes(params: params, padding: true),
+        );
+        expect(
+          component.validate().map((error) => error.message),
+          contains(contains('destructor must have core type [i32] -> []')),
+        );
+      });
+    }
+    test('rejects a destructor returning a value', () {
+      final component = WasmComponent.decode(
+        _resourceDestructorCoreFunctionBytes(results: [0x7f], padding: true),
+      );
+      expect(
+        component.validate().map((error) => error.message),
+        contains(contains('destructor must have core type [i32] -> []')),
+      );
+    });
+    test('resolves exported function indexes after Core imports', () {
+      expect(
+        WasmComponent.decode(
+          _resourceDestructorCoreFunctionBytes(importedFunctionPrefix: true),
+        ).validate(),
+        isEmpty,
+      );
+      final wrong = WasmComponent.decode(
+        _resourceDestructorCoreFunctionBytes(
+          importedFunctionPrefix: true,
+          params: [0x7e],
+          padding: true,
+        ),
+      );
+      expect(
+        wrong.validate().map((error) => error.message),
+        contains(contains('destructor must have core type [i32] -> []')),
+      );
+    });
+
+    for (final imported in [false, true]) {
+      test(
+        'propagates inline instance destructor signatures (imported: $imported)',
+        () {
+          expect(
+            WasmComponent.decode(
+              _resourceDestructorCoreFunctionBytes(
+                imported: imported,
+                inlineAlias: true,
+              ),
+            ).validate(),
+            isEmpty,
+          );
+          final wrong = WasmComponent.decode(
+            _resourceDestructorCoreFunctionBytes(
+              params: [0x7e],
+              padding: true,
+              imported: imported,
+              inlineAlias: true,
+            ),
+          );
+          expect(
+            wrong.validate().map((error) => error.message),
+            contains(contains('destructor must have core type [i32] -> []')),
+          );
+        },
+      );
+    }
+
+    for (final depth in [0, 1]) {
+      test('resolves imported module destructor type alias depth $depth', () {
+        expect(
+          WasmComponent.decode(
+            _resourceDestructorCoreFunctionBytes(
+              imported: true,
+              typeAliasDepth: depth,
+            ),
+          ).validate(),
+          isEmpty,
+        );
+        final wrong = WasmComponent.decode(
+          _resourceDestructorCoreFunctionBytes(
+            params: [0x7e],
+            imported: true,
+            typeAliasDepth: depth,
+            padding: true,
+          ),
+        );
+        expect(
+          wrong.validate().map((error) => error.message),
+          contains(contains('destructor must have core type [i32] -> []')),
+        );
+      });
+    }
+    test('rejects a module type outer alias to a future core type', () {
+      final component = WasmComponent.decode(
+        _resourceDestructorCoreFunctionBytes(
+          imported: true,
+          typeAliasDepth: 1,
+          forwardTypeAlias: true,
+        ),
+      );
+      expect(
+        component.validate().map((error) => error.message),
+        contains(contains('Unknown Wasm component core type index')),
+      );
+    });
+
+    for (final (kind, name) in [(0x41, 'component'), (0x42, 'instance')]) {
+      test('resolves module outer core aliases inside a $name type', () {
+        expect(
+          WasmComponent.decode(_moduleOuterAliasInTypeBytes(kind)).validate(),
+          isEmpty,
+        );
+      });
+      test('rejects module forward core aliases inside a $name type', () {
+        expect(
+          WasmComponent.decode(
+            _moduleOuterAliasInTypeBytes(kind, forward: true),
+          ).validate().map((error) => error.message),
+          contains(contains('Unknown Wasm component core type index')),
+        );
+      });
+      test('resolves recursive core type indexes inside a $name type', () {
+        expect(
+          WasmComponent.decode(
+            _moduleOuterAliasInTypeBytes(kind, recursive: true),
+          ).validate(),
+          isEmpty,
+        );
+      });
+      test('checks recursive core type kinds inside a $name type', () {
+        expect(
+          WasmComponent.decode(
+            _moduleOuterAliasInTypeBytes(
+              kind,
+              recursive: true,
+              wrongModuleType: true,
+            ),
+          ).validate().map((error) => error.message),
+          contains(contains('core module type index')),
+        );
+      });
+    }
+
+    for (final (parameter, result, valid) in [
+      (0x79, null, true),
+      (0x77, null, false),
+      (0x79, 0x79, false),
+    ]) {
+      test('validates a canonical lower destructor ($parameter, $result)', () {
+        final component = WasmComponent.decode(
+          _resourceDestructorLowerBytes(parameter, result),
+        );
+        if (valid) {
+          expect(component.validate(), isEmpty);
+        } else {
+          expect(
+            component.validate().map((error) => error.message),
+            contains(contains('destructor must have core type [i32] -> []')),
+          );
+        }
+      });
+    }
+
+    test('validates canonical builtin destructor signatures', () {
+      for (final (opcode, valid) in [
+        (3, true),
+        (2, false),
+        (4, false),
+        (0x24, false),
+      ]) {
+        final component = WasmComponent.decode(
+          _resourceDestructorBuiltinBytes(opcode),
+        );
+        if (valid) {
+          expect(component.validate(), isEmpty);
+        } else {
+          expect(
+            component.validate().map((error) => error.message),
+            contains(contains('destructor must have core type [i32] -> []')),
+          );
+        }
+      }
+    });
+  });
+
   group('component name attributes', () {
     const boundaries = [
       'import',
@@ -1901,8 +2100,8 @@ void main() {
       expect(
         WasmComponent.decode(
           _resourceDestructorFunctionComponentBytes(),
-        ).validate(),
-        isEmpty,
+        ).validate().map((error) => error.message),
+        contains(contains('Unknown Wasm component core function index')),
       );
       final externrefRepresentation = WasmComponent.decode(
         _resourceExternrefRepresentationTypeComponentBytes(),
@@ -1964,16 +2163,16 @@ void main() {
       expect(invalidDestructor, hasLength(1));
       expect(
         invalidDestructor.single.message,
-        contains('Unknown Wasm component function index'),
+        contains('Unknown Wasm component core function index'),
       );
 
       final invalidCallback = WasmComponent.decode(
         _asyncResourceCallbackOutOfRangeFunctionComponentBytes(),
       ).validate();
-      expect(invalidCallback, hasLength(1));
+      expect(invalidCallback, hasLength(2));
       expect(
-        invalidCallback.single.message,
-        contains('Unknown Wasm component function index'),
+        invalidCallback.map((error) => error.message),
+        everyElement(contains('Unknown Wasm component core function index')),
       );
     });
 
@@ -2282,21 +2481,20 @@ void main() {
         WasmComponent.decode(_canonicalResourceTypeComponentBytes()).validate(),
         isEmpty,
       );
-      expect(
-        WasmComponent.decode(
-          _importedResourceCanonicalProgramComponentBytes(),
-        ).validate(),
-        isEmpty,
-      );
+      for (final bytes in [
+        _importedResourceCanonicalProgramComponentBytes(),
+        _instantiatedComponentResourceAliasCanonicalProgramComponentBytes(),
+      ]) {
+        final errors = WasmComponent.decode(bytes).validate();
+        expect(errors, hasLength(2));
+        expect(
+          errors.map((error) => error.message),
+          everyElement(contains('requires a locally-defined resource type')),
+        );
+      }
       expect(
         WasmComponent.decode(
           _aliasedInstanceResourceCanonicalProgramComponentBytes(),
-        ).validate(),
-        isEmpty,
-      );
-      expect(
-        WasmComponent.decode(
-          _instantiatedComponentResourceAliasCanonicalProgramComponentBytes(),
         ).validate(),
         isEmpty,
       );
@@ -9767,6 +9965,197 @@ Uint8List _resourceDestructorFunctionComponentBytes() =>
       0x01,
       0x00,
     ]);
+
+// Core module: one function with an unreachable body, valid for every tested
+// signature. The component aliases it, optionally through an inline instance,
+// and declares resource (rep i32) (dtor <core function index>).
+Uint8List _resourceDestructorCoreFunctionBytes({
+  List<int> params = const [0x7f],
+  List<int> results = const [],
+  bool imported = false,
+  bool inlineAlias = false,
+  bool padding = false,
+  int? typeAliasDepth,
+  bool forwardTypeAlias = false,
+  bool importedFunctionPrefix = false,
+}) {
+  final signature = [
+    0x60,
+    params.length,
+    ...params,
+    results.length,
+    ...results,
+  ];
+  final name = _componentNameBytes('dtor');
+  final module = [
+    0,
+    97,
+    115,
+    109,
+    1,
+    0,
+    0,
+    0,
+    ..._componentSection(1, [
+      importedFunctionPrefix ? 2 : 1,
+      ...signature,
+      if (importedFunctionPrefix) ...[0x60, 1, 0x7e, 0],
+    ]),
+    if (importedFunctionPrefix)
+      ..._componentSection(2, [
+        1,
+        ..._componentNameBytes('h'),
+        ..._componentNameBytes('unused'),
+        0,
+        1,
+      ]),
+    ..._componentSection(3, [1, 0]),
+    ..._componentSection(7, [1, ...name, 0, importedFunctionPrefix ? 1 : 0]),
+    ..._componentSection(10, [1, 3, 0, 0, 0x0b]),
+  ];
+  return _componentBytes([
+    if (padding) ...[
+      _componentFunctionTypeSection(),
+      _componentSingleFunctionImportSection('padding'),
+    ],
+    if (importedFunctionPrefix) ...[
+      _componentSection(1, [
+        0,
+        97,
+        115,
+        109,
+        1,
+        0,
+        0,
+        0,
+        ..._componentSection(1, [1, 0x60, 1, 0x7e, 0]),
+        ..._componentSection(3, [1, 0]),
+        ..._componentSection(7, [1, ..._componentNameBytes('unused'), 0, 0]),
+        ..._componentSection(10, [1, 2, 0, 0x0b]),
+      ]),
+      _componentSection(2, [1, 0, 0, 0]),
+    ],
+    if (imported) ...[
+      if (typeAliasDepth == 1 && !forwardTypeAlias)
+        _componentSection(3, [1, ...signature]),
+      _componentSection(3, [
+        1,
+        0x50,
+        typeAliasDepth == 0 ? 3 : 2,
+        if (typeAliasDepth != 1) ...[1, ...signature],
+        if (typeAliasDepth != null) ...[
+          2,
+          0x10,
+          1,
+          typeAliasDepth,
+          forwardTypeAlias ? 1 : 0,
+        ],
+        3,
+        ...name,
+        0,
+        typeAliasDepth == 0 ? 1 : 0,
+      ]),
+      if (forwardTypeAlias) _componentSection(3, [1, ...signature]),
+      _componentSection(10, [
+        1,
+        0,
+        ..._componentNameBytes('m'),
+        0,
+        0x11,
+        typeAliasDepth == 1 && !forwardTypeAlias ? 1 : 0,
+      ]),
+    ] else
+      _componentSection(1, module),
+    _componentSection(2, [
+      1,
+      0,
+      importedFunctionPrefix ? 1 : 0,
+      importedFunctionPrefix ? 1 : 0,
+      if (importedFunctionPrefix) ...[..._componentNameBytes('h'), 0x12, 0],
+    ]),
+    _componentSection(6, [1, 0, 0, 1, importedFunctionPrefix ? 1 : 0, ...name]),
+    if (inlineAlias) ...[
+      _componentSection(2, [1, 1, 1, ...name, 0, 0]),
+      _componentSection(6, [1, 0, 0, 1, 1, ...name]),
+    ],
+    _componentSection(7, [1, 0x3f, 0x7f, 1, inlineAlias ? 1 : 0]),
+  ]);
+}
+
+Uint8List _moduleOuterAliasInTypeBytes(
+  int kind, {
+  bool forward = false,
+  bool recursive = false,
+  bool wrongModuleType = false,
+}) {
+  final function = [
+    0x00,
+    if (recursive) ...[0x4e, 0x02, 0x60, 0x00, 0x00],
+    0x60,
+    0x01,
+    0x7f,
+    0x00,
+  ];
+  final module = [
+    0x00,
+    0x50,
+    0x02,
+    0x02,
+    0x10,
+    0x01,
+    0x01,
+    forward || recursive ? 1 : 0,
+    0x03,
+    ..._componentNameBytes('dtor'),
+    0x00,
+    0x00,
+  ];
+  return _componentBytes([
+    _componentSection(0x07, [
+      0x01,
+      kind,
+      recursive ? 0x03 : 0x02,
+      if (!forward) ...function,
+      ...module,
+      if (forward) ...function,
+      if (recursive) ...[
+        0x04,
+        ..._componentExternNameBytes('m', null),
+        0x00,
+        0x11,
+        wrongModuleType ? 0x01 : 0x02,
+      ],
+    ]),
+  ]);
+}
+
+Uint8List _resourceDestructorLowerBytes(int parameter, int? result) =>
+    _componentBytes([
+      _componentSection(7, [
+        1,
+        0x40,
+        1,
+        ..._componentNameBytes('rep'),
+        parameter,
+        if (result == null) ...[1, 0] else ...[0, result],
+      ]),
+      _componentSingleFunctionImportSection('dtor'),
+      _componentSection(8, [1, 1, 0, 0, 0]),
+      _componentSection(7, [1, 0x3f, 0x7f, 1, 0]),
+    ]);
+
+Uint8List _resourceDestructorBuiltinBytes(int opcode) => _componentBytes([
+  _componentSection(7, [1, 0x3f, 0x7f, 0]),
+  _componentFunctionTypeSection(),
+  _componentSection(10, [
+    1,
+    ..._componentExternNameBytes('padding', null),
+    1,
+    1,
+  ]),
+  _componentSection(8, [1, opcode, if (opcode >= 2 && opcode <= 4) 0]),
+  _componentSection(7, [1, 0x3f, 0x7f, 1, 0]),
+]);
 
 Uint8List _resourceExternrefRepresentationTypeComponentBytes() =>
     _componentWithSingleTypeDefinitionBytes(const <int>[0x3f, 0x6f, 0x00]);

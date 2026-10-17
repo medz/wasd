@@ -607,13 +607,32 @@ final class WasmComponentCoreType {
     this.types = const <WasmComponentCoreType>[],
     this.declarations = const <WasmComponentCoreTypeDeclaration>[],
     this.superTypeIndices = const <int>[],
+    this.parameterTypeCodes = const <int>[],
+    this.resultTypeCodes = const <int>[],
   });
 
   final WasmComponentCoreTypeKind kind;
   final List<WasmComponentCoreType> types;
   final List<WasmComponentCoreTypeDeclaration> declarations;
   final List<int> superTypeIndices;
+  final List<int> parameterTypeCodes;
+  final List<int> resultTypeCodes;
 }
+
+typedef _WasmComponentCoreFunctionType = ({
+  List<int> params,
+  List<int> results,
+});
+
+typedef _WasmComponentCoreExportTypes = ({
+  Map<String, _WasmComponentCoreFunctionType> functions,
+  Map<String, int> memories,
+});
+
+T? _entryAt<T>(List<T?> entries, int? index) =>
+    index == null || index < 0 || index >= entries.length
+    ? null
+    : entries[index];
 
 enum WasmComponentCoreTypeDeclarationKind { import, type, alias, export }
 
@@ -1461,14 +1480,12 @@ final class WasmComponent {
       outerAliasScopes: outerAliasScopes,
       errors: errors,
     );
-    for (var i = 0; i < coreTypes.length; i++) {
-      context.validateCoreTypeDefinition(coreTypes[i], 'coreType[$i]');
-    }
     context.validateDefinitionEvents(
       _definitionEvents,
       imports: imports,
       exports: exports,
       coreInstances: coreInstances,
+      coreModules: coreModules,
       instances: instances,
       aliases: aliases,
       canonicalDefinitions: canonicalDefinitions,
@@ -2438,20 +2455,33 @@ final class _WasmComponentValidationContext {
     }
   }
 
-  void validateCoreTypeDefinition(WasmComponentCoreType type, String path) {
+  void validateCoreTypeDefinition(
+    WasmComponentCoreType type,
+    String path, {
+    List<WasmComponentCoreType> outerCoreTypes = const [],
+  }) {
     if (type.kind == WasmComponentCoreTypeKind.module) {
-      validateCoreModuleTypeDeclarations(type.declarations, path);
+      validateCoreModuleTypeDeclarations(
+        type.declarations,
+        path,
+        outerCoreTypes,
+      );
       return;
     }
 
     for (var i = 0; i < type.types.length; i++) {
-      validateCoreTypeDefinition(type.types[i], '$path.types[$i]');
+      validateCoreTypeDefinition(
+        type.types[i],
+        '$path.types[$i]',
+        outerCoreTypes: outerCoreTypes,
+      );
     }
   }
 
   void validateCoreModuleTypeDeclarations(
     List<WasmComponentCoreTypeDeclaration> declarations,
     String path,
+    List<WasmComponentCoreType> outerCoreTypes,
   ) {
     final localCoreTypeKinds = <WasmComponentCoreTypeKind>[];
     Map<String, Set<String>>? importNames;
@@ -2503,6 +2533,7 @@ final class _WasmComponentValidationContext {
             declaration.alias,
             '$path.declarations[$i]',
             localCoreTypeKinds,
+            outerCoreTypes,
           );
           break;
       }
@@ -2549,6 +2580,7 @@ final class _WasmComponentValidationContext {
     WasmComponentAlias? alias,
     String path,
     List<WasmComponentCoreTypeKind> localCoreTypeKinds,
+    List<WasmComponentCoreType> outerCoreTypes,
   ) {
     if (alias == null) {
       return;
@@ -2556,12 +2588,26 @@ final class _WasmComponentValidationContext {
 
     if (alias.sort.kind != WasmComponentSortKind.core ||
         alias.sort.coreKind != WasmComponentCoreSortKind.type ||
-        alias.target.kind != WasmComponentAliasTargetKind.outer ||
-        alias.target.componentDepth != 0) {
+        alias.target.kind != WasmComponentAliasTargetKind.outer) {
       return;
     }
 
     final typeIndex = alias.target.index;
+    if (alias.target.componentDepth == 1) {
+      final type = _entryAt(outerCoreTypes, typeIndex);
+      if (type != null) {
+        localCoreTypeKinds.add(type.kind);
+      } else {
+        errors.add(
+          WasmComponentValidationError(
+            path: '$path.target',
+            message: 'Unknown Wasm component core type index: $typeIndex.',
+          ),
+        );
+      }
+      return;
+    }
+    if (alias.target.componentDepth != 0) return;
     if (typeIndex == null ||
         typeIndex < 0 ||
         typeIndex >= localCoreTypeKinds.length) {
@@ -2894,6 +2940,7 @@ final class _WasmComponentValidationContext {
         const <_WasmComponentTypeAliasScope>[],
   }) {
     final localTypeDefinitions = <WasmComponentTypeDefinition>[];
+    final localCoreTypes = <WasmComponentCoreType>[];
     final localCoreTypeKinds = <WasmComponentCoreTypeKind>[];
     _WasmComponentExternNameSet? importNames;
     _WasmComponentExternNameSet? exportNames;
@@ -2970,8 +3017,18 @@ final class _WasmComponentValidationContext {
           if (coreType == null) {
             break;
           }
-          validateCoreTypeDefinition(coreType, '$path.declarations[$i]');
-          localCoreTypeKinds.add(coreType.kind);
+          validateCoreTypeDefinition(
+            coreType,
+            '$path.declarations[$i]',
+            outerCoreTypes: localCoreTypes,
+          );
+          for (final entry
+              in coreType.kind == WasmComponentCoreTypeKind.recursive
+                  ? coreType.types
+                  : [coreType]) {
+            localCoreTypes.add(entry);
+            localCoreTypeKinds.add(entry.kind);
+          }
         case WasmComponentTypeDeclarationKind.alias:
           final alias = declaration.alias;
           if (alias == null) {
@@ -4375,6 +4432,24 @@ final class _WasmComponentValidationContext {
         '$path.type',
         scopedTypeDefinitions: visibleTypeDefinitions,
       );
+      if (definition.kind == WasmComponentCanonicalKind.resourceNew ||
+          definition.kind == WasmComponentCanonicalKind.resourceRep) {
+        final resourceDefinition = _entryAt(
+          visibleTypeDefinitions ?? typeDefinitions,
+          definition.typeIndex,
+        );
+        if (resourceDefinition?.resource != null &&
+            (resourceDefinition!.resource!.isAbstract ||
+                !typeDefinitions.contains(resourceDefinition))) {
+          errors.add(
+            WasmComponentValidationError(
+              path: '$path.type',
+              message:
+                  'Wasm component canonical ${definition.kind.name} requires a locally-defined resource type.',
+            ),
+          );
+        }
+      }
     }
 
     if (definition.kind == WasmComponentCanonicalKind.contextGet ||
@@ -4875,6 +4950,7 @@ final class _WasmComponentValidationContext {
     required List<WasmComponentImport> imports,
     required List<WasmComponentExport> exports,
     required List<WasmComponentCoreInstance> coreInstances,
+    required List<WasmModule> coreModules,
     required List<WasmComponentInstance> instances,
     required List<WasmComponentAlias> aliases,
     required List<WasmComponentCanonicalDefinition> canonicalDefinitions,
@@ -4883,6 +4959,15 @@ final class _WasmComponentValidationContext {
     required List<WasmComponentValueDefinition> valueDefinitions,
   }) {
     final functionTypes = <WasmComponentFunctionType?>[];
+    final collectCoreFunctionTypes = typeDefinitions.any(
+      _componentTypeDefinitionNeedsFunctionIndexValidation,
+    );
+    final coreFunctionTypes = <_WasmComponentCoreFunctionType?>[];
+    final coreMemoryAddressTypeCodes = <int?>[];
+    final visibleCoreTypes = <WasmComponentCoreType>[];
+    final coreModuleTypeExports = <_WasmComponentCoreExportTypes?>[];
+    final coreModuleExportsByIndex = <_WasmComponentCoreExportTypes?>[];
+    final coreInstanceExportsByIndex = <_WasmComponentCoreExportTypes?>[];
     final functionTypeContexts = <WasmComponentFunctionTypeContext?>[];
     final valueEntries = <_WasmComponentValueIndexEntry>[];
     final instanceExportMaps = <_WasmComponentInstanceExportMap?>[];
@@ -5003,6 +5088,12 @@ final class _WasmComponentValidationContext {
               ),
             );
           } else if (descriptor.kind == WasmComponentExternKind.coreModule) {
+            final typeIndex = descriptor.typeIndex;
+            if (collectCoreFunctionTypes) {
+              coreModuleExportsByIndex.add(
+                _entryAt(coreModuleTypeExports, typeIndex),
+              );
+            }
             coreCounts.add(WasmComponentCoreSortKind.module);
           } else if (descriptor.kind == WasmComponentExternKind.component) {
             componentIndexEntries.add(null);
@@ -5065,6 +5156,27 @@ final class _WasmComponentValidationContext {
             instanceCount++;
           } else if (export.sort.kind == WasmComponentSortKind.core &&
               export.sort.coreKind != null) {
+            if (collectCoreFunctionTypes &&
+                export.sort.coreKind == WasmComponentCoreSortKind.module) {
+              coreModuleExportsByIndex.add(
+                _entryAt(coreModuleExportsByIndex, export.sort.index),
+              );
+            } else if (collectCoreFunctionTypes &&
+                export.sort.coreKind == WasmComponentCoreSortKind.function) {
+              coreFunctionTypes.add(
+                _entryAt(coreFunctionTypes, export.sort.index),
+              );
+            } else if (collectCoreFunctionTypes &&
+                export.sort.coreKind == WasmComponentCoreSortKind.instance) {
+              coreInstanceExportsByIndex.add(
+                _entryAt(coreInstanceExportsByIndex, export.sort.index),
+              );
+            } else if (collectCoreFunctionTypes &&
+                export.sort.coreKind == WasmComponentCoreSortKind.memory) {
+              coreMemoryAddressTypeCodes.add(
+                _entryAt(coreMemoryAddressTypeCodes, export.sort.index),
+              );
+            }
             coreCounts.add(export.sort.coreKind!);
           } else if (export.sort.kind == WasmComponentSortKind.componentType) {
             final exportedTypeDefinition = componentTypeDefinitionAt(
@@ -5081,15 +5193,66 @@ final class _WasmComponentValidationContext {
             }
           }
         case _WasmComponentDefinitionEventKind.coreType:
-          coreCounts.add(WasmComponentCoreSortKind.type);
+          final type = coreTypes[event.index];
+          validateCoreTypeDefinition(
+            type,
+            'coreType[${event.index}]',
+            outerCoreTypes: visibleCoreTypes,
+          );
+          for (final entry
+              in type.kind == WasmComponentCoreTypeKind.recursive
+                  ? type.types
+                  : [type]) {
+            if (collectCoreFunctionTypes) {
+              coreModuleTypeExports.add(
+                coreModuleTypeFunctionExports(entry, visibleCoreTypes),
+              );
+            }
+            visibleCoreTypes.add(entry);
+            coreCounts.add(WasmComponentCoreSortKind.type);
+          }
         case _WasmComponentDefinitionEventKind.coreModule:
+          if (collectCoreFunctionTypes) {
+            coreModuleExportsByIndex.add(
+              coreModuleExports(coreModules[event.index]),
+            );
+          }
           coreCounts.add(WasmComponentCoreSortKind.module);
         case _WasmComponentDefinitionEventKind.coreInstance:
+          final coreInstance = coreInstances[event.index];
           validateCoreInstanceDefinition(
-            coreInstances[event.index],
+            coreInstance,
             'coreInstance[${event.index}]',
             coreCounts: coreCounts,
           );
+          if (collectCoreFunctionTypes) {
+            coreInstanceExportsByIndex.add(
+              coreInstance.kind == WasmComponentCoreInstanceKind.instantiate
+                  ? _entryAt(coreModuleExportsByIndex, coreInstance.moduleIndex)
+                  : (
+                      functions: {
+                        for (final export in coreInstance.exports)
+                          if (export.sort.kind ==
+                                  WasmComponentCoreSortKind.function &&
+                              _entryAt(coreFunctionTypes, export.sort.index) !=
+                                  null)
+                            export.name: coreFunctionTypes[export.sort.index]!,
+                      },
+                      memories: {
+                        for (final export in coreInstance.exports)
+                          if (export.sort.kind ==
+                                  WasmComponentCoreSortKind.memory &&
+                              _entryAt(
+                                    coreMemoryAddressTypeCodes,
+                                    export.sort.index,
+                                  ) !=
+                                  null)
+                            export.name:
+                                coreMemoryAddressTypeCodes[export.sort.index]!,
+                      },
+                    ),
+            );
+          }
           coreCounts.add(WasmComponentCoreSortKind.instance);
         case _WasmComponentDefinitionEventKind.component:
           final childTypeScope = WasmComponentTypeScope._(
@@ -5155,7 +5318,8 @@ final class _WasmComponentValidationContext {
           validateTypeDefinitionFunctionIndexes(
             typeDefinitions[event.index],
             'type[${event.index}]',
-            functionTypes: functionTypes,
+            coreCounts: coreCounts,
+            coreFunctionTypes: coreFunctionTypes,
           );
         case _WasmComponentDefinitionEventKind.alias:
           final alias = aliases[event.index];
@@ -5179,6 +5343,29 @@ final class _WasmComponentValidationContext {
           final sort = alias.sort;
           if (sort.kind == WasmComponentSortKind.core &&
               sort.coreKind != null) {
+            if (collectCoreFunctionTypes &&
+                sort.coreKind == WasmComponentCoreSortKind.function) {
+              coreFunctionTypes.add(
+                _entryAt(
+                  coreInstanceExportsByIndex,
+                  alias.target.coreInstanceIndex,
+                )?.functions[alias.target.name],
+              );
+            } else if (collectCoreFunctionTypes &&
+                sort.coreKind == WasmComponentCoreSortKind.module) {
+              coreModuleExportsByIndex.add(null);
+            } else if (collectCoreFunctionTypes &&
+                sort.coreKind == WasmComponentCoreSortKind.instance) {
+              coreInstanceExportsByIndex.add(null);
+            } else if (collectCoreFunctionTypes &&
+                sort.coreKind == WasmComponentCoreSortKind.memory) {
+              coreMemoryAddressTypeCodes.add(
+                _entryAt(
+                  coreInstanceExportsByIndex,
+                  alias.target.coreInstanceIndex,
+                )?.memories[alias.target.name],
+              );
+            }
             coreCounts.add(sort.coreKind!);
           }
           final knownAliasEntry = knownComponentInstanceExportAliasEntry(
@@ -5259,6 +5446,16 @@ final class _WasmComponentValidationContext {
             visibleTypeDefinitions,
           );
           if (canonicalDefinitionIntroducesCoreFunction(definition.kind)) {
+            if (collectCoreFunctionTypes) {
+              coreFunctionTypes.add(
+                canonicalCoreFunctionType(
+                  definition,
+                  functionTypeContexts,
+                  visibleTypeDefinitions,
+                  coreMemoryAddressTypeCodes,
+                ),
+              );
+            }
             coreCounts.add(WasmComponentCoreSortKind.function);
           }
           if (definition.kind == WasmComponentCanonicalKind.lift) {
@@ -6229,7 +6426,8 @@ final class _WasmComponentValidationContext {
   void validateTypeDefinitionFunctionIndexes(
     WasmComponentTypeDefinition type,
     String path, {
-    required List<WasmComponentFunctionType?> functionTypes,
+    required _WasmComponentCoreIndexCounts coreCounts,
+    required List<_WasmComponentCoreFunctionType?> coreFunctionTypes,
   }) {
     final resource = type.resource;
     if (type.kind != WasmComponentTypeKind.resource || resource == null) {
@@ -6238,20 +6436,396 @@ final class _WasmComponentValidationContext {
 
     final destructorFunctionIndex = resource.destructorFunctionIndex;
     if (destructorFunctionIndex != null) {
-      validateComponentFunctionIndex(
+      validateCoreSortIndex(
         destructorFunctionIndex,
         '$path.resource.destructor',
-        functionTypes.length,
+        WasmComponentCoreSortKind.function,
+        coreCounts,
       );
+      final signature = _entryAt(coreFunctionTypes, destructorFunctionIndex);
+      if (signature == null &&
+          destructorFunctionIndex >= 0 &&
+          destructorFunctionIndex < coreCounts.functions) {
+        errors.add(
+          WasmComponentValidationError(
+            path: '$path.resource.destructor',
+            message:
+                'Wasm component resource destructor core signature is not supported for this function source.',
+          ),
+        );
+      } else if (signature != null &&
+          (!resource.isAsync || resource.callbackFunctionIndex == null) &&
+          (signature.params.length != 1 ||
+              signature.params.single != 0x7f ||
+              signature.results.isNotEmpty)) {
+        errors.add(
+          WasmComponentValidationError(
+            path: '$path.resource.destructor',
+            message:
+                'Wasm component resource destructor must have core type [i32] -> [].',
+          ),
+        );
+      }
     }
 
     final callbackFunctionIndex = resource.callbackFunctionIndex;
     if (callbackFunctionIndex != null) {
-      validateComponentFunctionIndex(
+      validateCoreSortIndex(
         callbackFunctionIndex,
         '$path.resource.callback',
-        functionTypes.length,
+        WasmComponentCoreSortKind.function,
+        coreCounts,
       );
+    }
+  }
+
+  _WasmComponentCoreExportTypes coreModuleExports(WasmModule module) {
+    final functionTypeIndexes = [
+      for (final import in module.imports)
+        if (import.kind == WasmImportKind.function ||
+            import.kind == WasmImportKind.exactFunction)
+          import.functionTypeIndex!,
+      ...module.functionTypeIndices,
+    ];
+    final exports = <String, _WasmComponentCoreFunctionType>{};
+    for (final export in module.exports) {
+      if (export.kind != WasmExportKind.function) continue;
+      final index = _entryAt(functionTypeIndexes, export.index);
+      final type = _entryAt(module.types, index);
+      if (type == null) continue;
+      exports[export.name] = (
+        params: [
+          for (final code in type.paramTypeSignatures)
+            int.parse(code.substring(0, 2), radix: 16),
+        ],
+        results: [
+          for (final code in type.resultTypeSignatures)
+            int.parse(code.substring(0, 2), radix: 16),
+        ],
+      );
+    }
+    final memoryTypes = [
+      for (final import in module.imports)
+        if (import.kind == WasmImportKind.memory) import.memoryType!,
+      ...module.memories,
+    ];
+    return (
+      functions: exports,
+      memories: {
+        for (final export in module.exports)
+          if (export.kind == WasmExportKind.memory &&
+              _entryAt(memoryTypes, export.index) != null)
+            export.name: memoryTypes[export.index].isMemory64 ? 0x7e : 0x7f,
+      },
+    );
+  }
+
+  _WasmComponentCoreFunctionType? coreFunctionType(
+    WasmComponentCoreType? type,
+  ) {
+    if (type == null) return null;
+    if (type.kind == WasmComponentCoreTypeKind.subtype) {
+      return coreFunctionType(_entryAt(type.types, 0));
+    }
+    return type.kind == WasmComponentCoreTypeKind.function
+        ? (params: type.parameterTypeCodes, results: type.resultTypeCodes)
+        : null;
+  }
+
+  _WasmComponentCoreExportTypes? coreModuleTypeFunctionExports(
+    WasmComponentCoreType type,
+    List<WasmComponentCoreType> outerCoreTypes,
+  ) {
+    if (type.kind != WasmComponentCoreTypeKind.module) return null;
+    final types = <WasmComponentCoreType?>[];
+    final exports = <String, _WasmComponentCoreFunctionType>{};
+    final memories = <String, int>{};
+    for (final declaration in type.declarations) {
+      switch (declaration.kind) {
+        case WasmComponentCoreTypeDeclarationKind.type:
+          final type = declaration.coreType;
+          if (type?.kind == WasmComponentCoreTypeKind.recursive) {
+            types.addAll(type!.types);
+          } else {
+            types.add(type);
+          }
+        case WasmComponentCoreTypeDeclarationKind.alias:
+          final target = declaration.alias?.target;
+          types.add(switch (target?.componentDepth) {
+            0 => _entryAt(types, target?.index),
+            1 => _entryAt(outerCoreTypes, target?.index),
+            _ => null,
+          });
+        case WasmComponentCoreTypeDeclarationKind.export:
+          final descriptor = declaration.descriptor;
+          if (descriptor?.kind == WasmComponentCoreSortKind.function) {
+            final signature = coreFunctionType(
+              _entryAt(types, descriptor?.typeIndex),
+            );
+            if (signature != null) exports[declaration.name!] = signature;
+          } else if (descriptor?.kind == WasmComponentCoreSortKind.memory) {
+            memories[declaration.name!] = descriptor?.limits?.memory64 == true
+                ? 0x7e
+                : 0x7f;
+          }
+        case WasmComponentCoreTypeDeclarationKind.import:
+          break;
+      }
+    }
+    return (functions: exports, memories: memories);
+  }
+
+  _WasmComponentCoreFunctionType? canonicalCoreFunctionType(
+    WasmComponentCanonicalDefinition definition,
+    List<WasmComponentFunctionTypeContext?> functionTypes,
+    List<WasmComponentTypeDefinition> definitions,
+    List<int?> memoryAddressTypeCodes,
+  ) {
+    int? memoryIndex = definition.memoryIndex;
+    for (final option in definition.options) {
+      if (option.kind == WasmComponentCanonicalOptionKind.memory) {
+        memoryIndex = option.index;
+      }
+    }
+    final addressTypeCode = _entryAt(memoryAddressTypeCodes, memoryIndex);
+    switch (definition.kind) {
+      case WasmComponentCanonicalKind.lower:
+        final context = _entryAt(functionTypes, definition.functionIndex);
+        if (context == null) return null;
+        if (definition.options.any(
+          (option) => option.kind == WasmComponentCanonicalOptionKind.async,
+        )) {
+          // An async lower always returns a subtask status, so cannot be a
+          // synchronous destructor. Its complete parameter ABI is unrelated.
+          return (params: const [], results: const [0x7f]);
+        }
+        final params = <int>[];
+        for (final param in context.functionType.params) {
+          final flat = flatCoreTypeCodes(
+            param.type,
+            context.typeScope,
+            definitions: context.typeDefinitions,
+          );
+          if (flat == null) return null;
+          params.addAll(flat);
+        }
+        final resultType = context.functionType.result;
+        final results = resultType == null
+            ? <int>[]
+            : flatCoreTypeCodes(
+                resultType,
+                context.typeScope,
+                definitions: context.typeDefinitions,
+              );
+        if (results == null) return null;
+        // Indirect parameters/results depend on the selected memory's address
+        // width. Do not treat an unresolved address type as an i32 destructor.
+        if ((params.length > 16 || results.length > 1) &&
+            addressTypeCode == null) {
+          return null;
+        }
+        final coreParams = params.length > 16
+            ? <int>[addressTypeCode!]
+            : params;
+        if (results.length > 1) coreParams.add(addressTypeCode!);
+        return (params: coreParams, results: results.length > 1 ? [] : results);
+      case WasmComponentCanonicalKind.resourceNew:
+        return (
+          params: [
+            _entryAt(
+                  definitions,
+                  definition.typeIndex,
+                )?.resource?.representationTypeCode ??
+                0x7f,
+          ],
+          results: [0x7f],
+        );
+      case WasmComponentCanonicalKind.resourceRep:
+        return (
+          params: [0x7f],
+          results: [
+            _entryAt(
+                  definitions,
+                  definition.typeIndex,
+                )?.resource?.representationTypeCode ??
+                0x7f,
+          ],
+        );
+      case WasmComponentCanonicalKind.resourceDrop:
+      case WasmComponentCanonicalKind.subtaskDrop:
+      case WasmComponentCanonicalKind.streamDropReadable:
+      case WasmComponentCanonicalKind.streamDropWritable:
+      case WasmComponentCanonicalKind.futureDropReadable:
+      case WasmComponentCanonicalKind.futureDropWritable:
+      case WasmComponentCanonicalKind.errorContextDrop:
+      case WasmComponentCanonicalKind.threadResumeLater:
+        return (params: [0x7f], results: []);
+      case WasmComponentCanonicalKind.backpressureInc:
+      case WasmComponentCanonicalKind.backpressureDec:
+      case WasmComponentCanonicalKind.taskCancel:
+        return (params: [], results: []);
+      case WasmComponentCanonicalKind.contextGet:
+        return (
+          params: [],
+          results: [
+            primitiveCoreTypeCode(definition.result?.valueType?.primitive),
+          ],
+        );
+      case WasmComponentCanonicalKind.contextSet:
+        return (
+          params: [
+            primitiveCoreTypeCode(definition.result?.valueType?.primitive),
+          ],
+          results: [],
+        );
+      case WasmComponentCanonicalKind.waitableSetNew:
+      case WasmComponentCanonicalKind.threadIndex:
+      case WasmComponentCanonicalKind.threadSuspend:
+      case WasmComponentCanonicalKind.threadYield:
+      case WasmComponentCanonicalKind.threadAvailableParallelism:
+        return (params: [], results: [0x7f]);
+      case WasmComponentCanonicalKind.waitableJoin:
+        return (params: [0x7f, 0x7f], results: []);
+      case WasmComponentCanonicalKind.waitableSetDrop:
+        return (params: [0x7f], results: []);
+      case WasmComponentCanonicalKind.subtaskCancel:
+      case WasmComponentCanonicalKind.streamCancelRead:
+      case WasmComponentCanonicalKind.streamCancelWrite:
+      case WasmComponentCanonicalKind.futureCancelRead:
+      case WasmComponentCanonicalKind.futureCancelWrite:
+      case WasmComponentCanonicalKind.threadSuspendThenResume:
+      case WasmComponentCanonicalKind.threadYieldThenResume:
+      case WasmComponentCanonicalKind.threadSuspendThenPromote:
+      case WasmComponentCanonicalKind.threadYieldThenPromote:
+        return (params: [0x7f], results: [0x7f]);
+      case WasmComponentCanonicalKind.streamNew:
+      case WasmComponentCanonicalKind.futureNew:
+        return (params: [], results: [0x7e]);
+      case WasmComponentCanonicalKind.taskReturn:
+        final resultType = definition.result?.valueType;
+        final params = resultType == null
+            ? <int>[]
+            : flatCoreTypeCodes(resultType, null, definitions: definitions);
+        if (params == null || (params.length > 16 && addressTypeCode == null)) {
+          return null;
+        }
+        return (
+          params: params.length > 16 ? [addressTypeCode!] : params,
+          results: [],
+        );
+      // Memory/table-dependent signatures are not guessed from an index.
+      default:
+        return null;
+    }
+  }
+
+  int primitiveCoreTypeCode(WasmComponentPrimitiveValueType? primitive) =>
+      switch (primitive) {
+        WasmComponentPrimitiveValueType.s64 ||
+        WasmComponentPrimitiveValueType.u64 => 0x7e,
+        WasmComponentPrimitiveValueType.f32 => 0x7d,
+        WasmComponentPrimitiveValueType.f64 => 0x7c,
+        _ => 0x7f,
+      };
+
+  List<int>? flatCoreTypeCodes(
+    WasmComponentValueType type,
+    WasmComponentTypeScope? scope, {
+    List<WasmComponentTypeDefinition>? definitions,
+    Set<WasmComponentTypeDefinition>? visiting,
+  }) {
+    final primitive = type.primitive;
+    if (primitive != null) {
+      return primitive == WasmComponentPrimitiveValueType.string
+          ? [0x7f, 0x7f]
+          : [primitiveCoreTypeCode(primitive)];
+    }
+    final context = scope?.definitionContextAt(type.typeIndex);
+    final definition =
+        context?.definition ??
+        _entryAt(definitions ?? typeDefinitions, type.typeIndex);
+    final defined = definition?.definedValue;
+    if (defined == null) return null;
+    final active = visiting ?? <WasmComponentTypeDefinition>{};
+    if (!active.add(definition!)) return null;
+    List<int>? flatten(WasmComponentValueType value) => flatCoreTypeCodes(
+      value,
+      context?.typeScope ?? scope,
+      definitions: definitions,
+      visiting: active,
+    );
+    List<int>? concatenate(Iterable<WasmComponentValueType> values) {
+      final codes = <int>[];
+      for (final value in values) {
+        final flat = flatten(value);
+        if (flat == null) return null;
+        codes.addAll(flat);
+        if (codes.length > 16) return codes.sublist(0, 17);
+      }
+      return codes;
+    }
+
+    try {
+      switch (defined.kind) {
+        case WasmComponentDefinedValueTypeKind.primitive:
+          return flatCoreTypeCodes(
+            WasmComponentValueType.primitive(defined.primitive!),
+            scope,
+          );
+        case WasmComponentDefinedValueTypeKind.record:
+          return concatenate(defined.fields.map((field) => field.type));
+        case WasmComponentDefinedValueTypeKind.tuple:
+          return concatenate(defined.types);
+        case WasmComponentDefinedValueTypeKind.fixedList:
+          return concatenate(
+            Iterable.generate(
+              defined.fixedLength!,
+              (_) => defined.elementType!,
+            ),
+          );
+        case WasmComponentDefinedValueTypeKind.list:
+        case WasmComponentDefinedValueTypeKind.map:
+          return [0x7f, 0x7f];
+        case WasmComponentDefinedValueTypeKind.flags:
+        case WasmComponentDefinedValueTypeKind.enumeration:
+        case WasmComponentDefinedValueTypeKind.own:
+        case WasmComponentDefinedValueTypeKind.borrow:
+        case WasmComponentDefinedValueTypeKind.stream:
+        case WasmComponentDefinedValueTypeKind.future:
+          return [0x7f];
+        case WasmComponentDefinedValueTypeKind.variant:
+        case WasmComponentDefinedValueTypeKind.option:
+        case WasmComponentDefinedValueTypeKind.result:
+          final payloads = switch (defined.kind) {
+            WasmComponentDefinedValueTypeKind.variant => defined.cases.map(
+              (item) => item.type,
+            ),
+            WasmComponentDefinedValueTypeKind.option => [defined.elementType],
+            _ => [defined.okType, defined.errorType],
+          };
+          final joined = <int>[];
+          for (final payload in payloads) {
+            if (payload == null) continue;
+            final flat = flatten(payload);
+            if (flat == null) return null;
+            for (var i = 0; i < flat.length; i++) {
+              if (i == joined.length) {
+                joined.add(flat[i]);
+              } else if (joined[i] != flat[i]) {
+                joined[i] =
+                    joined[i] == 0x7e ||
+                        joined[i] == 0x7c ||
+                        flat[i] == 0x7e ||
+                        flat[i] == 0x7c
+                    ? 0x7e
+                    : 0x7f;
+              }
+            }
+          }
+          return [0x7f, ...joined];
+      }
+    } finally {
+      active.remove(definition);
     }
   }
 
@@ -8353,10 +8927,12 @@ WasmComponentCoreType _readCoreSubtype(ByteReader reader, int lead) {
 WasmComponentCoreType _readCoreCompositeType(ByteReader reader, int form) {
   switch (form) {
     case 0x60:
-      _readCoreValueTypeVector(reader);
-      _readCoreValueTypeVector(reader);
-      return const WasmComponentCoreType(
+      final params = _readCoreValueTypeVector(reader);
+      final results = _readCoreValueTypeVector(reader);
+      return WasmComponentCoreType(
         kind: WasmComponentCoreTypeKind.function,
+        parameterTypeCodes: params,
+        resultTypeCodes: results,
       );
     case 0x5f:
       final fieldCount = reader.readVarUint32();
@@ -8376,11 +8952,15 @@ WasmComponentCoreType _readCoreCompositeType(ByteReader reader, int form) {
   }
 }
 
-void _readCoreValueTypeVector(ByteReader reader) {
+List<int> _readCoreValueTypeVector(ByteReader reader) {
   final count = reader.readVarUint32();
+  final codes = <int>[];
   for (var i = 0; i < count; i++) {
-    _readCoreValueType(reader);
+    final lead = reader.readByte();
+    codes.add(lead);
+    _readCoreValueTypeWithLead(reader, lead);
   }
+  return List<int>.unmodifiable(codes);
 }
 
 void _readCoreFieldType(ByteReader reader) {
