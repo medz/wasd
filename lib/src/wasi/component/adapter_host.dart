@@ -582,6 +582,15 @@ final class WASIComponentCanonicalAdapterOperation {
   final WASIComponentCanonicalBorrowLoweringFactory? _borrowLowering;
   final bool _directValueSupported;
   final bool _memoryValueSupported;
+  late final bool _hasHandles =
+      plan.hasResourceHandles ||
+      plan.params.any(
+        (value) =>
+            value.flatLayout != null &&
+            _flatLayoutContainsHandle(value.flatLayout!),
+      ) ||
+      (plan.result?.flatLayout != null &&
+          _flatLayoutContainsHandle(plan.result!.flatLayout!));
 
   /// Canonical adapter kind.
   WasmComponentCanonicalKind get kind => plan.kind;
@@ -782,7 +791,16 @@ final class WASIComponentCanonicalAdapterOperation {
       );
       final result = _callback(List<Object?>.unmodifiable(coreArgs));
       final lifted = _loadLiftedCoreResult(result, memory);
-      _invokePostReturn(result);
+      try {
+        _invokePostReturn(result);
+      } catch (_) {
+        try {
+          _discardLiftedResult(lifted);
+        } catch (_) {
+          // Preserve the post-return failure after releasing undelivered owners.
+        }
+        rethrow;
+      }
       return lifted;
     } finally {
       lowering?.close();
@@ -807,7 +825,16 @@ final class WASIComponentCanonicalAdapterOperation {
       );
       final result = await _callback(List<Object?>.unmodifiable(coreArgs));
       final lifted = _loadLiftedCoreResult(result, memory);
-      await _invokePostReturnAsync(result);
+      try {
+        await _invokePostReturnAsync(result);
+      } catch (_) {
+        try {
+          _discardLiftedResult(lifted);
+        } catch (_) {
+          // Preserve the post-return failure after releasing undelivered owners.
+        }
+        rethrow;
+      }
       return lifted;
     } finally {
       lowering?.close();
@@ -992,7 +1019,7 @@ final class WASIComponentCanonicalAdapterOperation {
     wasm.Memory? memory,
     WASIComponentCanonicalRealloc? realloc,
     WASIComponentCanonicalBorrowLowering? lowering,
-  ) {
+  ) => _withHandleLowering(() {
     final directArgs = _lowerBorrowArguments(
       _validateDirectArgs(args),
       lowering,
@@ -1056,7 +1083,7 @@ final class WASIComponentCanonicalAdapterOperation {
       );
     }
     return flatArgs;
-  }
+  });
 
   Object? _loadLiftedCoreResult(
     Object? coreResult,
@@ -1239,6 +1266,17 @@ final class WASIComponentCanonicalAdapterOperation {
     );
   }
 
+  void _discardLiftedResult(Object? value) {
+    final layout = plan.result?.flatLayout;
+    final bindings = _asyncHost;
+    if (layout != null && bindings is WASIComponentCanonicalValueDiscard) {
+      (bindings as WASIComponentCanonicalValueDiscard).discardCanonicalValue(
+        layout,
+        value,
+      );
+    }
+  }
+
   void _invokePostReturn(Object? coreResult) {
     final callback = _postReturnCallback;
     if (callback == null) {
@@ -1345,7 +1383,7 @@ final class WASIComponentCanonicalAdapterOperation {
     int? resultPointer,
     wasm.Memory? memory,
     WASIComponentCanonicalRealloc? realloc,
-  ) {
+  ) => _withHandleLowering(() {
     if (!_resultIsIndirect()) {
       return _storeFlatResult(result, memory, realloc);
     }
@@ -1358,7 +1396,7 @@ final class WASIComponentCanonicalAdapterOperation {
     }
     _storeIndirectValue(resultPlan, result, memory, resultPointer, realloc);
     return const <Object?>[];
-  }
+  });
 
   int _flatParamCount() {
     var count = 0;
@@ -1406,9 +1444,15 @@ final class WASIComponentCanonicalAdapterOperation {
 
   T _withHandleLifting<T>(T Function() callback) {
     final host = _asyncHost;
-    return plan.hasResourceHandles &&
-            host is WASIComponentCanonicalHandleBindings
+    return _hasHandles && host is WASIComponentCanonicalHandleBindings
         ? host.withHandleLifting(callback)
+        : callback();
+  }
+
+  T _withHandleLowering<T>(T Function() callback) {
+    final host = _asyncHost;
+    return _hasHandles && host is WASIComponentCanonicalHandleBindings
+        ? host.withHandleLowering(callback)
         : callback();
   }
 
@@ -1503,7 +1547,7 @@ final class WASIComponentCanonicalAdapterOperation {
     Object? result,
     wasm.Memory? memory,
     WASIComponentCanonicalRealloc? realloc,
-  ) {
+  ) => _withHandleLowering(() {
     final resultPlan = plan.result;
     if (resultPlan == null) {
       if (result != null) {
@@ -1521,7 +1565,7 @@ final class WASIComponentCanonicalAdapterOperation {
       plan.stringEncoding,
       _asyncHost,
     );
-  }
+  });
 
   List<Object?> _loadMemoryArgs(wasm.Memory memory, List<int> paramPointers) {
     if (paramPointers.length != plan.params.length) {

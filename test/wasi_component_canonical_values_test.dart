@@ -5,18 +5,874 @@ import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/adapter_host.dart';
 import 'package:wasd/src/wasi/component/adapter_plan.dart';
 import 'package:wasd/src/wasi/component/async_host.dart';
+import 'package:wasd/src/wasi/component/async_values.dart';
 import 'package:wasd/src/wasi/component/canonical_handles.dart';
 import 'package:wasd/src/wasi/component/context.dart';
 import 'package:wasd/src/wasi/component/error_context.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/resource_table.dart';
 import 'package:wasd/src/wasi/component/string_memory.dart';
+import 'package:wasd/src/wasi/component/value_memory.dart';
+import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
 
 import 'support/component_fixtures.dart' as fixtures;
 
 void main() {
+  for (final future in [false, true]) {
+    test(
+      'lowering rollback unregisters a joined ${future ? 'future' : 'stream'}',
+      () async {
+        final store = _Store();
+        await _scoped(store, () {
+          final component = _types([future ? 0x65 : 0x66, 1, 0x79], 1);
+          final instance = _Instance(store, component, store.type());
+          final Object endpoint = future
+              ? WASIComponentFuture<Object?>('rollback')
+              : WASIComponentStream<Object?>('rollback');
+          final Object readable = endpoint is WASIComponentFuture
+              ? endpoint.readable
+              : (endpoint as WASIComponentStream).readable;
+          final set = WASIComponentWaitableSet('rollback set');
+          final original = StateError('conversion failure');
+          int? guest;
+          int? backing;
+          try {
+            expect(
+              () => instance.handles.withHandleLowering(() {
+                guest = instance.handles.lowerReadableEndpoint(0, readable);
+                backing = instance.handles.host(guest!);
+                store.asyncHost.waitableForHandle(backing!)!.join(set);
+                expect(set.isEmpty, isFalse);
+                throw original;
+              }),
+              throwsA(same(original)),
+            );
+            expect(store.table.contains(backing!), isFalse);
+            expect(() => instance.handles.host(guest!), throwsStateError);
+            expect(set.isEmpty, isTrue);
+            final retried = instance.handles.lowerReadableEndpoint(0, readable);
+            expect(
+              identical(
+                instance.handles.liftReadableEndpoint(0, retried),
+                readable,
+              ),
+              isTrue,
+            );
+            expect(store.table.activeCount, 0);
+          } finally {
+            switch (endpoint) {
+              case WASIComponentStream():
+                endpoint.readable.dispose();
+                endpoint.writable.dispose();
+              case WASIComponentFuture():
+                endpoint.readable.dispose();
+                endpoint.writable.dispose();
+            }
+          }
+        });
+      },
+    );
+  }
+
+  for (final mode in [
+    'flat args',
+    'indirect args',
+    'lower result',
+    'async result',
+  ]) {
+    for (final duplicate in [false, true]) {
+      test(
+        'lowering $mode rolls back ${duplicate ? 'duplicate' : 'nominal'} suffix',
+        () async {
+          final store = _Store();
+          await _scoped(store, () {
+            final width = mode == 'indirect args' ? 17 : 2;
+            final component = _types([
+              0x3f,
+              0x7f,
+              0,
+              0x69,
+              0,
+              0x6f,
+              width,
+              ...List.filled(width, 1),
+            ], 3);
+            final type = store.type();
+            final otherType = store.type();
+            final instance = _Instance(store, component, type);
+            final owners = [
+              for (var i = 0; i < width; i++) store.table.insert(type, i + 1),
+            ];
+            final other = store.table.insert(otherType, 99);
+            var value = <Object?>[
+              ...owners.take(width - 1),
+              duplicate ? owners.first : other,
+            ];
+            final args = mode.endsWith('args');
+            final plan = _conversionPlan(
+              component,
+              kind: args
+                  ? WasmComponentCanonicalKind.lift
+                  : WasmComponentCanonicalKind.lower,
+              params: args
+                  ? const [WasmComponentValueType.typeIndex(2)]
+                  : const [],
+              result: args ? null : const WasmComponentValueType.typeIndex(2),
+              asynchronous: mode == 'async result',
+              resources: width,
+            );
+            final memory = _memory();
+            final data = ByteData.view(memory.buffer);
+            var calls = 0;
+            final program = const WASIComponentCanonicalAdapterHost()
+                .bindCanonicalAdapterPlans(
+                  [plan],
+                  endpointBindings: instance.handles,
+                  coreFunctions: {
+                    0: (core) {
+                      calls++;
+                      final guests = width > 16
+                          ? [
+                              for (var i = 0; i < width; i++)
+                                data.getUint32(
+                                  (core.single! as int) + i * 4,
+                                  Endian.little,
+                                ),
+                            ]
+                          : core.cast<int>();
+                      for (final guest in guests) {
+                        instance.handles.resourceDrop(0, guest);
+                      }
+                      return null;
+                    },
+                  },
+                  componentFunctions: {
+                    0: (_) {
+                      calls++;
+                      return value;
+                    },
+                  },
+                );
+            void invoke() {
+              final operation = program.operations.single;
+              if (args) {
+                operation.invokeLiftedCore(
+                  [
+                    WasmComponentValueData(
+                      kind: WasmComponentValueDataKind.tuple,
+                      rawBytes: Uint8List(0),
+                      items: [
+                        for (final handle in value)
+                          WasmComponentValueData(
+                            kind: WasmComponentValueDataKind.integer,
+                            rawBytes: Uint8List(0),
+                            integer: handle,
+                          ),
+                      ],
+                    ),
+                  ],
+                  memory: memory,
+                  realloc: (_, _, _, _) => 64,
+                );
+              } else if (mode == 'async result') {
+                final call = operation.startAsyncLowerCore([
+                  64,
+                ], memory: memory);
+                try {
+                  call.complete(call.result);
+                } finally {
+                  call.releaseCanonicalBorrows();
+                }
+              } else {
+                operation.invokeLoweredCore([64], memory: memory);
+              }
+            }
+
+            expect(invoke, throwsStateError);
+            expect(calls, args ? 0 : 1);
+            for (var i = 0; i < width; i++) {
+              expect(
+                () => store.table.canonicalRequireUnclaimed(owners[i]),
+                returnsNormally,
+              );
+              expect(store.table.get(type, owners[i]), i + 1);
+            }
+            expect(
+              () => store.table.canonicalRequireUnclaimed(other),
+              returnsNormally,
+            );
+            expect(store.dropped, isEmpty);
+            value = owners;
+            invoke();
+            expect(calls, args ? 1 : 2);
+            if (!args) {
+              for (var i = 0; i < width; i++) {
+                instance.handles.resourceDrop(
+                  0,
+                  data.getUint32(64 + i * 4, Endian.little),
+                );
+              }
+            }
+            store.table.drop(otherType, other);
+            expect(store.dropped, [for (var i = 0; i < width; i++) i + 1, 99]);
+            expect(store.table.activeCount, 0);
+          });
+        },
+      );
+    }
+  }
+
+  for (final prefix in ['resource', 'stream', 'error-context']) {
+    for (final invalidMemory in [false, true]) {
+      test(
+        'lowering $prefix rolls back a later ${invalidMemory ? 'memory' : 'realloc'} failure',
+        () async {
+          final store = _Store();
+          await _scoped(store, () {
+            final code = prefix == 'resource'
+                ? 1
+                : prefix == 'stream'
+                ? 2
+                : 0x64;
+            final component = _types([
+              0x3f,
+              0x7f,
+              0,
+              0x69,
+              0,
+              0x66,
+              1,
+              0x79,
+              0x6f,
+              2,
+              code,
+              0x73,
+            ], 4);
+            final type = store.type();
+            final instance = _Instance(store, component, type);
+            final stream = WASIComponentStream<Object?>('host stream');
+            Object first;
+            if (prefix == 'resource') {
+              first = store.table.insert(type, 7);
+            } else if (prefix == 'stream') {
+              first = stream.readable;
+            } else {
+              first = store.errors.create('original');
+            }
+            final plan = _conversionPlan(
+              component,
+              params: [
+                prefix == 'error-context'
+                    ? const WasmComponentValueType.primitive(
+                        WasmComponentPrimitiveValueType.errorContext,
+                      )
+                    : WasmComponentValueType.typeIndex(code),
+                const WasmComponentValueType.primitive(
+                  WasmComponentPrimitiveValueType.string,
+                ),
+              ],
+              resources: prefix == 'resource' ? 1 : 0,
+            );
+            var calls = 0;
+            final original = StateError('realloc sentinel');
+            final originalStack = StackTrace.fromString(
+              'realloc original stack',
+            );
+            final program = const WASIComponentCanonicalAdapterHost()
+                .bindCanonicalAdapterPlans(
+                  [plan],
+                  endpointBindings: instance.handles,
+                  coreFunctions: {
+                    0: (_) {
+                      calls++;
+                      return null;
+                    },
+                  },
+                );
+            try {
+              Object? error;
+              StackTrace? stack;
+              try {
+                program.invokeLiftedCore(
+                  0,
+                  [first, 'payload'],
+                  memory: _memory(),
+                  realloc: (_, _, _, _) {
+                    if (invalidMemory) return 65536;
+                    Error.throwWithStackTrace(original, originalStack);
+                  },
+                );
+              } catch (e, s) {
+                error = e;
+                stack = s;
+              }
+              if (invalidMemory) {
+                expect(error, isRangeError);
+              } else {
+                expect(identical(error, original), isTrue);
+                expect(stack.toString(), originalStack.toString());
+              }
+              expect(calls, 0);
+              if (prefix == 'resource') {
+                expect(
+                  () => store.table.canonicalRequireUnclaimed(first as int),
+                  returnsNormally,
+                );
+                expect(store.table.get(type, first as int), 7);
+                expect(store.dropped, isEmpty);
+                store.table.drop(type, first);
+              } else if (prefix == 'stream') {
+                expect(stream.readable.isDropped, isFalse);
+                expect(store.table.activeCount, 0);
+                final guest = instance.handles.lowerReadableEndpoint(2, stream);
+                expect(
+                  identical(
+                    instance.handles.liftReadableEndpoint(2, guest),
+                    stream.readable,
+                  ),
+                  isTrue,
+                );
+              } else {
+                expect(store.table.activeCount, 1);
+                expect(store.errors.debugMessage(first as int), 'original');
+                store.errors.drop(first);
+              }
+              expect(store.table.activeCount, 0);
+            } finally {
+              stream.readable.dispose();
+              stream.writable.dispose();
+            }
+          });
+        },
+      );
+    }
+  }
+
+  for (final future in [false, true]) {
+    for (final claimed in [false, true]) {
+      for (final container in [false, true]) {
+        test(
+          'cancelled ${future ? 'future' : 'stream'} ${container ? 'container' : 'readable'} result ${claimed ? 'preserves another owner' : 'disposes host ownership'}',
+          () async {
+            final store = _Store();
+            await _scoped(store, () {
+              final component = _types([future ? 0x65 : 0x66, 1, 0x79], 1);
+              final type = store.type();
+              final owner = _Instance(store, component, type);
+              final callee = _Instance(store, component, type);
+              var drops = 0;
+              final discarded = <Object?>[];
+              final Object endpoint = future
+                  ? WASIComponentFuture<Object?>(
+                      'result',
+                      onReadableDrop: () => drops++,
+                      onDiscard: discarded.add,
+                    )
+                  : WASIComponentStream<Object?>(
+                      'result',
+                      onReadableDrop: () => drops++,
+                      onDiscard: discarded.add,
+                    );
+              final Object readable;
+              if (endpoint is WASIComponentFuture<Object?>) {
+                endpoint.writable.complete(71);
+                endpoint.writable.dispose();
+                readable = endpoint.readable;
+              } else {
+                final stream = endpoint as WASIComponentStream<Object?>;
+                stream.writable.writeAll([71, 72]);
+                stream.writable.dispose();
+                readable = stream.readable;
+              }
+              final result = container ? endpoint : readable;
+              final guest = claimed
+                  ? owner.handles.lowerReadableEndpoint(0, readable)
+                  : null;
+              final plan = _conversionPlan(
+                component,
+                kind: WasmComponentCanonicalKind.lower,
+                result: const WasmComponentValueType.typeIndex(0),
+                asynchronous: true,
+              );
+              final program = const WASIComponentCanonicalAdapterHost()
+                  .bindCanonicalAdapterPlans(
+                    [plan],
+                    endpointBindings: callee.handles,
+                    componentFunctions: {0: (_) => result},
+                  );
+              final call = program.operations.single.startAsyncLowerCore([
+                64,
+              ], memory: _memory());
+              try {
+                if (claimed) {
+                  expect(
+                    () => callee.handles.lowerReadableEndpoint(0, result),
+                    throwsStateError,
+                  );
+                  expect(
+                    () => call.discardCanonicalResult(result),
+                    throwsStateError,
+                  );
+                  expect(drops, 0);
+                  expect(discarded, isEmpty);
+                  final backing = owner.backing(guest!);
+                  if (future) {
+                    expect(
+                      owner
+                          .operation(WasmComponentCanonicalKind.futureRead, 0)
+                          .futureReadHandle(backing),
+                      71,
+                    );
+                    owner
+                        .operation(
+                          WasmComponentCanonicalKind.futureDropReadable,
+                          0,
+                        )
+                        .futureDropReadableHandle(backing);
+                  } else {
+                    expect(
+                      owner
+                          .operation(WasmComponentCanonicalKind.streamRead, 0)
+                          .streamReadHandle(backing, 2),
+                      [71, 72],
+                    );
+                    owner
+                        .operation(
+                          WasmComponentCanonicalKind.streamDropReadable,
+                          0,
+                        )
+                        .streamDropReadableHandle(backing);
+                  }
+                } else {
+                  call.discardCanonicalResult(result);
+                  expect(discarded, future ? [71] : [71, 72]);
+                }
+                expect(drops, 1);
+                expect(store.table.activeCount, 0);
+              } finally {
+                call.releaseCanonicalBorrows();
+                switch (readable) {
+                  case WASIComponentReadableStream():
+                    readable.dispose();
+                  case WASIComponentReadableFuture():
+                    readable.dispose();
+                }
+              }
+            });
+          },
+        );
+      }
+    }
+  }
+
+  for (final contextOnly in [false, true]) {
+    test(
+      'failed ${contextOnly ? 'error-context-only' : 'mixed owned'} result releases new error-context copies',
+      () async {
+        final store = _Store();
+        await _scoped(store, () {
+          final component = _types([
+            0x3f,
+            0x7f,
+            0,
+            0x69,
+            0,
+            0x6f,
+            2,
+            0x64,
+            contextOnly ? 0x64 : 1,
+          ], 3);
+          final instance = _Instance(store, component, store.type());
+          final original = store.errors.create('original');
+          final guest = instance.handles.lowerErrorContextHandle(original);
+          store.errors.drop(original);
+          expect(store.table.activeCount, 1);
+          final uses = <WASIComponentResourceUse>[
+            if (!contextOnly)
+              const WASIComponentResourceUse(
+                canonicalIndex: 0,
+                canonicalKind: WasmComponentCanonicalKind.lift,
+                path: 'canonical[0].result.item[1]',
+                handleKind: WASIComponentResourceHandleKind.own,
+                resourceTypeIndex: 0,
+                binding: null,
+              ),
+          ];
+          const resultType = WasmComponentValueType.typeIndex(2);
+          final plan = WASIComponentCanonicalAdapterPlan(
+            canonicalIndex: 0,
+            definition: const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.lift,
+              coreFunctionIndex: 0,
+            ),
+            functionType: const WasmComponentFunctionType(
+              params: [],
+              result: resultType,
+            ),
+            params: const [],
+            result: WASIComponentCanonicalAdapterValuePlan(
+              path: 'canonical[0].result',
+              label: null,
+              type: resultType,
+              memoryCodec: null,
+              flatLayout: componentCanonicalFlatLayout(
+                resultType,
+                component.componentTypeIndexDefinitions,
+                typeScope: component.componentTypeIndexScope,
+              ),
+              resourceUses: uses,
+            ),
+            resourceUses: uses,
+            stringEncoding: WASIComponentCanonicalStringEncoding.utf8,
+            memoryIndex: 0,
+            reallocIndex: null,
+            postReturnIndex: null,
+            callbackIndex: null,
+            isAsync: false,
+          );
+          final memory = _memory();
+          final data = ByteData.view(memory.buffer);
+          data.setUint32(64, guest, Endian.little);
+          data.setUint32(68, 0, Endian.little);
+          var calls = 0;
+          final program = const WASIComponentCanonicalAdapterHost()
+              .bindCanonicalAdapterPlans(
+                [plan],
+                endpointBindings: instance.handles,
+                coreFunctions: {
+                  0: (_) {
+                    calls++;
+                    return 64;
+                  },
+                },
+              );
+          for (var i = 0; i < 3; i++) {
+            expect(
+              () => program.invokeLiftedCore(0, [], memory: memory),
+              throwsStateError,
+            );
+            expect(calls, i + 1);
+            expect(
+              store.errors.debugMessage(instance.handles.host(guest)),
+              'original',
+            );
+            expect(
+              store.table.activeCount,
+              1,
+              reason:
+                  'Only the original guest error context may remain after conversion fails.',
+            );
+          }
+        });
+      },
+    );
+  }
+
+  for (final kind in ['resource', 'stream', 'future']) {
+    for (final asynchronous in [false, true]) {
+      for (final post in ['ok', 'throw', 'invalid']) {
+        test(
+          'undelivered $kind ${asynchronous ? 'async' : 'sync'} post-return $post',
+          () async {
+            final store = _Store();
+            await _scoped(store, () async {
+              final component = kind == 'resource'
+                  ? _types([0x3f, 0x7f, 0, 0x69, 0], 2)
+                  : kind == 'stream'
+                  ? _ownStream()
+                  : _ownFuture();
+              final type = store.type(
+                throwOnDrop: kind == 'resource' && post == 'throw' ? 7 : null,
+              );
+              final instance = _Instance(store, component, type);
+              const scalar = WasmComponentValueType.typeIndex(1);
+              const endpoint = WasmComponentValueType.typeIndex(2);
+              final resultType = kind == 'resource' ? scalar : endpoint;
+              final uses = <WASIComponentResourceUse>[
+                if (kind == 'resource')
+                  const WASIComponentResourceUse(
+                    canonicalIndex: 0,
+                    canonicalKind: WasmComponentCanonicalKind.lift,
+                    path: 'canonical[0].result',
+                    handleKind: WASIComponentResourceHandleKind.own,
+                    resourceTypeIndex: 0,
+                    binding: null,
+                  ),
+              ];
+              final plan = WASIComponentCanonicalAdapterPlan(
+                canonicalIndex: 0,
+                definition: const WasmComponentCanonicalDefinition(
+                  kind: WasmComponentCanonicalKind.lift,
+                  coreFunctionIndex: 0,
+                ),
+                functionType: WasmComponentFunctionType(
+                  params: const [],
+                  result: resultType,
+                ),
+                params: const [],
+                result: WASIComponentCanonicalAdapterValuePlan(
+                  path: 'canonical[0].result',
+                  label: null,
+                  type: resultType,
+                  memoryCodec: null,
+                  flatLayout: componentCanonicalFlatLayout(
+                    resultType,
+                    component.componentTypeIndexDefinitions,
+                    typeScope: component.componentTypeIndexScope,
+                  ),
+                  resourceUses: uses,
+                ),
+                resourceUses: uses,
+                stringEncoding: WASIComponentCanonicalStringEncoding.utf8,
+                memoryIndex: null,
+                reallocIndex: null,
+                postReturnIndex: 1,
+                callbackIndex: null,
+                isAsync: false,
+              );
+              int guest;
+              Object? readable;
+              if (kind == 'resource') {
+                guest = instance.handles.newResource(0, 7);
+              } else {
+                final pair = kind == 'stream'
+                    ? instance.stream(2)
+                    : instance.future(2);
+                guest = pair.readable;
+                final backing = instance.backing(guest);
+                readable = store.table.get(
+                  store.table.canonicalTypeOf(backing),
+                  backing,
+                );
+              }
+              final original = StateError('post-return-marker');
+              final originalStack = StackTrace.fromString(
+                'post-return-original-stack',
+              );
+              var calls = 0;
+              var posts = 0;
+              final program = const WASIComponentCanonicalAdapterHost()
+                  .bindCanonicalAdapterPlans(
+                    [plan],
+                    endpointBindings: instance.handles,
+                    coreFunctions: {
+                      0: (_) {
+                        calls++;
+                        return guest;
+                      },
+                      1: (_) {
+                        posts++;
+                        Object? finish() {
+                          if (post == 'throw') {
+                            Error.throwWithStackTrace(original, originalStack);
+                          }
+                          return post == 'invalid' ? 1 : null;
+                        }
+
+                        return asynchronous
+                            ? Future<Object?>.sync(finish)
+                            : finish();
+                      },
+                    },
+                  );
+              Object? result;
+              Object? error;
+              StackTrace? stack;
+              try {
+                result = asynchronous
+                    ? await program.invokeLiftedCoreAsync(0, [])
+                    : program.invokeLiftedCore(0, []);
+              } catch (e, s) {
+                error = e;
+                stack = s;
+              }
+              expect(calls, 1);
+              expect(posts, 1);
+              if (post == 'ok') {
+                expect(error, isNull);
+                if (kind == 'resource') {
+                  final value = result is WasmComponentValueData
+                      ? result.integer! as int
+                      : result! as int;
+                  store.table.drop(type, value);
+                  expect(store.dropped, [7]);
+                } else {
+                  expect(identical(result, readable), isTrue);
+                }
+              } else {
+                expect(result, isNull);
+                expect(error, isNotNull);
+                if (post == 'throw') {
+                  expect(identical(error, original), isTrue);
+                  expect(stack.toString(), originalStack.toString());
+                }
+                if (kind == 'resource') {
+                  expect(
+                    store.dropped,
+                    [7],
+                    reason:
+                        'Undelivered lifted owner must be released before scope teardown.',
+                  );
+                  expect(store.table.activeCount, 0);
+                } else {
+                  final dropped = switch (readable) {
+                    WASIComponentReadableStream() => readable.isDropped,
+                    WASIComponentReadableFuture() => readable.isDropped,
+                    _ => throw StateError('missing readable'),
+                  };
+                  try {
+                    expect(
+                      dropped,
+                      isTrue,
+                      reason:
+                          'Transferred readable must be disposed when post-return prevents result delivery.',
+                    );
+                  } finally {
+                    switch (readable) {
+                      case WASIComponentReadableStream():
+                        readable.dispose();
+                      case WASIComponentReadableFuture():
+                        readable.dispose();
+                    }
+                  }
+                }
+              }
+              if (post == 'ok') {
+                switch (readable) {
+                  case WASIComponentReadableStream():
+                    readable.dispose();
+                  case WASIComponentReadableFuture():
+                    readable.dispose();
+                }
+              }
+            });
+          },
+        );
+      }
+    }
+  }
+
+  for (final future in [false, true]) {
+    for (final duplicate in [false, true]) {
+      test(
+        '${future ? 'future' : 'stream'} result ${duplicate ? 'duplicate endpoint' : 'invalid owner'} preserves first endpoint',
+        () async {
+          final store = _Store();
+          await _scoped(store, () {
+            final component = _types([
+              0x3f,
+              0x7f,
+              0,
+              0x69,
+              0,
+              future ? 0x65 : 0x66,
+              1,
+              1,
+              0x6f,
+              2,
+              2,
+              duplicate ? 2 : 1,
+            ], 4);
+            final type = store.type();
+            final instance = _Instance(store, component, type);
+            final pair = future ? instance.future(2) : instance.stream(2);
+            final backing = instance.backing(pair.readable);
+            final original = store.table.get(
+              store.table.canonicalTypeOf(backing),
+              backing,
+            );
+            final uses = <WASIComponentResourceUse>[
+              if (!duplicate)
+                const WASIComponentResourceUse(
+                  canonicalIndex: 0,
+                  canonicalKind: WasmComponentCanonicalKind.lift,
+                  path: 'canonical[0].result.item[1]',
+                  handleKind: WASIComponentResourceHandleKind.own,
+                  resourceTypeIndex: 0,
+                  binding: null,
+                ),
+            ];
+            const resultType = WasmComponentValueType.typeIndex(3);
+            final plan = WASIComponentCanonicalAdapterPlan(
+              canonicalIndex: 0,
+              definition: const WasmComponentCanonicalDefinition(
+                kind: WasmComponentCanonicalKind.lift,
+                coreFunctionIndex: 0,
+              ),
+              functionType: const WasmComponentFunctionType(
+                params: [],
+                result: resultType,
+              ),
+              params: const [],
+              result: WASIComponentCanonicalAdapterValuePlan(
+                path: 'canonical[0].result',
+                label: null,
+                type: resultType,
+                memoryCodec: null,
+                flatLayout: componentCanonicalFlatLayout(
+                  resultType,
+                  component.componentTypeIndexDefinitions,
+                  typeScope: component.componentTypeIndexScope,
+                ),
+                resourceUses: uses,
+              ),
+              resourceUses: uses,
+              stringEncoding: WASIComponentCanonicalStringEncoding.utf8,
+              memoryIndex: 0,
+              reallocIndex: null,
+              postReturnIndex: null,
+              callbackIndex: null,
+              isAsync: false,
+            );
+            final memory = _memory();
+            final data = ByteData.view(memory.buffer);
+            data.setUint32(64, pair.readable, Endian.little);
+            data.setUint32(68, duplicate ? pair.readable : 0, Endian.little);
+            var calls = 0;
+            final program = const WASIComponentCanonicalAdapterHost()
+                .bindCanonicalAdapterPlans(
+                  [plan],
+                  endpointBindings: instance.handles,
+                  coreFunctions: {
+                    0: (_) {
+                      calls++;
+                      return 64;
+                    },
+                  },
+                );
+            try {
+              expect(
+                () => program.invokeLiftedCore(0, [], memory: memory),
+                throwsStateError,
+              );
+              expect(calls, 1);
+              expect(
+                () => instance.handles.host(pair.readable),
+                returnsNormally,
+                reason:
+                    'Failed composite conversion must preserve the original guest readable endpoint.',
+              );
+              expect(store.table.contains(backing), isTrue);
+              expect(
+                identical(store.table.canonicalValueOf(backing), original),
+                isTrue,
+              );
+            } finally {
+              switch (original) {
+                case WASIComponentReadableStream():
+                  original.dispose();
+                case WASIComponentReadableFuture():
+                  original.dispose();
+              }
+            }
+          });
+        },
+      );
+    }
+  }
+
   for (final mode in ['sync', 'async flat', 'async indirect']) {
     for (final duplicate in [false, true]) {
       test(
@@ -1538,4 +2394,71 @@ List<int> _u32(int value) {
     bytes.add(next | (value == 0 ? 0 : 0x80));
   } while (value != 0);
   return bytes;
+}
+
+WASIComponentCanonicalAdapterPlan _conversionPlan(
+  WasmComponent component, {
+  WasmComponentCanonicalKind kind = WasmComponentCanonicalKind.lift,
+  List<WasmComponentValueType> params = const [],
+  WasmComponentValueType? result,
+  bool asynchronous = false,
+  int resources = 0,
+}) {
+  final uses = [
+    for (var i = 0; i < resources; i++)
+      WASIComponentResourceUse(
+        canonicalIndex: 0,
+        canonicalKind: kind,
+        path: 'canonical[0].item[$i]',
+        handleKind: WASIComponentResourceHandleKind.own,
+        resourceTypeIndex: 0,
+        binding: null,
+      ),
+  ];
+  WASIComponentCanonicalAdapterValuePlan value(
+    WasmComponentValueType type,
+    String path,
+  ) => WASIComponentCanonicalAdapterValuePlan(
+    path: path,
+    label: null,
+    type: type,
+    memoryCodec: WASIComponentCanonicalValueMemoryCodec.fromAdapterValueType(
+      type,
+      component.componentTypeIndexDefinitions,
+      typeScope: component.componentTypeIndexScope,
+    ),
+    flatLayout: componentCanonicalFlatLayout(
+      type,
+      component.componentTypeIndexDefinitions,
+      typeScope: component.componentTypeIndexScope,
+    ),
+    resourceUses: uses,
+  );
+  return WASIComponentCanonicalAdapterPlan(
+    canonicalIndex: 0,
+    definition: WasmComponentCanonicalDefinition(
+      kind: kind,
+      coreFunctionIndex: kind == WasmComponentCanonicalKind.lift ? 0 : null,
+      functionIndex: kind == WasmComponentCanonicalKind.lower ? 0 : null,
+    ),
+    functionType: WasmComponentFunctionType(
+      params: [
+        for (var i = 0; i < params.length; i++)
+          WasmComponentLabeledValueType(label: 'arg$i', type: params[i]),
+      ],
+      result: result,
+    ),
+    params: [
+      for (var i = 0; i < params.length; i++)
+        value(params[i], 'canonical[0].param[$i]'),
+    ],
+    result: result == null ? null : value(result, 'canonical[0].result'),
+    resourceUses: uses,
+    stringEncoding: WASIComponentCanonicalStringEncoding.utf8,
+    memoryIndex: 0,
+    reallocIndex: 0,
+    postReturnIndex: null,
+    callbackIndex: null,
+    isAsync: asynchronous,
+  );
 }

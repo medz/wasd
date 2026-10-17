@@ -43,6 +43,12 @@ final class _Handle {
   final WASIComponentCanonicalHandleKind kind;
 }
 
+final class _HandleLifting {
+  final owners = <int, int>{};
+  final endpoints = <int, (int, int, Object)>{};
+  final copiedErrors = <int>[];
+}
+
 /// The normative reserved-zero/LIFO index space, independent of host handles.
 final class WASIComponentCanonicalIndexTable<T extends Object> {
   final List<T?> _entries = [null];
@@ -111,6 +117,7 @@ final class WASIComponentCanonicalHandles
   final _endpointByHost = <int, Object>{};
   final _callKey = Object();
   final _liftKey = Object();
+  final _lowerKey = Object();
   final threads = WASIComponentCanonicalIndexTable<WASIComponentContext>();
   final _threadKey = Object();
 
@@ -147,17 +154,80 @@ final class WASIComponentCanonicalHandles
   @override
   T withHandleLifting<T>(T Function() callback) {
     if (Zone.current[_liftKey] != null) return callback();
-    final owners = <int>{};
-    final result = runZoned(callback, zoneValues: {_liftKey: owners});
-    // A later parameter may have borrowed an earlier owner. Check all owners
-    // before committing any move; an exception preserves every original G.
-    for (final guest in owners) {
-      table.canonicalRequireOwned(host(guest));
+    final lifting = _HandleLifting();
+    try {
+      final result = runZoned(callback, zoneValues: {_liftKey: lifting});
+      // Check every source before consuming any. Later values or realloc may
+      // have borrowed an earlier owner or changed endpoint readiness.
+      for (final entry in lifting.owners.entries) {
+        if (host(entry.key) != entry.value) {
+          throw StateError('Canonical resource changed during conversion.');
+        }
+        table.canonicalRequireOwned(entry.value);
+      }
+      for (final entry in lifting.endpoints.entries) {
+        final (index, backing, endpoint) = entry.value;
+        if (host(entry.key) != backing ||
+            !identical(
+              asyncBindings.peekReadableEndpoint(index, backing),
+              endpoint,
+            )) {
+          throw StateError('Canonical endpoint changed during conversion.');
+        }
+      }
+      for (final guest in lifting.owners.keys) {
+        remove(guest);
+      }
+      for (final entry in lifting.endpoints.values) {
+        asyncBindings.liftReadableEndpoint(entry.$1, entry.$2);
+      }
+      return result;
+    } catch (_) {
+      for (final handle in lifting.copiedErrors.reversed) {
+        try {
+          if (table.contains(handle)) errorContexts.drop(handle);
+        } catch (_) {
+          // Preserve the conversion failure after attempting every copy release.
+        }
+      }
+      rethrow;
     }
-    for (final guest in owners) {
-      remove(guest);
+  }
+
+  @override
+  T withHandleLowering<T>(T Function() callback) {
+    if (Zone.current[_lowerKey] != null) return callback();
+    final created = <(int, _Handle)>[];
+    try {
+      return runZoned(callback, zoneValues: {_lowerKey: created});
+    } catch (_) {
+      for (final (guest, entry) in created.reversed) {
+        try {
+          if (!identical(_handles.get(guest), entry)) continue;
+          remove(guest);
+          if (!table.contains(entry.host)) continue;
+          switch (entry.kind) {
+            case WASIComponentCanonicalHandleKind.streamReadable:
+            case WASIComponentCanonicalHandleKind.futureReadable:
+              asyncBindings.rollbackReadableEndpoint(entry.host);
+            case WASIComponentCanonicalHandleKind.errorContext:
+              errorContexts.drop(entry.host);
+            default:
+              break;
+          }
+        } catch (_) {
+          // Keep the conversion failure after attempting every rollback.
+        }
+      }
+      rethrow;
     }
-    return result;
+  }
+
+  int _installLowered(int backing, WASIComponentCanonicalHandleKind kind) {
+    final guest = add(backing, kind);
+    final created = Zone.current[_lowerKey] as List<(int, _Handle)>?;
+    created?.add((guest, _handles.get(guest)));
+    return guest;
   }
 
   @override
@@ -469,11 +539,13 @@ final class WASIComponentCanonicalHandles
     _type(index, backing, canonicalIndex);
     if (owned) {
       table.canonicalRequireOwned(backing);
-      final owners = Zone.current[_liftKey] as Set<int>?;
-      if (owners == null) {
+      final lifting = Zone.current[_liftKey] as _HandleLifting?;
+      if (lifting == null) {
         remove(guest);
-      } else if (!owners.add(guest)) {
+      } else if (lifting.owners.containsKey(guest)) {
         throw StateError('Canonical parameters repeat an owned resource.');
+      } else {
+        lifting.owners[guest] = backing;
       }
       return backing;
     }
@@ -509,7 +581,7 @@ final class WASIComponentCanonicalHandles
       return table.resourceRep(type, backing) as int;
     }
     if (owned) table.canonicalRequireOwned(backing);
-    return add(backing, WASIComponentCanonicalHandleKind.resource);
+    return _installLowered(backing, WASIComponentCanonicalHandleKind.resource);
   }
 
   @override
@@ -527,10 +599,10 @@ final class WASIComponentCanonicalHandles
     }
     final backing = asyncBindings.lowerReadableEndpoint(typeIndex, endpoint);
     try {
-      return add(backing, _endpointKind(typeIndex));
+      return _installLowered(backing, _endpointKind(typeIndex));
     } catch (_) {
       // Failed installation leaves the caller's endpoint object host-owned.
-      table.take(table.canonicalTypeOf(backing), backing);
+      asyncBindings.rollbackReadableEndpoint(backing);
       rethrow;
     }
   }
@@ -544,14 +616,35 @@ final class WASIComponentCanonicalHandles
   @override
   Object liftReadableEndpoint(int typeIndex, int guest) {
     final backing = host(guest, kind: _endpointKind(typeIndex));
+    final lifting = Zone.current[_liftKey] as _HandleLifting?;
+    if (lifting != null) {
+      if (lifting.endpoints.containsKey(guest)) {
+        throw StateError('Canonical values repeat an owned readable endpoint.');
+      }
+      final endpoint = asyncBindings.peekReadableEndpoint(typeIndex, backing);
+      lifting.endpoints[guest] = (typeIndex, backing, endpoint);
+      return endpoint;
+    }
     return asyncBindings.liftReadableEndpoint(typeIndex, backing);
   }
+
+  @override
+  Object peekReadableEndpoint(int typeIndex, int guest) =>
+      asyncBindings.peekReadableEndpoint(
+        typeIndex,
+        host(guest, kind: _endpointKind(typeIndex)),
+      );
+
+  @override
+  void rollbackReadableEndpoint(int guest) =>
+      asyncBindings.rollbackReadableEndpoint(remove(guest));
 
   @override
   int liftErrorContextHandle(int guest) {
     final backing = errorContexts.copyHandle(
       host(guest, kind: WASIComponentCanonicalHandleKind.errorContext),
     );
+    (Zone.current[_liftKey] as _HandleLifting?)?.copiedErrors.add(backing);
     final temporaries =
         Zone.current[_errorCarrierKey]
             as List<(WASIComponentErrorContextHost, int)>?;
@@ -562,10 +655,16 @@ final class WASIComponentCanonicalHandles
   @override
   int lowerErrorContextHandle(int backing) {
     requireCapacity(1);
-    return add(
-      errorContexts.copyHandle(backing),
-      WASIComponentCanonicalHandleKind.errorContext,
-    );
+    final copy = errorContexts.copyHandle(backing);
+    try {
+      return _installLowered(
+        copy,
+        WASIComponentCanonicalHandleKind.errorContext,
+      );
+    } catch (_) {
+      errorContexts.drop(copy);
+      rethrow;
+    }
   }
 
   WASIComponentWaitableEvent event(WASIComponentWaitableEvent value) =>
@@ -640,8 +739,18 @@ final class _AdapterHandleBindings
   Object liftReadableEndpoint(int index, int handle) =>
       owner.liftReadableEndpoint(index, handle);
   @override
+  Object peekReadableEndpoint(int index, int handle) =>
+      owner.peekReadableEndpoint(index, handle);
+  @override
+  void rollbackReadableEndpoint(int handle) =>
+      owner.rollbackReadableEndpoint(handle);
+  @override
   T withHandleLifting<T>(T Function() callback) =>
       owner.withHandleLifting(callback);
+
+  @override
+  T withHandleLowering<T>(T Function() callback) =>
+      owner.withHandleLowering(callback);
 
   @override
   T withHandleCall<T>(
@@ -753,6 +862,9 @@ final class _PayloadHandleBindings
   T withHandleLifting<T>(T Function() callback) => callback();
 
   @override
+  T withHandleLowering<T>(T Function() callback) => callback();
+
+  @override
   T withHandleCall<T>(
     T Function() callback, {
     void Function(void Function() close)? retain,
@@ -777,17 +889,23 @@ final class _PayloadHandleBindings
       throw StateError('Unsupported nested async payload.');
     }
     _discard(() {
-      switch (endpoint) {
-        case WASIComponentStream():
-          endpoint.readable.dispose();
+      final readable = switch (endpoint) {
+        WASIComponentStream() => endpoint.readable,
+        WASIComponentFuture() => endpoint.readable,
+        WASIComponentReadableStream() ||
+        WASIComponentReadableFuture() => endpoint,
+        _ => throw StateError('Expected an owned readable endpoint result.'),
+      };
+      if (_ownedReadableEndpoints[readable] == true) {
+        throw StateError(
+          'Readable endpoint is already owned by a component instance.',
+        );
+      }
+      switch (readable) {
         case WASIComponentReadableStream():
-          endpoint.dispose();
-        case WASIComponentFuture():
-          endpoint.readable.dispose();
+          readable.dispose();
         case WASIComponentReadableFuture():
-          endpoint.dispose();
-        default:
-          throw StateError('Expected an owned readable endpoint result.');
+          readable.dispose();
       }
     });
     return 0;
@@ -795,6 +913,14 @@ final class _PayloadHandleBindings
 
   @override
   Object liftReadableEndpoint(int index, int handle) =>
+      throw StateError('Unsupported nested async payload.');
+
+  @override
+  Object peekReadableEndpoint(int index, int handle) =>
+      throw StateError('Unsupported nested async payload.');
+
+  @override
+  void rollbackReadableEndpoint(int handle) =>
       throw StateError('Unsupported nested async payload.');
 }
 

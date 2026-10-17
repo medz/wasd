@@ -14,6 +14,12 @@ import 'waitable_set.dart';
 
 /// Endpoint transfer operations used by canonical value adapters.
 abstract interface class WASIComponentAsyncEndpointBindings {
+  /// Validates a readable transfer without consuming its table entry.
+  Object peekReadableEndpoint(int componentTypeIndex, int handle);
+
+  /// Undoes an uncommitted readable registration without disposing its value.
+  void rollbackReadableEndpoint(int handle);
+
   /// Lowers a host readable endpoint into this registry.
   int lowerReadableEndpoint(int componentTypeIndex, Object value);
 
@@ -49,8 +55,11 @@ abstract interface class WASIComponentCanonicalHandleBindings
   /// Copies a host error reference into the receiving guest table.
   int lowerErrorContextHandle(int handle);
 
-  /// Commits lifted resource owners only after every parameter has validated.
+  /// Commits lifted owners only after the complete value has validated.
   T withHandleLifting<T>(T Function() callback);
+
+  /// Restores host ownership if conversion or its memory store fails.
+  T withHandleLowering<T>(T Function() callback);
 
   /// Keeps loans and internal carriers alive through callback settlement.
   T withHandleCall<T>(
@@ -83,6 +92,14 @@ final class WASIComponentAsyncValueBindingSet
   @override
   Object liftReadableEndpoint(int componentTypeIndex, int handle) =>
       _type(componentTypeIndex).liftReadableEndpoint(handle);
+
+  @override
+  Object peekReadableEndpoint(int componentTypeIndex, int handle) =>
+      _type(componentTypeIndex).peekReadableEndpoint(handle);
+
+  @override
+  void rollbackReadableEndpoint(int handle) =>
+      _host.rollbackReadableEndpoint(handle);
 }
 
 /// Internal typed value conversion over the existing instance binding registry.
@@ -280,6 +297,30 @@ final class WASIComponentAsyncHost
       );
     }
     return valueType.liftReadableEndpoint(handle);
+  }
+
+  /// Validates a readable transfer without consuming its table entry.
+  @override
+  Object peekReadableEndpoint(int componentTypeIndex, int handle) {
+    final valueType = _valueTypes[componentTypeIndex];
+    if (valueType == null) {
+      throw StateError(
+        'Unknown WASI component async type index: $componentTypeIndex.',
+      );
+    }
+    return valueType.peekReadableEndpoint(handle);
+  }
+
+  /// Undoes an uncommitted readable registration without disposing its value.
+  @override
+  void rollbackReadableEndpoint(int handle) {
+    final value = table.canonicalValueOf(handle);
+    if (value is! WASIComponentReadableStream &&
+        value is! WASIComponentReadableFuture) {
+      throw StateError('Expected a readable endpoint registration.');
+    }
+    table.take(table.canonicalTypeOf(handle), handle);
+    _endpointWaitables.dropHandle(handle);
   }
 
   /// Defines a component `future<T>` type for [componentTypeIndex].
@@ -3033,7 +3074,7 @@ final class _RegisteredAsyncValueType<T> {
     }
   }
 
-  Object liftReadableEndpoint(int handle) {
+  Object peekReadableEndpoint(int handle) {
     _requireEndpointTransferable(handle);
     switch (kind) {
       case _WASIComponentAsyncValueKind.stream:
@@ -3049,6 +3090,11 @@ final class _RegisteredAsyncValueType<T> {
           (endpoint) => endpoint.requireCopyIdle(),
         );
     }
+    return table.canonicalValueOf(handle);
+  }
+
+  Object liftReadableEndpoint(int handle) {
+    peekReadableEndpoint(handle);
     final endpoint = switch (kind) {
       _WASIComponentAsyncValueKind.stream =>
         table.take<WASIComponentReadableStream<T>>(readableStreamType!, handle),
