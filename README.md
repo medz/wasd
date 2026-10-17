@@ -43,20 +43,20 @@ dependencies:
   wasd: ^0.5.2
 ```
 
-This preview is `0.6.0-dev.2`. The latest stable release is `0.5.2`, selected
+This preview is `0.6.0-dev.3`. The latest stable release is `0.5.2`, selected
 by the default installation above.
 
 To opt into the preview explicitly:
 
 ```bash
-dart pub add wasd:^0.6.0-dev.2
+dart pub add wasd:^0.6.0-dev.3
 ```
 
 Or use:
 
 ```yaml
 dependencies:
-  wasd: ^0.6.0-dev.2
+  wasd: ^0.6.0-dev.3
 ```
 
 The preview combines Dart VM [multi-memory opt-in](doc/core_features.md),
@@ -78,16 +78,16 @@ their original paths. It also exposed and fixed validation of multiple
 supertypes. See the [standards plan](doc/standards.md) for the `65,336` command
 result and its execution and public API coverage boundaries.
 
-The development checkout adds unreleased [synchronous Component map adapters](doc/component_maps.md).
+Version `0.6.0-dev.3` adds [synchronous Component map adapters](doc/component_maps.md).
 It also supports Component name attributes and named WIT interface bindings;
 see the [standards plan](doc/standards.md) for their scope.
-Its unreleased execution gate runs complete frozen Component string and numeric
+Its execution gate runs complete frozen Component string and numeric
 files through WASD, including nested scalar calls and strict invocation traps;
 these selected files do not establish full Component conformance.
-Unreleased WASI `0.3.1` contract and linking support retains `0.3.0` and adds
+Version `0.6.0-dev.3` adds WASI `0.3.1` contract and linking support alongside `0.3.0`, with
 versioned WIT calls plus command/service execution tests. The official 45-case
 suite remains a separate `0.3.0` compatibility gate.
-An unreleased Preview1 gate freezes all 72 official `wasm32-wasip1` cases and
+The Preview1 gate in `0.6.0-dev.3` freezes all 72 official `wasm32-wasip1` cases and
 verifies every fixture and runner input before execution. Native Linux/macOS
 results and Node/browser regressions remain separate acceptance profiles;
 see the [standards plan](doc/standards.md) for the uncovered syscall boundaries.
@@ -396,16 +396,16 @@ specification targets, implementation evidence, and remaining acceptance gates.
 
 | Runtime | Preview1 host | Preview2 runner | Preview3 runner | Filesystem model |
 | --- | --- | --- | --- | --- |
-| Dart VM | In-repo `wasi_snapshot_preview1`; 72 selected official `wasm32-wasip1` command modules | Stable WASI 0.2.12 command and HTTP proxy components | Stable WASI 0.3.0 command and HTTP service components | Real host preopens plus portable in-memory VFS |
+| Dart VM | In-repo `wasi_snapshot_preview1`; 72 selected official `wasm32-wasip1` command modules | Stable WASI 0.2.12 command and HTTP proxy components | Stable WASI 0.3.0 command/service components plus 0.3.1 contract/linking | Real host preopens plus portable in-memory VFS |
 | Node.js | In-repo `wasi_snapshot_preview1`, not `node:wasi` | Not supported | Not supported | Real host preopens plus portable in-memory VFS |
 | Browser JS | In-repo `wasi_snapshot_preview1` | Not supported | Not supported | Portable in-memory VFS |
 
 The Preview2 and Preview3 runners deliberately do not claim general Component
-Model execution. Preview3 support is limited to the frozen stable WASI 0.3.0
-contract; experimental proposal packages and features outside that contract
+Model execution. Preview3 support covers the frozen stable WASI 0.3.0
+contract and its 0.3.1 contract/linking extension; experimental proposal packages and features outside that contract
 remain out of scope.
 
-Unreleased Preview1 CPU-clock queries use host process/current OS thread CPU
+Preview1 CPU-clock queries in `0.6.0-dev.3` use host process/current OS thread CPU
 time on 64-bit Linux/macOS and the corresponding Node CPU API when available.
 Unsupported CPU clocks return `INVAL` without modifying guest output. These
 are host counters; they do not isolate CPU consumption per guest. CPU-clock

@@ -2,8 +2,8 @@
 
 This implementation and acceptance plan retains the historical `0.5.0`
 (`528b2b828f979d08ba1798f7e8e955e892ab052d`) baseline checked on 2026-10-01.
-Published acceptance evidence below applies to `0.6.0-dev.2`; paragraphs marked
-unreleased describe subsequent development work.
+Release evidence below identifies `0.6.0-dev.2` and the additions in
+`0.6.0-dev.3` separately. Historical results retain their original scope.
 A target in this document is not a support claim. Release support must be backed
 by WASD execution, validation, and host tests at the exact release commit.
 
@@ -58,13 +58,13 @@ public API, its feature selection, or other runtimes. The historical Component
 Model async gate retains its recorded `wasm-tools` `1.254.0` validator; the
 newer Core converter rejects the frozen draft's removed `cancellable` option.
 
-The unreleased Component `map` type and synchronous Canonical ABI adapter slice
+The `0.6.0-dev.3` Component `map` type and synchronous Canonical ABI adapter slice
 uses source `0220da84209397d9067c19cac83dae969aa85a7b`. Its binary validation,
 memory conversion, bound callbacks and WIT binding regressions are described in
 [Component map adapters](component_maps.md). This bounded gate is separate from
 general Component assertion execution and the historical async gate above.
 
-The same unreleased Component source also supplies `implements`, version suffix
+The same frozen Component source also supplies `implements`, version suffix
 and `external-id` name attributes. Imports, exports, type exports and inline
 exports preserve this metadata while linking and uniqueness use the external
 name. Modern binary name tags `0x00` and `0x01` both carry a plain name;
@@ -78,7 +78,7 @@ labels and resource identities. These checks do not establish general
 Component composition, executable direct world functions or complete WASI
 `0.3.1` adoption.
 
-The unreleased WASI `0.3.1` contract/linking slice uses source
+The `0.6.0-dev.3` WASI `0.3.1` contract/linking slice uses source
 `59e48bfe3fae9bf2480eb15abd8f55999eb3b395` and retains exact `0.3.0` support.
 It resolves six stable packages and eight worlds, reuses existing host
 implementations through exact versioned callback keys, and runs custom
@@ -89,7 +89,7 @@ Linux/macOS gate still uses `0.3.0` guests; it is compatibility evidence for
 that version, not an official `0.3.1` suite. General Component/async assertion
 execution and full package/world/platform acceptance remain open.
 
-The unreleased WASD Component execution gate covers two complete official
+The `0.6.0-dev.3` WASD Component execution gate covers two complete official
 files at source `0220da84209397d9067c19cac83dae969aa85a7b`:
 
 | File | Frozen Git blob | Commands |
@@ -122,7 +122,7 @@ file's lexical type aliases remain supported.
 
 ## Implementation and evidence matrix
 
-The unreleased Preview1 gate freezes official runner/source
+The `0.6.0-dev.3` Preview1 gate freezes official runner/source
 `6600796756adce3632409d7e207a9834c9d99ff8` and precompiled fixtures
 `c63d52e69316d1aa2c9e7db6251892775204e7e0` in
 `tool/wasi_preview1_contract.lock.json`. It verifies all 137 fixture inputs
@@ -144,7 +144,7 @@ This selected suite does not import `fd_datasync`, `fd_sync`, `proc_raise`,
 `sock_accept`, `sock_recv` or `sock_send`; `sock_shutdown` has error cases only.
 Successful inherited-socket operations, host sync/durability and process/thread
 CPU timers and guest-specific CPU accounting still need separate acceptance.
-The unreleased CPU-clock read fix uses existing libc `clock_gettime/getres`
+The `0.6.0-dev.3` CPU-clock read fix uses existing libc `clock_gettime/getres`
 on 64-bit Linux/macOS, with the correct OS clock IDs and measured resolution.
 Node uses capability-detected process/thread CPU APIs and preserves full u64
 nanosecond output. Missing, invalid or failed CPU APIs return `INVAL` without
@@ -159,9 +159,9 @@ neither profile executes these 72 official guests.
 | Core decoding and validation | Pure Dart decoder, predecoder, and validator under `lib/src/wasm/backend/native/interpreter/` | Fresh VM baseline: `260/260` official root WAST files, `65,212/65,212` commands, zero skips, at testsuite `193e551ff22663995b1ac95dc62344133669e14b`, using wasm-tools `1.254.0`. Enumerate newer specification deltas and public API feature selection |
 | Numeric, control, memory, table, reference, tail-call, SIMD, GC, exception, memory64/multiple-memory instructions | Interpreter paths exist; feature availability depends on the entrypoint/profile | Same root-suite baseline; it does not prove cross-platform parity, every valid type combination, or proposals outside that suite. GC `v128` data initialization was an uncovered gap in synchronous and forced async execution |
 | Threads and shared memory | Atomic/thread-related interpreter paths exist | Sequential instruction tests do not prove concurrent shared-memory, scheduling, or wait/notify behavior. Freeze an explicit threading profile and run real concurrency tests |
-| WASI Preview1 | VM host, in-repo Node host, browser shim and virtual filesystem | Historical unit/regression coverage; the unreleased pinned 72-case native gate above replaces the unpinned official report. Host syscall and platform boundaries remain open |
+| WASI Preview1 | VM host, in-repo Node host, browser shim and virtual filesystem | Historical unit/regression coverage; the `0.6.0-dev.3` pinned 72-case native gate above replaces the unpinned official report. Host syscall and platform boundaries remain open |
 | WASI Preview2 | VM command/proxy runners, synchronous Canonical ABI, WIT adapters and host interfaces for random, clocks, io, cli, filesystem, sockets, http | Focused conformance/toolchain tests exist. Audit all stable package exports and execution worlds. A command/proxy runner is not general Component Model execution |
-| WASI Preview3 0.3.0 | VM command/service runners, async Canonical ABI, stream/future/task/resource support; six-package/eight-world lock | Historical published `0.5.0` / `0.6.0-dev.1` baseline: `39/45` fixtures passed, with six native TCP failures. The `0.6.0-dev.2` acceptance gate records `45/45` passed and zero failed, skipped, xfailed or xpassed for the Linux/macOS native AOT profile, including same-socket TCP bind/listen/connect and monotonic clock deadline checks. `tool/wasi_preview3_contract.lock.json` records this gate. Upgrade to 0.3.1 with feature-level regressions |
+| WASI Preview3 0.3.0 | VM command/service runners, async Canonical ABI, stream/future/task/resource support; six-package/eight-world lock | Historical published `0.5.0` / `0.6.0-dev.1` baseline: `39/45` fixtures passed, with six native TCP failures. The `0.6.0-dev.2` acceptance gate records `45/45` passed and zero failed, skipped, xfailed or xpassed for the Linux/macOS native AOT profile, including same-socket TCP bind/listen/connect and monotonic clock deadline checks. `tool/wasi_preview3_contract.lock.json` records this gate. Version `0.6.0-dev.3` adds 0.3.1 contract/linking; complete package/world/platform acceptance remains open |
 | Component Model binary/WIT | Strict decoder and component/WIT/adapter machinery exist | Frozen historical async gate: WASD decode `37/37`, wasm-tools validation `31/31`, Wasmtime reference execution `31/31`. Only the first executes WASD code, and it only decodes. Add WASD assertion execution for general synchronous and async components |
 | Component Model composition | WASI runners support particular compositions and host bindings | Cover nested components, imports/exports, aliasing, types, resource ownership, canonical lift/lower, instantiation and failure semantics independently of WASI-specific runners |
 | Stable host capabilities | VM filesystem/network/HTTP adapters and browser/Node P1 adapters | Keep explicit capability contracts for platform-scoped TCP bind/listen, HTTP trailers, IPv6 metadata and filesystem race guarantees; never replace an unsupported operation with simulated success |
