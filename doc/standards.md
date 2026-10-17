@@ -89,24 +89,36 @@ Linux/macOS gate still uses `0.3.0` guests; it is compatibility evidence for
 that version, not an official `0.3.1` suite. General Component/async assertion
 execution and full package/world/platform acceptance remain open.
 
-The first unreleased WASD Component execution gate runs the complete official
-`test/values/strings.wast` at source
-`0220da84209397d9067c19cac83dae969aa85a7b`, Git blob
-`e96f54e97689a32ba70b05e12226e01b8dea024b`. It executes `17/17` commands:
-eight component instantiations, five exact string return assertions and four
-invocation trap assertions, with zero skips. The runner verifies the source
-hash, freshly converts it with pinned `wasm-tools` `1.262.0`, and executes the
-result through WASD's existing Dart interpreter and Canonical ABI adapters.
-The converter supplies inputs; it is not the execution engine.
+The unreleased WASD Component execution gate covers two complete official
+files at source `0220da84209397d9067c19cac83dae969aa85a7b`:
+
+| File | Frozen Git blob | Commands |
+| --- | --- | ---: |
+| `test/values/strings.wast` | `e96f54e97689a32ba70b05e12226e01b8dea024b` | 17 |
+| `test/values/numerics.wast` | `99fcbc03b0b352b29db247c90085ad0febbd3fe5` | 26 |
+
+The combined gate executes `43/43` commands: 17 actual component
+initializations, one definition registration, 18 exact return assertions and
+seven invocation trap assertions. The numeric file exercises integer narrowing,
+bool normalization, Unicode scalar validation, flags masking and nested calls
+with lexical outer type aliases. Every module instance starts fresh.
+Decode, link, lookup and ordinary host errors cannot satisfy invalid-char traps.
+The runner verifies independently pinned source hashes, freshly converts inputs
+with pinned `wasm-tools` `1.262.0`, and executes them through WASD's existing
+Dart interpreter and Canonical ABI adapters. The converter supplies inputs;
+it is not the execution engine.
 
 ```sh
-dart run tool/component_spec_runner.dart --output-json=build/component-strings.json
+dart run tool/component_spec_runner.dart --output-json=build/component-values.json
 ```
 
-Core CI runs this selected-file gate on both Dart SDKs. It remains separate
+Core CI runs these selected complete files on both Dart SDKs. This remains separate
 from the historical decode, external validation and reference-runtime results.
-General Component execution, nested executable composition, broader value
-codecs and a portable public instance API remain open requirements.
+General Component composition, additional value codecs, full async assertion
+execution and a portable public instance API remain open requirements.
+Nested Component starts and concrete local resource aliases are explicitly
+rejected before execution. Imported resource identities and the numeric
+file's lexical type aliases remain supported.
 
 ## Implementation and evidence matrix
 

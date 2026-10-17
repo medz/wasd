@@ -5,6 +5,7 @@ import 'dart:math' as math;
 
 import '../../../host_control_flow.dart';
 import 'int64.dart';
+import 'execution_error.dart';
 import 'memory.dart';
 import 'module.dart';
 import 'opcode.dart';
@@ -19,7 +20,7 @@ import 'value.dart';
 
 enum _LabelKind { block, loop, if_, tryLegacy }
 
-final class _ExecutionTrapContext implements Exception {
+final class _ExecutionTrapContext implements WasmExecutionErrorContext {
   _ExecutionTrapContext({
     required this.functionIndex,
     required this.programCounter,
@@ -30,6 +31,7 @@ final class _ExecutionTrapContext implements Exception {
   final int functionIndex;
   final int programCounter;
   final int opcode;
+  @override
   final Object cause;
 
   @override
