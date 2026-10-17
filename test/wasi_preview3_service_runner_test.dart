@@ -41,9 +41,10 @@ void main() {
           await result.value!.completeTransmission(
             const WASIPreview3HttpResult<void>.ok(null),
           );
-          await Future<void>.delayed(Duration.zero);
+          await runner.settle();
           expect(host.componentHost.table.activeCount, baseline);
         }
+        await runner.dispose();
       },
     );
 
@@ -91,7 +92,8 @@ void main() {
                 _versionedServiceWat(exports: exports),
               );
               final host = WASIPreview3ComponentHost();
-              final result = await WASIPreview3ServiceRunner(host).handle(
+              final runner = WASIPreview3ServiceRunner(host);
+              final result = await runner.handle(
                 component,
                 WASIPreview3HttpRequest.noTrailers(
                   headers: WASIPreview3HttpFields(),
@@ -102,8 +104,9 @@ void main() {
               await result.value!.completeTransmission(
                 const WASIPreview3HttpResult<void>.ok(null),
               );
-              await Future<void>.delayed(Duration.zero);
+              await runner.settle();
               expect(host.componentHost.table.activeCount, 0);
+              await runner.dispose();
             }
           },
         );

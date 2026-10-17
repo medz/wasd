@@ -211,17 +211,23 @@ void main() {
       expect(response.response?.value?.statusCode, 200);
     });
 
-    test('Preview3 snippets use and close the public hosts', () {
+    test('Preview3 snippets use and close the public hosts', () async {
       final host = WASI.preview3(args: const ['app.component.wasm']);
+      final serviceRunner = WASIPreview3ServiceRunner(host);
       try {
         expect(WASIPreview3CommandRunner(host).host, same(host));
-        expect(WASIPreview3ServiceRunner(host).host, same(host));
+        expect(serviceRunner.host, same(host));
+        await serviceRunner.settle();
         final request = WASIPreview3HttpRequest.noTrailers(
           headers: WASIPreview3HttpFields(),
         )..pathWithQuery = '/';
         expect(request.pathWithQuery, '/');
       } finally {
-        host.close(force: true);
+        try {
+          await serviceRunner.dispose();
+        } finally {
+          host.close(force: true);
+        }
       }
     });
   });

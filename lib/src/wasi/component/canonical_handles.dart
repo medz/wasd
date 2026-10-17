@@ -230,6 +230,42 @@ final class WASIComponentCanonicalHandles
     return guest;
   }
 
+  void validateHostArguments(
+    int canonicalIndex,
+    WASIComponentCanonicalAdapterPlan plan,
+    List<Object?> args,
+  ) {
+    final check = _PayloadHandleBindings(
+      this,
+      (index) => adapterResourceIdentity(canonicalIndex, index),
+      _PayloadMode.checkLower,
+    );
+    for (var index = 0; index < plan.params.length; index++) {
+      final param = plan.params[index];
+      if (param.resourceUses.isEmpty &&
+          !WASIComponentCanonicalLowerExecution.containsHandles(
+            param.flatLayout,
+          )) {
+        continue;
+      }
+      lowerWASIComponentCanonicalMemoryHandles(
+        param.flatLayout!,
+        args[index],
+        check,
+      );
+    }
+  }
+
+  void requireNoCallBorrows() {
+    final scope =
+        Zone.current[_callKey] as WASIComponentCanonicalBorrowCallScope?;
+    if (scope != null && scope.activeBorrows != 0) {
+      throw StateError(
+        'Component task cannot resolve with active canonical borrows.',
+      );
+    }
+  }
+
   @override
   T withHandleCall<T>(
     T Function() callback, {
@@ -570,15 +606,17 @@ final class WASIComponentCanonicalHandles
     int? canonicalIndex,
   }) {
     final type = _type(index, backing, canonicalIndex);
-    if (!owned && !table.canonicalIsBorrow(backing)) {
-      final scope =
-          Zone.current[_callKey] as WASIComponentCanonicalBorrowCallScope?;
-      if (scope == null) throw StateError('No active canonical borrow call.');
-      backing = scope.lowerHandle(backing);
-    }
     if (!owned &&
         identical(_identity(index, canonicalIndex).implementor, this)) {
       return table.resourceRep(type, backing) as int;
+    }
+    if (!owned) {
+      final scope =
+          Zone.current[_callKey] as WASIComponentCanonicalBorrowCallScope?;
+      if (scope == null) throw StateError('No active canonical borrow call.');
+      // The callee owns a distinct alias even when its caller supplied a loan.
+      // Dropping it must neither consume nor resolve the caller's lender.
+      backing = scope.lowerHandle(backing);
     }
     if (owned) table.canonicalRequireOwned(backing);
     return _installLowered(backing, WASIComponentCanonicalHandleKind.resource);
@@ -773,6 +811,7 @@ final class _PayloadHandleBindings
   final WASIComponentCanonicalResourceIdentity Function(int index) identity;
   final _PayloadMode mode;
   final Set<int> seen = {};
+  Set<Object>? _seenReadableEndpoints;
   final List<int> created = [];
   Object? _discardError;
   StackTrace? _discardStackTrace;
@@ -833,7 +872,11 @@ final class _PayloadHandleBindings
     String? path,
   }) {
     if (!owned) {
-      throw StateError('Canonical async payload cannot borrow a resource.');
+      if (mode != _PayloadMode.checkLower) {
+        throw StateError('Canonical async payload cannot borrow a resource.');
+      }
+      _type(index, backing);
+      return backing;
     }
     if (mode == _PayloadMode.discard) {
       _discard(() {
@@ -874,6 +917,10 @@ final class _PayloadHandleBindings
       throw StateError('Unsupported async payload handle.');
   @override
   int lowerErrorContextHandle(int handle) {
+    if (mode == _PayloadMode.checkLower) {
+      owner.errorContexts.debugMessage(handle);
+      return handle;
+    }
     if (mode != _PayloadMode.discard) {
       throw StateError('Unsupported async payload handle.');
     }
@@ -885,6 +932,26 @@ final class _PayloadHandleBindings
 
   @override
   int lowerReadableEndpoint(int index, Object endpoint) {
+    if (mode == _PayloadMode.checkLower) {
+      final readable = switch (endpoint) {
+        WASIComponentStream() => endpoint.readable,
+        WASIComponentFuture() => endpoint.readable,
+        WASIComponentReadableStream() ||
+        WASIComponentReadableFuture() => endpoint,
+        _ => throw StateError('Expected an owned readable endpoint argument.'),
+      };
+      if (_ownedReadableEndpoints[readable] == true) {
+        throw StateError(
+          'Readable endpoint is already owned by a component instance.',
+        );
+      }
+      if (!(_seenReadableEndpoints ??= Set<Object>.identity()).add(readable)) {
+        throw StateError(
+          'Canonical arguments repeat an owned readable endpoint.',
+        );
+      }
+      return 0;
+    }
     if (mode != _PayloadMode.discard) {
       throw StateError('Unsupported nested async payload.');
     }

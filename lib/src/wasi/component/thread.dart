@@ -1,6 +1,7 @@
 import '../../wasm/backend/native/interpreter/component.dart';
 import 'context.dart';
 import 'current.dart';
+import 'execution.dart';
 import 'waitable_set.dart';
 
 const int _maxU32 = 0xffffffff;
@@ -113,7 +114,7 @@ final class WASIComponentThreadHost {
     if (cancellable && (_waitableHost?.deliverTaskCancellation() ?? false)) {
       return 1;
     }
-    await Future<void>.delayed(Duration.zero);
+    await WASIComponentGuestCall.suspend(Future<void>.delayed(Duration.zero));
     if (cancellable && (_waitableHost?.deliverTaskCancellation() ?? false)) {
       return 1;
     }

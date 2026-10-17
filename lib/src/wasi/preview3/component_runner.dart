@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../preview2/component_runner.dart';
 import 'component_host.dart';
@@ -44,6 +46,8 @@ final class WASIPreview3ServiceRunner {
 
   WasmComponent? _component;
   WASIComponentNativeRuntime? _runtime;
+  final _runtimes = <WASIComponentNativeRuntime>[];
+  bool _disposed = false;
 
   /// Instantiates [component] and invokes its exported async HTTP handler for
   /// [request].
@@ -51,6 +55,7 @@ final class WASIPreview3ServiceRunner {
     WasmComponent component,
     WASIPreview3HttpRequest request,
   ) async {
+    if (_disposed) throw StateError('Preview3 service runner is disposed.');
     try {
       if (!identical(_component, component)) {
         _component = component;
@@ -58,10 +63,38 @@ final class WASIPreview3ServiceRunner {
           component: component,
           host: host,
         );
+        _runtimes.add(_runtime!);
       }
       return await _runtime!.handlePreview3Service(request);
     } on WASIPreview2ComponentExecutionException catch (error) {
       throw WASIPreview3ComponentExecutionException(error.message);
+    }
+  }
+
+  /// Observes guest bodies after response streams have been consumed.
+  Future<void> settle() async {
+    final snapshot = _runtimes.toList(growable: false);
+    await Future.wait(
+      snapshot.map((runtime) async {
+        await runtime.settle();
+        if (!identical(runtime, _runtime)) {
+          await runtime.dispose();
+          _runtimes.remove(runtime);
+        }
+      }),
+      eagerError: true,
+    );
+  }
+
+  /// Aborts all retained component instances, including replaced handlers.
+  Future<void> dispose() async {
+    _disposed = true;
+    try {
+      await Future.wait(_runtimes.map((runtime) => runtime.dispose()));
+    } finally {
+      _runtimes.clear();
+      _runtime = null;
+      _component = null;
     }
   }
 }

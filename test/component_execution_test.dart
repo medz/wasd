@@ -8,100 +8,894 @@ import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:wasd/src/wasi/preview2/component_runner.dart';
 import 'package:wasd/src/wasi/component/unicode_scalar.dart';
+import 'package:wasd/src/wasi/component/resource_table.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/execution_error.dart';
 import 'package:wasd/wasi.dart';
 import 'package:wasd/wasm.dart' hide Exception;
 
 void main() {
-  for (final (nested, fails) in [
-    (false, false),
-    (false, true),
-    (true, false),
-    (true, true),
-  ]) {
+  for (final dropBorrow in [false, true]) {
     test(
-      'cancelled error-context call retains arguments until settlement nested=$nested fails=$fails',
+      'continuation callback WAIT cancellation checks real borrow drop=$dropBorrow',
       () async {
         final component = await _encodeComponent(
-          _canonicalErrorContextCancellation(fails, nested),
+          _callbackCancellation(dropBorrow: dropBorrow),
           validate: true,
         );
-        expect(component.validate(), isEmpty);
         final host = WASIComponentHost();
-        var observed = 0;
-        var length = -1;
-        late int earlyPoll;
-        late int earlyCarriers;
-        late int finalPoll;
-        late int eventState;
-        List<int> carriers() => [
-          for (var h = 1; h <= 32; h++)
-            if (_errorContextMessage(host, h) == 'kept') h,
-        ];
+        var drops = 0;
+        final resource = host.canonicalHost.resourceHost
+            .defineResourceType<int>(0, 'r', onDrop: (_) => drops++);
         await host.table.runScoped(() async {
-          final pressure = host.canonicalHost.asyncHost.backpressure;
-          pressure.increment();
+          final owner = host.table.insert(resource, 7);
+          final runtime = WASIComponentNativeRuntime.component(
+            component: component,
+            host: host,
+          );
+          expect(await runtime.invokeExport('begin', [owner]), 33);
+          _expectHostOwnerLent(host, 7);
+          expect(
+            await runtime.invokeExport('cancel', []),
+            wasiComponentSubtaskBlocked,
+          );
+          if (dropBorrow) {
+            await runtime.settle();
+            _expectHostOwnerLent(host, 7);
+            expect(
+              drops,
+              0,
+              reason: 'lender survives resolution before final event delivery',
+            );
+            expect(await runtime.invokeExport('poll', []), 1);
+            expect(await runtime.invokeExport('event-state', []), 4);
+            expect(
+              () => host.table.canonicalRequireReleasable(owner),
+              returnsNormally,
+            );
+            await runtime.invokeExport('finish', []);
+            expect(drops, 1);
+            expect(host.table.activeCount, 0);
+            await runtime.dispose();
+          } else {
+            Object? first;
+            try {
+              await runtime.settle();
+            } catch (error) {
+              first = error;
+            }
+            expect(first.toString(), contains('borrows'));
+            await expectLater(
+              runtime.invokeExport('poll', []),
+              throwsA(same(first)),
+            );
+            await expectLater(runtime.dispose(), throwsA(same(first)));
+            expect(_hostIntOwners(host).map((entry) => entry.$2), [7]);
+            expect(drops, 0);
+          }
+        });
+        expect(drops, 1);
+        expect(host.table.activeCount, 0);
+      },
+    );
+  }
+
+  for (final preview3 in [false, true]) {
+    test(
+      'continuation HTTP ${preview3 ? 'service observes late trap' : 'proxy retains successful and failed requests'}',
+      () async {
+        final trapped = await _encodeComponent(
+          _httpContinuation(preview3: preview3, pending: false),
+        );
+        final pending = await _encodeComponent(
+          _httpContinuation(preview3: preview3, pending: true),
+        );
+        Future<void> checkOwner(
+          Future<void> Function() settle,
+          Future<void> Function() dispose,
+        ) async {
+          Object? original;
+          try {
+            await settle();
+          } catch (error) {
+            original = error;
+          }
+          expect(original, isA<WasmExecutionErrorContext>());
+          expect(original.toString(), contains('unreachable'));
+          await expectLater(
+            dispose().timeout(const Duration(seconds: 1)),
+            throwsA(same(original)),
+          );
+        }
+
+        await (() async {
+          if (preview3) {
+            final host = WASIPreview3ComponentHost();
+            final runner = WASIPreview3ServiceRunner(host);
+            for (final component in [trapped, pending]) {
+              final response = await runner.handle(
+                component,
+                WASIPreview3HttpRequest.noTrailers(
+                  headers: WASIPreview3HttpFields(),
+                ),
+              );
+              expect(response.isOk, isTrue);
+              expect(response.value!.statusCode, 204);
+              await response.value!.completeTransmission(
+                const WASIPreview3HttpResult<void>.ok(null),
+              );
+            }
+            await checkOwner(runner.settle, runner.dispose);
+            expect(host.componentHost.table.activeCount, 0);
+          } else {
+            final host = WASIPreview2ComponentHost();
+            final runner = WASIPreview2ProxyRunner(host);
+            for (var request = 0; request < 3; request++) {
+              final out = await runner.handle(
+                pending,
+                WASIPreview2HttpIncomingRequest(
+                  method: const WASIPreview2HttpMethod.standard('get'),
+                  headers: WASIPreview2HttpFields(),
+                ),
+              );
+              expect(out.response!.isOk, isTrue);
+              expect(out.response!.value!.statusCode, 200);
+              expect(host.componentHost.table.activeCount, 0);
+            }
+            Object? original;
+            try {
+              await runner.handle(
+                trapped,
+                WASIPreview2HttpIncomingRequest(
+                  method: const WASIPreview2HttpMethod.standard('get'),
+                  headers: WASIPreview2HttpFields(),
+                ),
+              );
+            } catch (error) {
+              original = error;
+            }
+            expect(original, isA<WasmExecutionErrorContext>());
+            expect(host.componentHost.table.activeCount, 0);
+          }
+        })();
+      },
+    );
+  }
+
+  test(
+    'continuation dispose owns async copy after its guest body exits',
+    () async {
+      final source = _postTaskStreamCopy(write: true, immediate: false)
+          .replaceFirst(
+            '(canon stream.write \$s ',
+            '(canon stream.write \$s async ',
+          );
+      final component = await _encodeComponent(source, validate: true);
+      final host = WASIComponentHost();
+      await host.table.runScoped(() async {
+        final runtime = WASIComponentNativeRuntime.component(
+          component: component,
+          host: host,
+          imports: {'entered': (_) => null},
+        );
+        expect(await runtime.invokeExport('run', []), 42);
+        await runtime.dispose();
+      });
+      expect(host.table.activeCount, 0);
+    },
+  );
+
+  for (final trap in [false, true]) {
+    test(
+      'continuation abort retains synchronous opaque host loan until settlement trap=$trap',
+      () async {
+        final component = await _encodeComponent(r'''
+(component
+ (import "r" (type $r (sub resource)))
+ (import "hold" (func $hold (param "loan" (borrow $r)) (result u32)))
+ (core func $hold (canon lower (func $hold)))
+ (core module $m
+  (import "h" "hold" (func $hold (param i32) (result i32)))
+  (func (export "crash") unreachable)
+  (func (export "run") (param i32) (result i32) local.get 0 call $hold))
+ (core instance $h (export "hold" (func $hold)))
+ (core instance $m (instantiate $m (with "h" (instance $h))))
+ (func (export "crash") (canon lift (core func $m "crash")))
+ (func (export "run") (param "loan" (borrow $r)) (result u32) (canon lift (core func $m "run"))))
+''', validate: true);
+        final host = WASIComponentHost();
+        final resource = host.canonicalHost.resourceHost
+            .defineResourceType<int>(0, 'r');
+        final entered = Completer<void>();
+        final release = Completer<void>();
+        var loan = 0;
+        var liveAtReturn = false;
+        await host.table.runScoped(() async {
+          final owner = host.table.insert(resource, 7);
           final runtime = WASIComponentNativeRuntime.component(
             component: component,
             host: host,
             imports: {
-              'observed': (args) {
-                observed++;
-                length = args.single as int;
-                return null;
+              'hold': (args) async {
+                loan = args.single as int;
+                entered.complete();
+                await release.future;
+                liveAtReturn = host.table.contains(loan);
+                return 42;
               },
             },
           );
-          try {
-            expect(await runtime.invokeExport('begin', []), 33);
-            expect(carriers(), hasLength(2));
-            expect(
-              await runtime.invokeExport('cancel', []),
-              wasiComponentSubtaskBlocked,
-            );
-            await Future<void>.delayed(Duration.zero);
-            earlyPoll = await runtime.invokeExport('poll', []) as int;
-            earlyCarriers = carriers().length;
-            pressure.decrement();
-            for (var i = 0; i < 100; i++) {
-              final waitables = [
-                for (var h = 1; h <= 32; h++)
-                  ?host.canonicalHost.subtaskHost.waitableForHandle(h),
-              ];
-              if (waitables.single.hasPendingEvent) break;
-              await Future<void>.delayed(const Duration(milliseconds: 1));
+          final invocation = runtime.invokeExport('run', [owner]);
+          Object? invocationError;
+          final failed = invocation.then<void>(
+            (_) => fail('aborted invocation returned a result'),
+            onError: (Object error) {
+              invocationError = error;
+            },
+          );
+          await entered.future;
+          Object? original;
+          if (trap) {
+            try {
+              await runtime.invokeExport('crash', []);
+            } catch (error) {
+              original = error;
             }
-            finalPoll = await runtime.invokeExport('poll', []) as int;
-            eventState = await runtime.invokeExport('event-state', []) as int;
-            await runtime.invokeExport('finish', []);
-            await runtime.invokeExport('drop-source', []);
-          } finally {
-            if (pressure.isActive) pressure.decrement();
-            await Future<void>.delayed(Duration.zero);
+            expect(original, isA<WasmExecutionErrorContext>());
           }
+          final disposing = trap
+              ? expectLater(runtime.dispose(), throwsA(same(original)))
+              : runtime.dispose();
+          try {
+            await Future<void>.delayed(Duration.zero);
+            expect(host.table.contains(loan), isTrue);
+            expect(host.table.get(resource, loan), 7);
+          } finally {
+            release.complete();
+            await failed;
+            await disposing;
+          }
+          if (trap) {
+            expect(invocationError, same(original));
+          }
+          expect(liveAtReturn, isTrue);
+          expect(host.table.activeCount, 1);
+          host.table.drop(resource, owner);
         });
-        expect(
-          {
-            'earlyPoll': earlyPoll,
-            'earlyCarriers': earlyCarriers,
-            'observed': observed,
-            'length': length,
-            'finalPoll': finalPoll,
-            'eventState': eventState,
-            'active': host.table.activeCount,
-          },
-          {
-            'earlyPoll': 0,
-            'earlyCarriers': 2,
-            'observed': 1,
-            'length': 4,
-            'finalPoll': 1,
-            'eventState': 4,
-            'active': 0,
-          },
-        );
       },
     );
+  }
+
+  for (final mismatch in ['result', 'memory', 'encoding', 'sync']) {
+    test(
+      'continuation task.return rejects mismatched $mismatch lift',
+      () async {
+        final component = await _encodeComponent('''
+(component
+ (core module \$memory (memory (export "mem") 1))
+ (core instance \$a (instantiate \$memory))
+ (core instance \$b (instantiate \$memory))
+ (core func \$return (canon task.return (result ${mismatch == 'result' ? 's32' : 'u32'})
+  ${mismatch == 'memory' ? '(memory (core memory \$b "mem"))' : ''}
+  ${mismatch == 'encoding' ? 'string-encoding=utf16' : ''}))
+ (core module \$m
+  (import "h" "return" (func \$return (param i32)))
+  (func (export "run") (result i32) i32.const 42 call \$return i32.const 0)
+  (func (export "callback") (param i32 i32 i32) (result i32) unreachable))
+ (core instance \$h (export "return" (func \$return)))
+ (core instance \$m (instantiate \$m (with "h" (instance \$h))))
+ (func (export "run") ${mismatch == 'sync' ? '' : 'async'} (result u32)
+  (canon lift (core func \$m "run")
+   ${mismatch == 'sync' ? '' : 'async (callback (core func \$m "callback"))'}
+   ${mismatch == 'memory' ? '(memory (core memory \$a "mem"))' : ''})))
+''', validate: true);
+        final runtime = WASIComponentNativeRuntime.component(
+          component: component,
+          host: WASIComponentHost(),
+        );
+        await expectLater(
+          runtime.invokeExport('run', []),
+          throwsA(
+            predicate(
+              (error) => error.toString().contains('task.return'),
+              'task.return guard trap',
+            ),
+          ),
+        );
+        await expectLater(runtime.dispose(), throwsA(anything));
+      },
+    );
+  }
+
+  for (final dropBeforeReturn in [false, true]) {
+    for (final borrowedSource in [false, true]) {
+      test(
+        'continuation task.return checks live callee borrow drop=$dropBeforeReturn alias=$borrowedSource',
+        () async {
+          final component = await _encodeComponent('''
+(component
+ (import "r" (type \$r (sub resource)))
+ (core func \$drop (canon resource.drop \$r))
+ (core func \$return (canon task.return (result u32)))
+ (core module \$m
+  (import "h" "drop" (func \$drop (param i32)))
+  (import "h" "return" (func \$return (param i32)))
+  (func (export "run") (param i32) (result i32)
+   ${dropBeforeReturn ? 'local.get 0 call \$drop' : ''}
+   i32.const 42 call \$return i32.const 0)
+  (func (export "callback") (param i32 i32 i32) (result i32) unreachable))
+ (core instance \$h (export "drop" (func \$drop)) (export "return" (func \$return)))
+ (core instance \$m (instantiate \$m (with "h" (instance \$h))))
+ (func (export "run") async (param "loan" (borrow \$r)) (result u32)
+  (canon lift (core func \$m "run") async (callback (core func \$m "callback")))))
+''', validate: true);
+          final host = WASIComponentHost();
+          var drops = 0;
+          final resource = host.canonicalHost.resourceHost
+              .defineResourceType<int>(0, 'r', onDrop: (_) => drops++);
+          await host.table.runScoped(() async {
+            final owner = host.table.insert(resource, 7);
+            final lender = host.table.createBorrowCallScope();
+            final source = borrowedSource ? lender.lowerHandle(owner) : owner;
+            final runtime = WASIComponentNativeRuntime.component(
+              component: component,
+              host: host,
+            );
+            if (dropBeforeReturn) {
+              expect(await runtime.invokeExport('run', [source]), 42);
+              await runtime.dispose();
+            } else {
+              await expectLater(
+                runtime.invokeExport('run', [source]),
+                throwsA(anything),
+              );
+              await expectLater(runtime.dispose(), throwsA(anything));
+            }
+            expect(
+              host.table.contains(source),
+              isTrue,
+              reason: 'callee cannot consume the caller loan',
+            );
+            lender.close();
+            expect(host.table.activeCount, 1);
+            expect(host.table.get(resource, owner), 7);
+            expect(drops, 0);
+            host.table.drop(resource, owner);
+            expect(drops, 1);
+          });
+        },
+      );
+    }
+  }
+
+  test('continuation host wait admits another invocation', () async {
+    final component = await _encodeComponent(r'''
+(component
+ (import "hold" (func $hold (result u32)))
+ (core func $hold (canon lower (func $hold)))
+ (core module $m
+  (import "h" "hold" (func $hold (result i32)))
+  (func (export "run") (result i32) call $hold)
+  (func (export "ping") (result i32) i32.const 42))
+ (core instance $h (export "hold" (func $hold)))
+ (core instance $m (instantiate $m (with "h" (instance $h))))
+ (func (export "run") (result u32) (canon lift (core func $m "run")))
+ (func (export "ping") (result u32) (canon lift (core func $m "ping"))))
+''');
+    final host = WASIComponentHost();
+    final entered = Completer<void>();
+    final hold = Completer<Object?>();
+    final runtime = WASIComponentNativeRuntime.component(
+      component: component,
+      host: host,
+      imports: {
+        'hold': (_) {
+          entered.complete();
+          return hold.future;
+        },
+      },
+    );
+    final running = runtime.invokeExport('run', []);
+    await entered.future;
+    final ping = runtime.invokeExport('ping', []);
+    try {
+      expect(await ping.timeout(const Duration(milliseconds: 100)), 42);
+    } finally {
+      hold.complete(7);
+      expect(await running, 7);
+      await ping;
+      await runtime.dispose();
+    }
+  });
+
+  test(
+    'continuation synchronous Component trap locks only its store',
+    () async {
+      final component = await _encodeComponent(r'''
+        (component
+          (core module $m
+            (func (export "probe") (param i32) (result i32)
+              local.get 0 if unreachable end i32.const 42))
+          (core instance $m (instantiate $m))
+          (func (export "probe") (param "trap" u32) (result u32)
+            (canon lift (core func $m "probe"))))
+    ''', validate: true);
+      final host = WASIComponentHost();
+      final failed = WASIComponentNativeRuntime.component(
+        component: component,
+        host: host,
+      );
+      Object? original;
+      try {
+        await failed.invokeExport('probe', [1]);
+      } catch (error) {
+        original = error;
+      }
+      expect(original, isA<WasmExecutionErrorContext>());
+      await expectLater(
+        failed.invokeExport('probe', [0]),
+        throwsA(same(original)),
+      );
+      final independent = WASIComponentNativeRuntime.component(
+        component: component,
+        host: host,
+      );
+      expect(await independent.invokeExport('probe', [0]), 42);
+      await independent.dispose();
+      await expectLater(failed.settle(), throwsA(same(original)));
+      await expectLater(failed.dispose(), throwsA(same(original)));
+    },
+  );
+
+  for (final kind in ['stream', 'future']) {
+    for (final nested in [false, true]) {
+      for (final repeated in [false, true]) {
+        test(
+          'continuation host $kind ownership preflight nested=$nested repeated=$repeated',
+          () async {
+            final component = await _encodeComponent('''
+(component
+  (type \$value ($kind u32))
+  (type \$pair (tuple \$value \$value))
+  (core func \$drop (canon $kind.drop-readable \$value))
+  (core module \$m
+    (import "h" "drop" (func \$drop (param i32)))
+    (global \$first (mut i32) (i32.const 0))
+    (global \$second (mut i32) (i32.const 0))
+    (global \$entries (mut i32) (i32.const 0))
+    (func \$enter global.get \$entries i32.const 1 i32.add global.set \$entries)
+    (func (export "hold") (param i32) (result i32)
+      call \$enter local.get 0 global.set \$first i32.const 42)
+    (func (export "take") (param i32 i32) (result i32)
+      call \$enter local.get 0 global.set \$first local.get 1 global.set \$second i32.const 42)
+    (func (export "release") global.get \$first call \$drop)
+    (func (export "release-pair") global.get \$first call \$drop global.get \$second call \$drop)
+    (func (export "ping") (result i32) i32.const 42)
+    (func (export "entries") (result i32) global.get \$entries))
+  (core instance \$h (export "drop" (func \$drop)))
+  (core instance \$m (instantiate \$m (with "h" (instance \$h))))
+  (func (export "hold") (param "value" \$value) (result u32) (canon lift (core func \$m "hold")))
+  (func (export "take") ${nested ? r'(param "pair" $pair)' : r'(param "first" $value) (param "second" $value)'} (result u32)
+    (canon lift (core func \$m "take")))
+  (func (export "release") (canon lift (core func \$m "release")))
+  (func (export "release-pair") (canon lift (core func \$m "release-pair")))
+  (func (export "ping") (result u32) (canon lift (core func \$m "ping")))
+  (func (export "entries") (result u32) (canon lift (core func \$m "entries"))))
+''', validate: true);
+            final host = WASIComponentHost();
+            var dropped = 0;
+            final channels = <Object>[
+              for (var index = 0; index < 2; index++)
+                kind == 'stream'
+                    ? WASIComponentStream<Object?>(
+                        'host$index',
+                        onDrop: () => dropped++,
+                      )
+                    : WASIComponentFuture<Object?>(
+                        'host$index',
+                        onDrop: () => dropped++,
+                      ),
+            ];
+            Object readable(Object channel) => switch (channel) {
+              WASIComponentStream() => channel.readable,
+              WASIComponentFuture() => channel.readable,
+              _ => throw StateError('not a channel'),
+            };
+            final first = readable(channels.first);
+            final second = readable(channels.last);
+            List<Object?> pair(Object first, Object second) => nested
+                ? [
+                    WasmComponentValueData(
+                      kind: WasmComponentValueDataKind.tuple,
+                      rawBytes: Uint8List(0),
+                      runtimeItems: [first, second],
+                    ),
+                  ]
+                : [first, second];
+            await host.table.runScoped(() async {
+              final runtime = WASIComponentNativeRuntime.component(
+                component: component,
+                host: host,
+              );
+              if (repeated) {
+                expect(await runtime.invokeExport('hold', [first]), 42);
+              }
+              await expectLater(
+                runtime.invokeExport(
+                  repeated ? 'hold' : 'take',
+                  repeated ? [first] : pair(first, first),
+                ),
+                throwsA(isA<StateError>()),
+              );
+              expect(await runtime.invokeExport('ping', []), 42);
+              expect(
+                await runtime.invokeExport('entries', []),
+                repeated ? 1 : 0,
+                reason: 'rejected host transfers never enter the guest',
+              );
+              expect(
+                host.table.activeCount,
+                repeated ? 1 : 0,
+                reason: 'preflight does not register or move endpoints',
+              );
+              if (repeated) {
+                await runtime.invokeExport('release', []);
+                expect(host.table.activeCount, 0);
+                // A freshly created pair still transfers into the same runtime.
+                channels.add(
+                  kind == 'stream'
+                      ? WASIComponentStream<Object?>(
+                          'replacement',
+                          onDrop: () => dropped++,
+                        )
+                      : WASIComponentFuture<Object?>(
+                          'replacement',
+                          onDrop: () => dropped++,
+                        ),
+                );
+              }
+              final freshFirst = repeated ? readable(channels.last) : first;
+              expect(
+                await runtime.invokeExport('take', pair(freshFirst, second)),
+                42,
+              );
+              expect(
+                await runtime.invokeExport('entries', []),
+                repeated ? 2 : 1,
+              );
+              expect(host.table.activeCount, 2);
+              await runtime.invokeExport('release-pair', []);
+              await runtime.dispose();
+              expect(host.table.activeCount, 0);
+            });
+            for (final channel in channels) {
+              switch (channel) {
+                case WASIComponentStream():
+                  channel.writable.dispose();
+                case WASIComponentFuture():
+                  channel.writable.dispose();
+              }
+            }
+            expect(dropped, channels.length);
+          },
+        );
+      }
+    }
+  }
+
+  for (final nested in [false, true]) {
+    test(
+      'continuation invalid host error-context token is recoverable nested=$nested',
+      () async {
+        final component = await _encodeComponent('''
+(component
+  (type \$context error-context)
+  (type \$errors (tuple \$context))
+  (core func \$drop (canon error-context.drop))
+  (core module \$m
+    (import "h" "drop" (func \$drop (param i32)))
+    (global \$entries (mut i32) (i32.const 0))
+    (func (export "use") (param i32) (result i32)
+      global.get \$entries i32.const 1 i32.add global.set \$entries
+      local.get 0 call \$drop i32.const 42)
+    (func (export "ping") (result i32) i32.const 42)
+    (func (export "entries") (result i32) global.get \$entries))
+  (core instance \$h (export "drop" (func \$drop)))
+  (core instance \$m (instantiate \$m (with "h" (instance \$h))))
+  (func (export "use") (param "error" ${nested ? r'$errors' : 'error-context'}) (result u32)
+    (canon lift (core func \$m "use")))
+  (func (export "ping") (result u32) (canon lift (core func \$m "ping")))
+  (func (export "entries") (result u32) (canon lift (core func \$m "entries"))))
+''', validate: true);
+        final host = WASIComponentHost();
+        final errors = host.canonicalHost.errorContextHost;
+        await host.table.runScoped(() async {
+          final kept = errors.create('kept');
+          final stale = errors.create('stale');
+          errors.drop(stale);
+          final runtime = WASIComponentNativeRuntime.component(
+            component: component,
+            host: host,
+          );
+          List<Object?> args(int handle) => [
+            nested
+                ? WasmComponentValueData(
+                    kind: WasmComponentValueDataKind.tuple,
+                    rawBytes: Uint8List(0),
+                    items: [
+                      WasmComponentValueData(
+                        kind: WasmComponentValueDataKind.integer,
+                        rawBytes: Uint8List(0),
+                        integer: handle,
+                      ),
+                    ],
+                  )
+                : handle,
+          ];
+          expect(await runtime.invokeExport('use', args(kept)), 42);
+          expect(await runtime.invokeExport('entries', []), 1);
+          for (final invalid in [0, stale]) {
+            await expectLater(
+              runtime.invokeExport('use', args(invalid)),
+              throwsA(isA<StateError>()),
+            );
+            expect(await runtime.invokeExport('ping', []), 42);
+            expect(
+              await runtime.invokeExport('entries', []),
+              1,
+              reason: 'invalid host tokens never enter the guest',
+            );
+            expect(errors.debugMessage(kept), 'kept');
+            expect(
+              host.table.activeCount,
+              1,
+              reason: 'preflight neither copies nor consumes error references',
+            );
+          }
+          expect(await runtime.invokeExport('use', args(kept)), 42);
+          expect(await runtime.invokeExport('entries', []), 2);
+          expect(errors.debugMessage(kept), 'kept');
+          expect(host.table.activeCount, 1);
+          await runtime.dispose();
+          errors.drop(kept);
+        });
+        expect(host.table.activeCount, 0);
+      },
+    );
+  }
+
+  test(
+    'continuation embedding argument error leaves the instance callable',
+    () async {
+      final component = await _encodeComponent(r'''
+(component
+ (core module $m (func (export "id") (param i32) (result i32) local.get 0))
+ (core instance $m (instantiate $m))
+ (func (export "id") (param "value" u32) (result u32) (canon lift (core func $m "id"))))
+''');
+      final runtime = WASIComponentNativeRuntime.component(
+        component: component,
+        host: WASIComponentHost(),
+      );
+      await expectLater(
+        runtime.invokeExport('id', []),
+        throwsA(isA<StateError>()),
+      );
+      await expectLater(
+        runtime.invokeExport('id', ['invalid']),
+        throwsA(isA<StateError>()),
+      );
+      expect(await runtime.invokeExport('id', [42]), 42);
+      await runtime.dispose();
+    },
+  );
+
+  for (final changedBeforeReturn in [false, true]) {
+    test(
+      'continuation snapshots indirect result and retains T/TLS before=$changedBeforeReturn',
+      () async {
+        final component = await _encodeComponent(
+          _returnedContinuation(changedBeforeReturn: changedBeforeReturn),
+          validate: true,
+        );
+        final host = WASIComponentHost();
+        await host.table.runScoped(() async {
+          final runtime = WASIComponentNativeRuntime.component(
+            component: component,
+            host: host,
+          );
+          final value = await runtime
+              .invokeExport('run', [])
+              .timeout(const Duration(seconds: 1));
+          expect(
+            (value as WasmComponentValueData).items.first.integer,
+            changedBeforeReturn ? 99 : 42,
+          );
+          expect(
+            await runtime.invokeExport('thread', []),
+            2,
+            reason: 'returned body still owns T[1]',
+          );
+          expect(await runtime.invokeExport('tail', []), 0);
+          expect(await runtime.invokeExport('resume', []), 16);
+          await runtime.settle().timeout(const Duration(seconds: 1));
+          expect(
+            await runtime.invokeExport('tail', []),
+            17,
+            reason: 'delivery observes dropped reader and original TLS',
+          );
+          expect(await runtime.invokeExport('thread', []), 1);
+          await runtime.dispose();
+        });
+        expect(host.table.activeCount, 0);
+      },
+    );
+  }
+
+  for (final failure in ['before', 'after', 'missing']) {
+    test(
+      'continuation $failure result trap is observed and locks guest entry',
+      () async {
+        final component = await _encodeComponent(
+          _returnedContinuation(failure: failure),
+        );
+        final host = WASIComponentHost();
+        final unhandled = <Object>[];
+        await runZonedGuarded(
+          () async {
+            await host.table.runScoped(() async {
+              final runtime = WASIComponentNativeRuntime.component(
+                component: component,
+                host: host,
+              );
+              Object? first;
+              if (failure == 'after') {
+                expect(
+                  await runtime.invokeExport('run', []),
+                  isA<WasmComponentValueData>(),
+                );
+                await runtime.invokeExport('resume', []);
+                try {
+                  await runtime.settle();
+                } catch (error) {
+                  first = error;
+                }
+              } else {
+                try {
+                  await runtime.invokeExport('run', []);
+                } catch (error) {
+                  first = error;
+                }
+              }
+              expect(first, isNotNull);
+              await expectLater(
+                runtime.invokeExport('thread', []),
+                throwsA(same(first)),
+              );
+              await expectLater(runtime.dispose(), throwsA(same(first)));
+            });
+          },
+          (error, stack) {
+            unhandled.add(error);
+          },
+        );
+        expect(unhandled, isEmpty);
+        expect(host.table.activeCount, 0);
+      },
+    );
+  }
+
+  test(
+    'continuation dispose aborts a returned pending copy without guest tail',
+    () async {
+      final component = await _encodeComponent(_returnedContinuation());
+      final host = WASIComponentHost();
+      await host.table.runScoped(() async {
+        final runtime = WASIComponentNativeRuntime.component(
+          component: component,
+          host: host,
+        );
+        await runtime.invokeExport('run', []);
+        await runtime.dispose().timeout(const Duration(seconds: 1));
+      });
+      expect(host.table.activeCount, 0);
+    },
+  );
+
+  for (final nested in [false, true]) {
+    for (final mode in ['before-start', 'return-wins', 'trap']) {
+      test(
+        'cancelled error-context call uses real entry nested=$nested mode=$mode',
+        () async {
+          final component = await _encodeComponent(
+            _canonicalErrorContextCancellation(mode == 'trap', nested),
+            validate: true,
+          );
+          final host = WASIComponentHost();
+          final hold = Completer<void>();
+          var observed = 0;
+          var length = -1;
+          List<int> carriers() => [
+            for (var h = 1; h <= 32; h++)
+              if (_errorContextMessage(host, h) == 'kept') h,
+          ];
+          await host.table.runScoped(() async {
+            final pressure = host.canonicalHost.asyncHost.backpressure;
+            if (mode == 'before-start') pressure.increment();
+            final runtime = WASIComponentNativeRuntime.component(
+              component: component,
+              host: host,
+              imports: {
+                'pause': (_) => hold.future,
+                'observed': (args) {
+                  observed++;
+                  length = args.single as int;
+                  return null;
+                },
+              },
+            );
+            try {
+              // Handle G[2] is allocated; the low four bits are actual task state.
+              expect(
+                await runtime.invokeExport('begin', []),
+                mode == 'before-start' ? 32 : 33,
+              );
+              expect(carriers(), hasLength(mode == 'before-start' ? 1 : 3));
+              expect(
+                await runtime.invokeExport('cancel', []),
+                mode == 'before-start' ? 3 : wasiComponentSubtaskBlocked,
+              );
+              expect(await runtime.invokeExport('poll', []), 0);
+              expect(observed, 0);
+              expect(carriers(), hasLength(mode == 'before-start' ? 1 : 3));
+              hold.complete();
+              if (mode == 'trap') {
+                Object? failure;
+                try {
+                  await runtime.settle();
+                } catch (error) {
+                  failure = error;
+                }
+                expect(failure, isNotNull);
+                await expectLater(
+                  runtime.invokeExport('poll', []),
+                  throwsA(same(failure)),
+                );
+                await expectLater(runtime.dispose(), throwsA(same(failure)));
+                expect(
+                  carriers(),
+                  hasLength(1),
+                  reason:
+                      'abort releases undelivered caller carriers before allocation scope closes',
+                );
+              } else {
+                await runtime.settle();
+                expect(
+                  await runtime.invokeExport('poll', []),
+                  mode == 'before-start' ? 0 : 1,
+                );
+                if (mode != 'before-start') {
+                  expect(
+                    await runtime.invokeExport('event-state', []),
+                    2,
+                    reason: 'task.return won before cancellable delivery',
+                  );
+                }
+                await runtime.invokeExport('finish', []);
+                await runtime.invokeExport('drop-source', []);
+                await runtime.dispose();
+                expect(host.table.activeCount, 0);
+              }
+            } finally {
+              if (!hold.isCompleted) hold.complete();
+              if (pressure.isActive) pressure.decrement();
+            }
+          });
+          expect(observed, mode == 'before-start' ? 0 : 1);
+          expect(length, mode == 'before-start' ? -1 : 4);
+          expect(host.table.activeCount, 0);
+        },
+      );
+    }
   }
   for (final shape in [
     (width: 2, async: false),
@@ -123,43 +917,45 @@ void main() {
               component: component,
               host: host,
             );
-            final prefixSum = shape.width * (shape.width - 1) ~/ 2;
-            var expectedSum = 0;
-            var runs = 0;
-            for (var attempt = 0; attempt < 3; attempt++) {
-              await expectLater(
-                runtime.invokeExport('make', [duplicate ? 1 : 0]),
-                throwsA(anything),
-              );
-              expect(await runtime.invokeExport('runs', []), ++runs);
-              expect(host.table.activeCount, shape.width - 1);
-              expect(await runtime.invokeExport('sum', []), expectedSum);
-              for (var i = 0; i < shape.width - 1; i++) {
-                expect(await runtime.invokeExport('rep', [i]), i + 1);
-              }
-              await runtime.invokeExport('drop-prefix', []);
-              expectedSum += prefixSum;
-              expect(await runtime.invokeExport('sum', []), expectedSum);
-              expect(host.table.activeCount, 0);
-            }
-            final owners = await runtime.invokeExport('make', [2]);
-            expect(await runtime.invokeExport('runs', []), ++runs);
             await expectLater(
-              runtime.invokeExport('rep', [0]),
+              runtime.invokeExport('make', [duplicate ? 1 : 0]),
               throwsA(anything),
             );
+            expect(_hostIntOwners(host).map((entry) => entry.$2), [
+              for (var i = 1; i < shape.width; i++) i,
+            ]);
+            expect(host.table.activeCount, shape.width - 1);
+            await expectLater(
+              runtime.invokeExport('runs', []),
+              throwsA(anything),
+              reason: 'a real Component trap locks the store',
+            );
+            await expectLater(runtime.dispose(), throwsA(anything));
+          });
+          expect(host.table.activeCount, 0);
+          // Successful transfer is a separate store; it still exercises every owner.
+          await host.table.runScoped(() async {
+            final runtime = WASIComponentNativeRuntime.component(
+              component: component,
+              host: host,
+            );
+            final owners = await runtime.invokeExport('make', [2]);
+            expect(await runtime.invokeExport('runs', []), 1);
             expect(host.table.activeCount, shape.width);
             await runtime.invokeExport('take', [owners]);
-            expectedSum += shape.width * (shape.width + 1) ~/ 2;
-            expect(await runtime.invokeExport('sum', []), expectedSum);
+            expect(
+              await runtime.invokeExport('sum', []),
+              shape.width * (shape.width + 1) ~/ 2,
+            );
             expect(await runtime.invokeExport('hits', []), 1);
             expect(host.table.activeCount, 0);
             await expectLater(
               runtime.invokeExport('take', [owners]),
               throwsA(anything),
             );
+            expect(host.table.activeCount, 0);
             expect(await runtime.invokeExport('hits', []), 1);
-            expect(await runtime.invokeExport('runs', []), runs);
+            await runtime.dispose();
           });
           expect(host.table.activeCount, 0);
         },
@@ -412,84 +1208,39 @@ void main() {
   for (final write in [false, true]) {
     for (final immediate in [false, true]) {
       test(
-        'post-task sync stream ${write ? 'write' : 'read'} ${immediate ? 'rendezvous completes' : 'blocking requires continuation'}',
+        'post-task sync stream ${write ? 'write' : 'read'} ${immediate ? 'rendezvous completes' : 'continues after caller rendezvous'}',
         () async {
           final component = await _encodeComponent(
             _postTaskStreamCopy(write: write, immediate: immediate),
           );
-          expect(component.validate(), isEmpty);
           final host = WASIComponentHost();
-          final unhandled = <Object>[];
-          Object? observed;
-          Object? scopeFailure;
-          var calls = 0;
-          await runZonedGuarded(
-            () async {
-              try {
-                await host.table.runScoped(() async {
-                  final runtime = WASIComponentNativeRuntime.component(
-                    component: component,
-                    host: host,
-                    imports: {
-                      'entered': (_) {
-                        calls++;
-                        return null;
-                      },
-                    },
-                  );
-                  await runtime.initialize();
-                  expect(calls, 0);
-                  try {
-                    final result = await runtime
-                        .invokeExport('run', [])
-                        .timeout(const Duration(seconds: 1));
-                    expect(result, 42);
-                  } catch (error) {
-                    observed = error;
-                  }
-                  while (observed is WasmExecutionErrorContext) {
-                    observed = (observed as WasmExecutionErrorContext).cause;
-                  }
-                  expect(
-                    observed,
-                    immediate ? isNull : isA<UnsupportedError>(),
-                  );
-                  if (!immediate) {
-                    expect(observed.toString(), contains('continuation'));
-                  }
-                  expect(calls, 1, reason: 'the guest entry is never replayed');
-                  expect(
-                    await runtime.invokeExport('tail', []),
-                    immediate ? 1 : 0,
-                  );
-                  await Future<void>.delayed(Duration.zero);
-                  await runtime.invokeExport('cleanup', []);
-                  expect(await runtime.invokeExport('dropped', []), 7);
-                  expect(
-                    host.table.activeCount,
-                    0,
-                    reason: 'no pending copy or carrier survives failure',
-                  );
-                  expect(
-                    await runtime.invokeExport('thread', []),
-                    1,
-                    reason: 'the invocation thread was released',
-                  );
-                });
-              } catch (error) {
-                scopeFailure = error;
-              }
-              await Future<void>.delayed(Duration.zero);
-            },
-            (error, stack) {
-              unhandled.add(error);
-            },
-          );
-          expect(scopeFailure, isNull);
-          expect(calls, 1);
-          expect(observed, immediate ? isNull : isA<UnsupportedError>());
+          var entries = 0;
+          await host.table.runScoped(() async {
+            final runtime = WASIComponentNativeRuntime.component(
+              component: component,
+              host: host,
+              imports: {
+                'entered': (_) {
+                  entries++;
+                  return null;
+                },
+              },
+            );
+            expect(await runtime.invokeExport('run', []), 42);
+            expect(await runtime.invokeExport('tail', []), immediate ? 1 : 0);
+            if (!immediate) {
+              expect(await runtime.invokeExport('resume', []), 16);
+            }
+            await runtime.settle();
+            expect(await runtime.invokeExport('tail', []), 1);
+            expect(entries, 1, reason: 'the guest entry is never replayed');
+            await runtime.invokeExport('cleanup', []);
+            expect(await runtime.invokeExport('dropped', []), 7);
+            expect(await runtime.invokeExport('thread', []), 1);
+            expect(host.table.activeCount, 0);
+            await runtime.dispose();
+          });
           expect(host.table.activeCount, 0);
-          expect(unhandled, isEmpty);
         },
       );
     }
@@ -639,6 +1390,9 @@ void main() {
                   ),
                 ),
               );
+              await expectLater(runtime.dispose(), throwsA(anything));
+              expect(_hostIntOwners(host).map((entry) => entry.$2), [50]);
+              return;
             } else {
               expect(
                 await runtime.invokeExport('read', [endpoint]),
@@ -649,12 +1403,11 @@ void main() {
             expect(await runtime.invokeExport('owner', []), 50);
             await runtime.invokeExport('drop-owner', []);
           } finally {
-            try {
+            if (!owned) {
               await runtime.invokeExport('cancel', []);
-            } catch (error) {
-              if (!owned || !error.toString().contains('non-numeric')) rethrow;
+              await runtime.invokeExport('close', []);
+              await runtime.dispose();
             }
-            await runtime.invokeExport('close', []);
           }
         });
         expect(host.table.activeCount, 0);
@@ -745,8 +1498,9 @@ void main() {
           imports: {'hold': (args) => 0},
         );
         await expectLater(runtime.invokeExport('begin', []), throwsA(anything));
-        await runtime.invokeExport('drop-owner', []);
-        expect(await runtime.invokeExport('sum', []), 100);
+        await expectLater(runtime.dispose(), throwsA(anything));
+        expect(_hostIntOwners(host).map((entry) => entry.$2), [100]);
+        expect(host.table.activeCount, 1);
       });
       expect(host.table.activeCount, 0);
     },
@@ -791,10 +1545,7 @@ void main() {
             0,
             reason: 'callback still owns the loan',
           );
-          await expectLater(
-            runtime.invokeExport('drop-owner', []),
-            throwsA(anything),
-          );
+          _expectHostOwnerLent(host, 100);
           expect(host.table.contains(loan), isTrue);
           hold.complete();
           for (var retry = 0; retry < 100; retry++) {
@@ -806,10 +1557,7 @@ void main() {
             await Future<void>.delayed(const Duration(milliseconds: 1));
           }
           expect(liveAtHostReturn, isTrue);
-          await expectLater(
-            runtime.invokeExport('drop-owner', []),
-            throwsA(anything),
-          );
+          _expectHostOwnerLent(host, 100);
           expect(await runtime.invokeExport('poll', []), 1);
           expect(await runtime.invokeExport('event-state', []), 4);
           expect(
@@ -920,29 +1668,38 @@ void main() {
                     host.table.get(resource, args.single as int),
               },
             );
-            var expected = 0;
-            for (final rep in [11, 22, 33]) {
-              await expectLater(
-                runtime.invokeExport('attempt', [
-                  host.table.insert(resource, rep),
-                  duplicate ? 1 : 0,
-                ]),
-                throwsA(anything),
-              );
-              expect(calls, 0);
-              expect(host.table.activeCount, 1);
-              expect(await runtime.invokeExport('rep', []), rep);
-              await runtime.invokeExport('drop', []);
-              expected += rep;
-              expect(sum, expected);
-              expect(host.table.activeCount, 0);
-            }
-            await runtime.invokeExport('valid', [
+            final owner = host.table.insert(resource, 11);
+            await expectLater(
+              runtime.invokeExport('attempt', [owner, duplicate ? 1 : 0]),
+              throwsA(anything),
+            );
+            expect(calls, 0);
+            expect(host.table.activeCount, 1);
+            expect(host.table.get(resource, owner), 11);
+            await expectLater(runtime.dispose(), throwsA(anything));
+            host.table.drop(resource, owner);
+            expect(sum, 11);
+            final valid = WASIComponentNativeRuntime.component(
+              component: component,
+              host: host,
+              imports: {
+                'take': (args) {
+                  calls++;
+                  for (final handle in args.take(2)) {
+                    host.table.drop(resource, handle as int);
+                  }
+                  return null;
+                },
+                'inspect': (args) =>
+                    host.table.get(resource, args.single as int),
+              },
+            );
+            await valid.invokeExport('valid', [
               host.table.insert(resource, 45),
               host.table.insert(resource, 55),
             ]);
             expect(calls, 1);
-            expect(sum, 166);
+            expect(sum, 111);
             expect(host.table.activeCount, 0);
           });
           expect(host.table.activeCount, 0);
@@ -977,6 +1734,8 @@ void main() {
                 throwsA(anything),
               );
               expect(await second.invokeExport('hits', []), 0);
+              await second.dispose();
+              expect(host.table.activeCount, width);
               expect(await first.invokeExport('sum', []), 0);
               expect(
                 await first.invokeExport('take', [owners]),
@@ -991,7 +1750,9 @@ void main() {
                 first.invokeExport('take', [owners]),
                 throwsA(anything),
               );
+              expect(host.table.activeCount, 0);
               expect(await first.invokeExport('hits', []), 1);
+              await first.dispose();
             });
             expect(host.table.activeCount, 0);
           },
@@ -1119,10 +1880,7 @@ void main() {
                   if (asynchronous) {
                     await hold.future;
                   } else {
-                    await expectLater(
-                      runtime.invokeExport('drop-owner', []),
-                      throwsA(anything),
-                    );
+                    _expectHostOwnerLent(host, 100);
                     expect(await runtime.invokeExport('sum', []), 0);
                   }
                   return null;
@@ -1136,10 +1894,7 @@ void main() {
               );
               await entered.future;
               if (asynchronous) {
-                await expectLater(
-                  runtime.invokeExport('drop-owner', []),
-                  throwsA(anything),
-                );
+                _expectHostOwnerLent(host, 100);
                 expect(await runtime.invokeExport('sum', []), 0);
                 hold.complete();
                 var ready = false;
@@ -1159,10 +1914,7 @@ void main() {
                   isTrue,
                   reason: 'callee resolved without delivering the caller event',
                 );
-                await expectLater(
-                  runtime.invokeExport('drop-owner', []),
-                  throwsA(anything),
-                );
+                _expectHostOwnerLent(host, 100);
                 expect(await runtime.invokeExport('sum', []), 0);
                 expect(await runtime.invokeExport('poll', []), 1);
                 expect(await runtime.invokeExport('event-index', []), 2);
@@ -1299,9 +2051,11 @@ void main() {
           expect(await runtime.invokeExport('sum', []), 50);
           expect(await runtime.invokeExport('second', []), 51);
           expect(await runtime.invokeExport('receive', []), 16);
-          await expectLater(
-            runtime.invokeExport('second', []),
-            throwsA(anything),
+          expect(
+            _hostIntOwners(host).map((entry) => entry.$2),
+            [51],
+            reason:
+                'the second prefix is owned by the receiver until it is dropped',
           );
           expect(await runtime.invokeExport('cancel', []), 34);
           expect(await runtime.invokeExport('sum', []), 50);
@@ -1329,37 +2083,42 @@ void main() {
 
   group('canonical async ownership', () {
     for (final scenario in _canonicalOwnershipScenarios) {
-      test(scenario.$1, () async {
-        final component = await _encodeComponent(scenario.$2);
-        expect(component.validate(), isEmpty);
-        final host = WASIComponentHost();
-        await host.table.runScoped(() async {
-          final noiseType = host.table.defineType<Object>('host noise');
-          host.table.insert(noiseType, Object());
-          final runtime = WASIComponentNativeRuntime.component(
-            component: component,
-            host: host,
-          );
-          await runtime.initialize();
-          for (final call in scenario.$3) {
-            if (call.$3 == 'trap') {
-              await expectLater(
-                runtime.invokeExport(call.$1, call.$2),
-                throwsA(anything),
-                reason: call.$1,
-              );
-            } else {
-              expect(
-                await runtime.invokeExport(call.$1, call.$2),
-                call.$3,
-                reason: call.$1,
-              );
+      for (final probeTrap in [false, true]) {
+        test('${scenario.$1} trap=$probeTrap', () async {
+          final component = await _encodeComponent(scenario.$2);
+          expect(component.validate(), isEmpty);
+          final host = WASIComponentHost();
+          await host.table.runScoped(() async {
+            final noiseType = host.table.defineType<Object>('host noise');
+            host.table.insert(noiseType, Object());
+            final runtime = WASIComponentNativeRuntime.component(
+              component: component,
+              host: host,
+            );
+            await runtime.initialize();
+            for (final call in scenario.$3) {
+              if (call.$3 == 'trap') {
+                if (!probeTrap) continue;
+                await expectLater(
+                  runtime.invokeExport(call.$1, call.$2),
+                  throwsA(anything),
+                  reason: call.$1,
+                );
+                await expectLater(runtime.dispose(), throwsA(anything));
+                break;
+              } else {
+                expect(
+                  await runtime.invokeExport(call.$1, call.$2),
+                  call.$3,
+                  reason: call.$1,
+                );
+              }
+              await Future<void>.delayed(Duration.zero);
             }
-            await Future<void>.delayed(Duration.zero);
-          }
+          });
+          expect(host.table.activeCount, 0);
         });
-        expect(host.table.activeCount, 0);
-      });
+      }
     }
   });
 
@@ -1771,6 +2530,230 @@ void main() {
     });
   });
 
+  for (final blocked in [false, true]) {
+    test(
+      'continuation async lower observes sync ABI async task blocked=$blocked',
+      () async {
+        final component = await _encodeComponent(r'''(component
+  (import "visit" (func $visit (param "rep" u32)))
+  (component $provider
+    (import "visit" (func $visit (param "rep" u32)))
+    (core func $visit (canon lower (func $visit)))
+    (type $r (resource (rep i32)))
+    (export $re "r" (type $r))
+    (core func $new (canon resource.new $r))
+    (core module $m
+      (import "h" "new" (func $new (param i32) (result i32)))
+      (import "h" "visit" (func $visit (param i32)))
+      (func (export "make") (result i32) i32.const 100 call $new)
+      (func (export "inspect") (param i32) (result i32)
+        local.get 0 call $visit local.get 0))
+    (core instance $h (export "new" (func $new)) (export "visit" (func $visit)))
+    (core instance $m (instantiate $m (with "h" (instance $h))))
+    (func (export "make") (result (own $re)) (canon lift (core func $m "make")))
+    (func (export "inspect") async (param "h" (borrow $re)) (result u32)
+      (canon lift (core func $m "inspect"))))
+  (component $caller
+    (import "provider" (instance $p
+      (export "r" (type $r (sub resource)))
+      (export "make" (func (result (own $r))))
+      (export "inspect" (func async (param "h" (borrow $r)) (result u32)))))
+    (alias export $p "r" (type $r))
+    (core module $memory (memory (export "mem") 1))
+    (core instance $memory (instantiate $memory))
+    (core func $make (canon lower (func $p "make")))
+    (core func $inspect (canon lower (func $p "inspect") async (memory (core memory $memory "mem"))))
+    (core func $setnew (canon waitable-set.new))
+    (core func $join (canon waitable.join))
+    (core func $poll (canon waitable-set.poll (memory (core memory $memory "mem"))))
+    (core module $m
+      (import "h" "mem" (memory 1))
+      (import "h" "make" (func $make (result i32)))
+      (import "h" "inspect" (func $inspect (param i32 i32) (result i32)))
+      (import "h" "setnew" (func $setnew (result i32)))
+      (import "h" "join" (func $join (param i32 i32)))
+      (import "h" "poll" (func $poll (param i32 i32) (result i32)))
+      (global $owner (mut i32) (i32.const 0))
+      (global $packed (mut i32) (i32.const 0))
+      (global $set (mut i32) (i32.const 0))
+      (func (export "begin") (result i32) (local $sub i32)
+        call $make global.set $owner
+        global.get $owner i32.const 64 call $inspect global.set $packed
+        global.get $packed i32.const 4 i32.shr_u local.set $sub
+        local.get $sub if
+          call $setnew global.set $set
+          local.get $sub global.get $set call $join
+        end
+        global.get $packed)
+      (func (export "event-state") (result i32) i32.const 36 i32.load)
+      (func (export "value") (result i32) i32.const 64 i32.load)
+      (func (export "poll") (result i32)
+        global.get $set i32.eqz if (result i32) i32.const 0
+        else global.get $set i32.const 32 call $poll end))
+    (core instance $h (export "mem" (memory $memory "mem"))
+      (export "make" (func $make)) (export "inspect" (func $inspect))
+      (export "setnew" (func $setnew)) (export "join" (func $join)) (export "poll" (func $poll)))
+    (core instance $m (instantiate $m (with "h" (instance $h))))
+    (func (export "begin") (result u32) (canon lift (core func $m "begin")))
+    (func (export "event-state") (result u32) (canon lift (core func $m "event-state")))
+    (func (export "value") (result u32) (canon lift (core func $m "value")))
+    (func (export "poll") (result u32) (canon lift (core func $m "poll"))))
+  (instance $p (instantiate $provider (with "visit" (func $visit))))
+  (instance $c (instantiate $caller (with "provider" (instance $p))))
+  (func (export "begin") (alias export $c "begin"))
+  (func (export "event-state") (alias export $c "event-state"))
+  (func (export "value") (alias export $c "value"))
+  (func (export "poll") (alias export $c "poll")))
+''', validate: true);
+        final host = WASIComponentHost();
+        final release = Completer<void>();
+        final observed = <int>[];
+        await host.table.runScoped(() async {
+          final runtime = WASIComponentNativeRuntime.component(
+            component: component,
+            host: host,
+            imports: {
+              'visit': (args) {
+                observed.add(args.single as int);
+                return blocked ? release.future : null;
+              },
+            },
+          );
+          try {
+            expect(await runtime.invokeExport('begin', []), blocked ? 33 : 2);
+            expect(observed, [100]);
+            if (blocked) {
+              _expectHostOwnerLent(host, 100);
+              expect(await runtime.invokeExport('poll', []), 0);
+              release.complete();
+              await runtime.settle();
+              _expectHostOwnerLent(host, 100);
+              expect(await runtime.invokeExport('poll', []), 1);
+              expect(await runtime.invokeExport('event-state', []), 2);
+            }
+            expect(await runtime.invokeExport('value', []), 100);
+            final owner = _hostIntOwners(
+              host,
+            ).singleWhere((entry) => entry.$2 == 100).$1;
+            expect(
+              () => host.table.canonicalRequireReleasable(owner),
+              returnsNormally,
+            );
+          } finally {
+            if (!release.isCompleted) release.complete();
+            await runtime.dispose();
+          }
+        });
+        expect(host.table.activeCount, 0);
+      },
+    );
+  }
+
+  for (final cleanup in ['dispose', 'trap']) {
+    test(
+      'continuation resource cleanup distinguishes $cleanup from abort',
+      () async {
+        final component = await _encodeComponent(r'''
+(component
+  (import "host-resource" (type $host (sub resource)))
+  (core func $host-drop (canon resource.drop $host))
+  (core module $state
+    (import "h" "drop" (func $drop (param i32)))
+    (global $held (mut i32) (i32.const 0))
+    (func (export "seed") (param i32) local.get 0 global.set $held)
+    (func (export "held") (result i32) global.get $held)
+    (func (export "dtor") (param i32) local.get 0 call $drop))
+  (core instance $state-imports (export "drop" (func $host-drop)))
+  (core instance $state (instantiate $state (with "h" (instance $state-imports))))
+  (type $local (resource (rep i32) (dtor (core func $state "dtor"))))
+  (core func $new (canon resource.new $local))
+  (core module $m
+    (import "h" "new" (func $new (param i32) (result i32)))
+    (import "h" "held" (func $held (result i32)))
+    (func (export "allocate") call $held call $new drop)
+    (func (export "crash") unreachable))
+  (core instance $h (export "new" (func $new)) (export "held" (func $state "held")))
+  (core instance $m (instantiate $m (with "h" (instance $h))))
+  (func (export "seed") (param "source" (own $host)) (canon lift (core func $state "seed")))
+  (func (export "allocate") (canon lift (core func $m "allocate")))
+  (func (export "crash") (canon lift (core func $m "crash"))))
+''', validate: true);
+        final host = WASIComponentHost();
+        final dropped = <int>[];
+        final resource = host.canonicalHost.resourceHost
+            .defineResourceType<int>(0, 'host-resource', onDrop: dropped.add);
+        final runtime = WASIComponentNativeRuntime.component(
+          component: component,
+          host: host,
+        );
+        await host.table.runScoped(() async {
+          final owner = host.table.insert(resource, 7);
+          host.table.insert(resource, 11);
+          await runtime.invokeExport('seed', [owner]);
+          await runtime.invokeExport('allocate', []);
+          if (cleanup == 'trap') {
+            Object? original;
+            try {
+              await runtime.invokeExport('crash', []);
+            } catch (error) {
+              original = error;
+            }
+            expect(original, isA<WasmExecutionErrorContext>());
+            await expectLater(runtime.dispose(), throwsA(same(original)));
+          } else {
+            await runtime.dispose();
+          }
+        });
+        // The local destructor releases7 before allocation-scope cleanup of11.
+        // Fatal abort skips guest code, leaving the scope's reverse drop order.
+        expect(dropped, cleanup == 'trap' ? [11, 7] : [7, 11]);
+        expect(host.table.activeCount, 0);
+      },
+    );
+  }
+
+  for (final preview3 in [false, true]) {
+    test(
+      'continuation command cleanup executes guest destructor preview3=$preview3',
+      () async {
+        final component = await _encodeComponent('''
+(component
+  (core module \$dtor (func (export "dtor") (param i32) unreachable))
+  (core instance \$dtor (instantiate \$dtor))
+  (type \$r (resource (rep i32) (dtor (core func \$dtor "dtor"))))
+  (core func \$new (canon resource.new \$r))
+  ${preview3 ? r'(core func $return (canon task.return (result (result))))' : ''}
+  (core module \$m
+    (import "h" "new" (func \$new (param i32) (result i32)))
+    ${preview3 ? r'(import "h" "return" (func $return (param i32)))' : ''}
+    (func (export "run") (result i32)
+      i32.const 7 call \$new drop ${preview3 ? r'i32.const 0 call $return' : ''} i32.const 0)
+    (func (export "callback") (param i32 i32 i32) (result i32) unreachable))
+  (core instance \$h (export "new" (func \$new)) ${preview3 ? r'(export "return" (func $return))' : ''})
+  (core instance \$m (instantiate \$m (with "h" (instance \$h))))
+  (func (export "wasi:cli/run@${preview3 ? '0.3.1' : '0.2.0'}") ${preview3 ? 'async' : ''} (result (result))
+    (canon lift (core func \$m "run") ${preview3 ? r'async (callback (core func $m "callback"))' : ''})))
+''', validate: true);
+        final host = WASIComponentHost();
+        final runtime = WASIComponentNativeRuntime.component(
+          component: component,
+          host: host,
+        );
+        Object? original;
+        try {
+          await (preview3
+              ? runtime.runPreview3Command()
+              : runtime.runCommand());
+        } catch (error) {
+          original = error;
+        }
+        expect(original, isA<WasmExecutionErrorContext>());
+        expect(original.toString(), contains('unreachable'));
+        expect(host.table.activeCount, 0);
+      },
+    );
+  }
+
   group('resource destructors', () {
     test(
       'rejects draft async destructors before allocating host state',
@@ -1836,7 +2819,7 @@ void main() {
             await Future<void>.delayed(Duration.zero);
           }, (error, stack) => unhandled.add(error));
           expect(observedError, external ? isNotNull : isNull);
-          expect(count, 7);
+          expect(count, external ? isNull : 7);
           expect(host.table.activeCount, 0);
           expect(callbacks, 0);
           expect(unhandled, isEmpty);
@@ -1881,12 +2864,15 @@ void main() {
                   ),
                 );
                 expect(host.table.activeCount, 1);
-                expect(await runtime.invokeExport('count', []), 0);
+                expect(_hostIntOwners(host).map((entry) => entry.$2), [
+                  trigger == 'realloc' ? 11 : 7,
+                ]);
+                await expectLater(runtime.dispose(), throwsA(anything));
               });
               expect(host.table.activeCount, 0);
-              expect(
-                await runtime.invokeExport('count', []),
-                trigger == 'realloc' ? 11 : 7,
+              await expectLater(
+                runtime.invokeExport('count', []),
+                throwsA(anything),
               );
             },
           );
@@ -1953,14 +2939,15 @@ void main() {
         final second = await runtime.invokeExport('new', [11]);
         await runtime.invokeExport('drop', [first]);
         expect(await runtime.invokeExport('count', []), 7);
+        await runtime.invokeExport('drop', [second]);
+        expect(await runtime.invokeExport('count', []), 18);
+        expect(host.table.activeCount, 0);
         await expectLater(
           runtime.invokeExport('drop', [first]),
           throwsA(anything),
         );
-        expect(await runtime.invokeExport('count', []), 7);
-        await runtime.invokeExport('drop', [second]);
-        expect(await runtime.invokeExport('count', []), 18);
         expect(host.table.activeCount, 0);
+        await expectLater(runtime.dispose(), throwsA(anything));
       });
       expect(host.table.activeCount, 0);
     });
@@ -2032,13 +3019,15 @@ void main() {
             runtime.invokeExport('drop', [handle]),
             throwsA(anything),
           );
-          expect(await runtime.invokeExport('count', []), 7);
+          expect(host.table.activeCount, 0);
+          await expectLater(runtime.dispose(), throwsA(anything));
           expect(host.table.activeCount, 0);
           await expectLater(
             runtime.invokeExport('drop', [handle]),
             throwsA(anything),
           );
-          expect(await runtime.invokeExport('count', []), 7);
+          expect(host.table.activeCount, 0);
+          await expectLater(runtime.dispose(), throwsA(anything));
         });
         expect(host.table.activeCount, 0);
       },
@@ -4085,6 +5074,7 @@ String _postTaskStreamCopy({required bool write, required bool immediate}) =>
       global.get \$${write ? 'w' : 'r'} i32.const 16 i32.const 1 call \$copy drop
       i32.const 1 global.set \$tail i32.const 0)
     (func (export "callback") (param i32 i32 i32) (result i32) unreachable)
+    (func (export "resume") (result i32) global.get \$${write ? 'r' : 'w'} i32.const 0 i32.const 1 call \$other)
     (func (export "tail") (result i32) global.get \$tail)
     (func (export "thread") (result i32) call \$thread)
     (func (export "dropped") (result i32) i32.const 8 i32.load)
@@ -4103,6 +5093,7 @@ String _postTaskStreamCopy({required bool write, required bool immediate}) =>
     (export "return" (func \$return)) (export "thread" (func \$thread)))
   (core instance \$m (instantiate \$m (with "h" (instance \$h))))
   (func (export "run") async (result u32) (canon lift (core func \$m "run") async (callback (core func \$m "callback"))))
+  (func (export "resume") (result u32) (canon lift (core func \$m "resume")))
   (func (export "tail") (result u32) (canon lift (core func \$m "tail")))
   (func (export "dropped") (result u32) (canon lift (core func \$m "dropped")))
   (func (export "thread") (result u32) (canon lift (core func \$m "thread")))
@@ -4190,8 +5181,11 @@ String _canonicalErrorContextCancellation(bool fails, bool nested) =>
     '''
 (component
   (import "observed" (func \$observed (param "length" u32)))
+  (import "pause" (func \$pause))
   (component \$producer
     (import "observed" (func \$observed (param "length" u32)))
+    (import "pause" (func \$pause))
+    (core func \$pause (canon lower (func \$pause)))
     (core module \$memory
       (memory (export "mem") 1)
       (func (export "realloc") (param i32 i32 i32 i32) (result i32) i32.const 1024))
@@ -4206,14 +5200,16 @@ String _canonicalErrorContextCancellation(bool fails, bool nested) =>
       (import "h" "drop" (func \$drop (param i32)))
       (import "h" "return" (func \$return (param i32)))
       (import "h" "observed" (func \$observed (param i32)))
+      (import "h" "pause" (func \$pause))
       (func (export "run") (param i32) (result i32)
+        call \$pause
         local.get 0 i32.const 64 call \$debug
         i32.const 68 i32.load call \$observed
         local.get 0 call \$drop
         ${fails ? 'unreachable' : 'i32.const 4 call \$return'}
         i32.const 0)
       (func (export "callback") (param i32 i32 i32) (result i32) i32.const 0))
-    (core instance \$h (export "mem" (memory \$memory "mem")) (export "debug" (func \$debug)) (export "drop" (func \$drop)) (export "return" (func \$return)) (export "observed" (func \$observed)))
+    (core instance \$h (export "mem" (memory \$memory "mem")) (export "debug" (func \$debug)) (export "drop" (func \$drop)) (export "return" (func \$return)) (export "observed" (func \$observed)) (export "pause" (func \$pause)))
     (core instance \$m (instantiate \$m (with "h" (instance \$h))))
     (func (export "read") async (param "error" ${nested ? '(tuple error-context)' : 'error-context'}) (result u32)
       (canon lift (core func \$m "run") async (callback (core func \$m "callback")))))
@@ -4253,9 +5249,217 @@ String _canonicalErrorContextCancellation(bool fails, bool nested) =>
     (func (export "event-state") (result u32) (canon lift (core func \$m "event-state")))
     (func (export "drop-source") (canon lift (core func \$m "drop-source")))
     (func (export "finish") (canon lift (core func \$m "finish"))))
-  (instance \$p (instantiate \$producer (with "observed" (func \$observed))))
+  (instance \$p (instantiate \$producer (with "observed" (func \$observed)) (with "pause" (func \$pause))))
   (instance \$c (instantiate \$consumer (with "reader" (instance \$p))))
   (export "begin" (func \$c "begin")) (export "cancel" (func \$c "cancel"))
   (export "poll" (func \$c "poll")) (export "event-state" (func \$c "event-state"))
   (export "drop-source" (func \$c "drop-source")) (export "finish" (func \$c "finish")))
+''';
+
+String _returnedContinuation({
+  bool changedBeforeReturn = false,
+  String? failure,
+}) =>
+    '''
+(component
+ (type \$result (tuple ${List.filled(17, 'u32').join(' ')}))
+ (type \$s (stream u8))
+ (core module \$memory (memory (export "mem") 1))
+ (core instance \$memory (instantiate \$memory))
+ (core func \$new (canon stream.new \$s))
+ (core func \$write (canon stream.write \$s (memory (core memory \$memory "mem"))))
+ (core func \$read (canon stream.read \$s async (memory (core memory \$memory "mem"))))
+ (core func \$drop-r (canon stream.drop-readable \$s))
+ (core func \$drop-w (canon stream.drop-writable \$s))
+ (core func \$return (canon task.return (result \$result) (memory (core memory \$memory "mem"))))
+ (core func \$thread (canon thread.index))
+ (core func \$get (canon context.get i32 0))
+ (core func \$put (canon context.set i32 0))
+ (core module \$m
+  (import "h" "mem" (memory 1))
+  (import "h" "new" (func \$new (result i64)))
+  (import "h" "write" (func \$write (param i32 i32 i32) (result i32)))
+  (import "h" "read" (func \$read (param i32 i32 i32) (result i32)))
+  (import "h" "drop-r" (func \$drop-r (param i32)))
+  (import "h" "drop-w" (func \$drop-w (param i32)))
+  (import "h" "return" (func \$return (param i32)))
+  (import "h" "thread" (func \$thread (result i32)))
+  (import "h" "get" (func \$get (result i32)))
+  (import "h" "put" (func \$put (param i32)))
+  (global \$r (mut i32) (i32.const 0))
+  (global \$w (mut i32) (i32.const 0))
+  (global \$tail (mut i32) (i32.const 0))
+  (func (export "run") (result i32) (local \$pair i64) (local \$thread i32)
+   call \$new local.set \$pair
+   local.get \$pair i32.wrap_i64 global.set \$r
+   local.get \$pair i64.const 32 i64.shr_u i32.wrap_i64 global.set \$w
+   call \$thread local.set \$thread i32.const 888 call \$put
+   i32.const 0 i32.const ${changedBeforeReturn ? 99 : 42} i32.store
+   ${failure == 'before' ? 'unreachable' : ''}
+   ${failure == 'missing' ? '' : 'i32.const 0 call \$return'}
+   i32.const 0 i32.const 99 i32.store
+   ${failure == 'missing' ? '' : '''global.get \$w i32.const 128 i32.const 1 call \$write global.set \$tail
+   call \$thread local.get \$thread i32.ne if unreachable end
+   call \$get i32.const 888 i32.ne if unreachable end
+   ${failure == 'after' ? 'unreachable' : ''}
+   global.get \$w call \$drop-w'''}
+   i32.const 0)
+  (func (export "callback") (param i32 i32 i32) (result i32) unreachable)
+  (func (export "resume") (result i32) (local \$result i32)
+   global.get \$r i32.const 256 i32.const 1 call \$read local.set \$result
+   global.get \$r call \$drop-r local.get \$result)
+  (func (export "tail") (result i32) global.get \$tail)
+  (func (export "thread") (result i32) call \$thread))
+ (core instance \$h
+  (export "mem" (memory \$memory "mem")) (export "new" (func \$new))
+  (export "write" (func \$write)) (export "read" (func \$read))
+  (export "drop-r" (func \$drop-r)) (export "drop-w" (func \$drop-w))
+  (export "return" (func \$return)) (export "thread" (func \$thread))
+  (export "get" (func \$get)) (export "put" (func \$put)))
+ (core instance \$m (instantiate \$m (with "h" (instance \$h))))
+ (func (export "run") async (result \$result) (canon lift (core func \$m "run") async (callback (core func \$m "callback")) (memory (core memory \$memory "mem"))))
+ (func (export "resume") (result u32) (canon lift (core func \$m "resume")))
+ (func (export "thread") (result u32) (canon lift (core func \$m "thread")))
+ (func (export "tail") (result u32) (canon lift (core func \$m "tail"))))
+''';
+
+List<(int, int)> _hostIntOwners(WASIComponentHost host) => [
+  for (var handle = 1; handle <= 1024; handle++)
+    if (host.table.contains(handle) && !host.table.canonicalIsBorrow(handle))
+      if (host.table.canonicalValueOf(handle) case final int value)
+        (handle, value),
+];
+
+void _expectHostOwnerLent(WASIComponentHost host, int value) {
+  final handle = _hostIntOwners(
+    host,
+  ).firstWhere((entry) => entry.$2 == value).$1;
+  expect(
+    () => host.table.canonicalRequireReleasable(handle),
+    throwsA(isA<StateError>()),
+  );
+}
+
+String _httpContinuation({required bool preview3, required bool pending}) {
+  var source = File(
+    preview3
+        ? 'test/fixtures/wasi_preview3/wasi_http_0_3_1_resource_service.wat'
+        : 'test/fixtures/wasi_preview2/wasi_http_0_2_12_static_response.component.wat',
+  ).readAsStringSync();
+  if (!preview3) {
+    return pending
+        ? source
+        : source.replaceFirst(
+            r'call $set_response))',
+            r'call $set_response unreachable))',
+          );
+  }
+  final declarations = r'''
+ (core func $continuation-yield (canon thread.yield))
+ (type $continuation-stream (stream u8))
+ (core func $continuation-new (canon stream.new $continuation-stream))
+ (core func $continuation-write (canon stream.write $continuation-stream (memory $memory)))
+''';
+  final imports = r'''
+ (import "continuation" "yield" (func $continuation-yield (result i32)))
+ (import "continuation" "new" (func $continuation-new (result i64)))
+ (import "continuation" "write" (func $continuation-write (param i32 i32 i32) (result i32)))
+''';
+  final exports = r'''
+ (core instance $continuation
+  (export "yield" (func $continuation-yield))
+  (export "new" (func $continuation-new))
+  (export "write" (func $continuation-write)))
+''';
+  final tail = pending
+      ? r'''
+ call $continuation-new i64.const 32 i64.shr_u i32.wrap_i64
+ i32.const 128 i32.const 1 call $continuation-write drop unreachable
+'''
+      : r'''call $continuation-yield drop unreachable''';
+
+  source = source.replaceFirst(
+    r'(core module $main',
+    '$declarations\n$exports\n(core module \$main\n$imports',
+  );
+  source = source.replaceFirst(
+    'call \$task-return\n      i32.const 0)',
+    'call \$task-return\n$tail\n i32.const 0)',
+  );
+  source = source.replaceFirst(
+    '(instantiate \$main (with "" (instance \$builtins)))',
+    '(instantiate \$main (with "" (instance \$builtins)) (with "continuation" (instance \$continuation)))',
+  );
+  return source;
+}
+
+String _callbackCancellation({required bool dropBorrow}) =>
+    '''
+(component
+ (import "r" (type \$r (sub resource)))
+ (component \$callee
+  (import "r" (type \$r (sub resource)))
+  (core module \$memory (memory (export "mem") 1))
+  (core instance \$memory (instantiate \$memory))
+  (core func \$drop (canon resource.drop \$r))
+  (core func \$cancel (canon task.cancel))
+  (core func \$newset (canon waitable-set.new))
+  (core func \$dropset (canon waitable-set.drop))
+  (core module \$m
+   (import "h" "drop" (func \$drop (param i32)))
+   (import "h" "cancel" (func \$cancel))
+   (import "h" "newset" (func \$newset (result i32)))
+   (import "h" "dropset" (func \$dropset (param i32)))
+   (global \$loan (mut i32) (i32.const 0)) (global \$set (mut i32) (i32.const 0))
+   (func (export "run") (param i32) (result i32)
+    local.get 0 global.set \$loan
+    call \$newset global.set \$set
+    global.get \$set i32.const 4 i32.shl i32.const 2 i32.or)
+   (func (export "callback") (param i32 i32 i32) (result i32)
+    local.get 0 i32.const 6 i32.ne if unreachable end
+    ${dropBorrow ? 'global.get \$loan call \$drop' : ''}
+    call \$cancel global.get \$set call \$dropset i32.const 0))
+  (core instance \$h (export "drop" (func \$drop)) (export "cancel" (func \$cancel)) (export "newset" (func \$newset)) (export "dropset" (func \$dropset)))
+  (core instance \$m (instantiate \$m (with "h" (instance \$h))))
+  (func (export "run") async (param "loan" (borrow \$r)) (result u32)
+   (canon lift (core func \$m "run") async (callback (core func \$m "callback")))))
+ (instance \$callee (instantiate \$callee (with "r" (type \$r))))
+ (alias export \$callee "run" (func \$run))
+ (core module \$memory (memory (export "mem") 1))
+ (core instance \$memory (instantiate \$memory))
+ (core func \$run (canon lower (func \$run) async (memory (core memory \$memory "mem"))))
+ (core func \$drop (canon resource.drop \$r))
+ (core func \$cancel (canon subtask.cancel async))
+ (core func \$subdrop (canon subtask.drop))
+ (core func \$newset (canon waitable-set.new))
+ (core func \$dropset (canon waitable-set.drop))
+ (core func \$join (canon waitable.join))
+ (core func \$poll (canon waitable-set.poll (memory (core memory \$memory "mem"))))
+ (core module \$m
+  (import "h" "mem" (memory 1))
+  (import "h" "run" (func \$run (param i32 i32) (result i32)))
+  (import "h" "drop" (func \$drop (param i32)))
+  (import "h" "cancel" (func \$cancel (param i32) (result i32)))
+  (import "h" "subdrop" (func \$subdrop (param i32)))
+  (import "h" "newset" (func \$newset (result i32)))
+  (import "h" "dropset" (func \$dropset (param i32)))
+  (import "h" "join" (func \$join (param i32 i32)))
+  (import "h" "poll" (func \$poll (param i32 i32) (result i32)))
+  (global \$owner (mut i32) (i32.const 0)) (global \$sub (mut i32) (i32.const 0)) (global \$set (mut i32) (i32.const 0))
+  (func (export "begin") (param i32) (result i32) (local \$packed i32)
+   local.get 0 global.set \$owner
+   local.get 0 i32.const 64 call \$run local.tee \$packed i32.const 4 i32.shr_u global.set \$sub
+   call \$newset global.set \$set global.get \$sub global.get \$set call \$join local.get \$packed)
+  (func (export "cancel") (result i32) global.get \$sub call \$cancel)
+  (func (export "poll") (result i32) global.get \$set i32.const 32 call \$poll)
+  (func (export "state") (result i32) i32.const 36 i32.load)
+  (func (export "finish") global.get \$sub i32.const 0 call \$join global.get \$sub call \$subdrop global.get \$set call \$dropset global.get \$owner call \$drop))
+ (core instance \$h (export "mem" (memory \$memory "mem")) (export "run" (func \$run)) (export "drop" (func \$drop))
+  (export "cancel" (func \$cancel)) (export "subdrop" (func \$subdrop)) (export "newset" (func \$newset)) (export "dropset" (func \$dropset)) (export "join" (func \$join)) (export "poll" (func \$poll)))
+ (core instance \$m (instantiate \$m (with "h" (instance \$h))))
+ (func (export "begin") (param "owner" (own \$r)) (result u32) (canon lift (core func \$m "begin")))
+ (func (export "cancel") (result u32) (canon lift (core func \$m "cancel")))
+ (func (export "poll") (result u32) (canon lift (core func \$m "poll")))
+ (func (export "event-state") (result u32) (canon lift (core func \$m "state")))
+ (func (export "finish") (canon lift (core func \$m "finish"))))
 ''';

@@ -5,6 +5,7 @@ import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/async_values.dart';
 import 'package:wasd/src/wasi/component/canonical_host.dart';
+import 'package:wasd/src/wasi/component/execution.dart';
 import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/resource_table.dart';
@@ -13,6 +14,7 @@ import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasi/component/wit_adapter.dart';
 import 'package:wasd/src/wasi/component/wit_document.dart';
 import 'package:wasd/src/wasi/preview2/cli.dart';
+import 'package:wasd/src/wasi/preview2/component_runner.dart';
 import 'package:wasd/src/wasi/preview2/clocks.dart';
 import 'package:wasd/src/wasi/preview2/component_host.dart';
 import 'package:wasd/src/wasi/preview2/filesystem.dart';
@@ -32,6 +34,149 @@ import 'package:wasd/src/wasm/memory.dart';
 import 'support/component_fixtures.dart';
 
 void main() {
+  test(
+    'Component continuation cancelled entry preserves live exclusive owner',
+    () async {
+      final store = WASIComponentGuestStore();
+      final instance = Object();
+      final releaseOwner = Completer<void>();
+      final owner = store.start(
+        instance: instance,
+        exclusive: true,
+        body: (call) async {
+          call.resolve(42);
+          await call.wait(releaseOwner.future);
+        },
+      );
+      await owner.initialHandoff;
+      var cancelledBodyRan = false;
+      final cancelled = store.start(
+        instance: instance,
+        exclusive: true,
+        body: (call) async {
+          cancelledBodyRan = true;
+          call.resolve(null);
+        },
+      );
+      cancelled.cancelBeforeStart();
+      await cancelled.bodyDone;
+      var nextBodyRan = false;
+      final next = store.start(
+        instance: instance,
+        exclusive: true,
+        body: (call) async {
+          nextBodyRan = true;
+          call.resolve(null);
+        },
+      );
+      try {
+        await Future<void>.delayed(Duration.zero);
+        expect(cancelledBodyRan, isFalse);
+        expect(nextBodyRan, isFalse);
+      } finally {
+        releaseOwner.complete();
+        await owner.bodyDone;
+        await next.bodyDone;
+        await store.dispose();
+      }
+      expect(nextBodyRan, isTrue);
+    },
+  );
+
+  test(
+    'Component continuation first failure aborts pending and queued bodies',
+    () async {
+      final store = WASIComponentGuestStore();
+      final instance = Object();
+      final ready = Completer<void>();
+      var tailRan = false;
+      var queuedBodyRan = false;
+      final owner = store.start(
+        instance: instance,
+        exclusive: true,
+        body: (call) async {
+          call.resolve(42);
+          await call.wait(ready.future);
+          tailRan = true;
+        },
+      );
+      expect(await owner.result(), 42);
+      final queued = store.start(
+        instance: instance,
+        exclusive: true,
+        body: (call) async {
+          queuedBodyRan = true;
+          call.resolve(null);
+        },
+      );
+      final original = StateError('first guest failure');
+      final crashing = store.start(
+        instance: Object(),
+        body: (_) async => throw original,
+      );
+      await expectLater(crashing.result(), throwsA(same(original)));
+      ready.complete();
+      await expectLater(queued.result(), throwsA(same(original)));
+      await Future.wait([owner.bodyDone, queued.bodyDone, crashing.bodyDone]);
+      expect(tailRan, isFalse);
+      expect(queuedBodyRan, isFalse);
+      expect(
+        () => store.start(instance: Object(), body: (_) async {}),
+        throwsA(same(original)),
+      );
+      await expectLater(store.settle(), throwsA(same(original)));
+      await expectLater(store.dispose(), throwsA(same(original)));
+    },
+  );
+
+  test('Component continuation official sync-streams returns 42', () async {
+    final host = WASIComponentHost();
+    await host.table.runScoped(() async {
+      final runtime = WASIComponentNativeRuntime.component(
+        component: WasmComponent.decode(officialSyncStreamsComponentBytes()),
+        host: host,
+      );
+      expect(
+        await runtime
+            .invokeExport('run', [])
+            .timeout(const Duration(seconds: 2)),
+        42,
+      );
+      await runtime.settle();
+      await runtime.dispose();
+    });
+    expect(host.table.activeCount, 0);
+  });
+
+  for (final abort in [false, true]) {
+    test(
+      'Component continuation snapshot and thread lifetime abort=$abort',
+      () async {
+        final host = WASIComponentHost();
+        await host.table.runScoped(() async {
+          final runtime = WASIComponentNativeRuntime.component(
+            component: WasmComponent.decode(
+              taskReturnContinuationComponentBytes(),
+            ),
+            host: host,
+          );
+          final value = await runtime.invokeExport('run', []);
+          expect((value as WasmComponentValueData).items.first.integer, 42);
+          expect(await runtime.invokeExport('thread', []), 2);
+          expect(await runtime.invokeExport('tail', []), 0);
+          if (!abort) {
+            expect(await runtime.invokeExport('resume', []), 16);
+            await runtime.settle();
+            expect(await runtime.invokeExport('tail', []), 17);
+            expect(await runtime.invokeExport('thread', []), 1);
+          }
+          await runtime.dispose();
+        });
+        expect(host.table.activeCount, 0);
+      },
+    );
+  }
+
   group('WASIComponentVersionProfile', () {
     test('describes component canonical areas by WASI version', () {
       expect(WASIComponentVersionProfile.preview1.canonicalAreas, isEmpty);

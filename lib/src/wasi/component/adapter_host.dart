@@ -4447,3 +4447,52 @@ abstract interface class WASIComponentCanonicalValueDiscard {
     Object? value,
   );
 }
+
+/// Deferred argument conversion for the runtime's actual callee entry.
+extension WASIComponentCanonicalLowerExecution
+    on WASIComponentCanonicalAdapterProgram {
+  /// Whether this parameter contains handles that require ownership preflight.
+  static bool containsHandles(
+    WASIComponentCanonicalAdapterFlatValuePlan? layout,
+  ) => layout != null && _flatLayoutContainsHandle(layout);
+
+  /// Validates embedding values before any guest activation or allocation.
+  void validateCanonicalArguments(int canonicalIndex, List<Object?> args) {
+    _operationsByCanonicalIndex[canonicalIndex]!._validateDirectArgs(args);
+  }
+
+  /// Captures the result storage and caller loans without invoking the callee.
+  WASIComponentCanonicalAsyncLowerCall prepareCanonicalLowerCore(
+    int canonicalIndex,
+    List<Object?> coreArgs, {
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    final operation = _operationsByCanonicalIndex[canonicalIndex];
+    if (operation == null) {
+      throw StateError('Unknown canonical adapter index: $canonicalIndex.');
+    }
+    void Function()? release;
+    return operation._withHandleCall(() {
+      operation._requireLoweredCoreOperation();
+      operation._requireMayLeaveForLower();
+      final invocation = operation._loadLoweredCoreArgs(coreArgs, memory);
+      return WASIComponentCanonicalAsyncLowerCall._(
+        operation: operation,
+        result: List<Object?>.unmodifiable(invocation.args),
+        releaseBorrows: () => release?.call(),
+        resultPointer: invocation.resultPointer,
+        memory: memory,
+        realloc: operation._guardRealloc(realloc),
+      );
+    }, retain: (close) => release = close);
+  }
+}
+
+/// Synchronous lower delivery uses the same deferred argument conversion.
+extension WASIComponentCanonicalLowerResult
+    on WASIComponentCanonicalAsyncLowerCall {
+  /// Stores the result at resolution and returns any synchronous core scalars.
+  List<Object?> completeCanonicalCore(Object? value) => _operation
+      ._storeLoweredCoreResult(value, _resultPointer, _memory, _realloc);
+}

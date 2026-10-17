@@ -22,6 +22,29 @@ void main() {
       );
     }
 
+    test('preserves exit after task.return and a real callback yield', () async {
+      final source = _versionedCommandWat()
+          .replaceFirst(
+            r'call $task-return'
+                '\n      i32.const 0)',
+            r'call $task-return'
+                '\n      i32.const 1)',
+          )
+          .replaceFirst(
+            '(func (export "callback") (param i32 i32 i32) (result i32)\n      unreachable)',
+            '(func (export "callback") (param i32 i32 i32) (result i32)\n      i32.const 7 call \$exit unreachable)',
+          );
+      final component = await _compileComponentWat(
+        'late_exit_after_return',
+        source,
+      );
+      expect(component.validate(), isEmpty);
+      final host = WASIPreview3ComponentHost();
+      final result = await WASIPreview3CommandRunner(host).run(component);
+      expect(result.exitCode, 7);
+      expect(host.componentHost.table.activeCount, 0);
+    });
+
     test('calls the 031 scalar host before its explicit guest exit', () async {
       final component = await _compileComponentWat(
         '031_scalar_command_exit',

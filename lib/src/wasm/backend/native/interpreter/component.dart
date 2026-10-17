@@ -7477,6 +7477,21 @@ String _componentExternName(String name, String? versionSuffix) {
   return versionSuffix == null ? name : '$name$versionSuffix';
 }
 
+/// Compares resolved value types for dynamic Canonical ABI checks.
+///
+/// Uses the validator's structural and nominal rules without changing a store.
+bool componentCanonicalValueTypesMatch(
+  WasmComponentValueType expected,
+  WasmComponentValueType actual,
+  WasmComponentTypeScope expectedScope,
+  WasmComponentTypeScope actualScope,
+) => _WasmComponentValidationContext(
+  typeDefinitions: const [],
+  coreTypes: const [],
+  outerAliasScopes: const [],
+  errors: [],
+).componentValueTypesMatch(expected, actual, expectedScope, actualScope);
+
 final class _WasmComponentExternNameSet {
   final _byFoldedStrippedName =
       <String, List<_WasmComponentExternNameSignature>>{};

@@ -38,6 +38,231 @@ Future<Map<String, Object?>> _run(Map<String, dynamic> script) =>
     runner.executeComponentSpecScript(script, directory: Directory(_fixture));
 
 void main() {
+  test('official sync-streams returns 42 after caller continuation', () async {
+    final directory = Directory('test/fixtures/component_spec/sync_streams');
+    final binary = File('${directory.path}/script.0.wasm').readAsBytesSync();
+    expect(
+      sha256.convert(binary).toString(),
+      'b8c9769becaf9aab0d89460c9c2e6fa559ece766ce812efc49b1eb13cc9cd555',
+    );
+    final scriptBytes = File('${directory.path}/script.json').readAsBytesSync();
+    expect(
+      sha256.convert(scriptBytes).toString(),
+      '3ecdacc33e0f3688a8bedbcec88b52e95fd2820163f106f023334a5dff56e02c',
+    );
+    final script = jsonDecode(utf8.decode(scriptBytes)) as Map<String, dynamic>;
+    expect(script['commands'], hasLength(2));
+    final report = await runner
+        .executeComponentSpecScript(script, directory: directory)
+        .timeout(const Duration(seconds: 2));
+    final records = report['commands'] as List;
+    expect(records, hasLength(2));
+    expect(records[0]['phase'], 'initialize');
+    expect(records[0]['status'], 'passed');
+    expect(records[1]['type'], 'assert_return');
+    expect(records[1]['export'], 'run');
+    expect(
+      records[1]['status'],
+      'passed',
+      reason:
+          'The original full call must return u32 42: ${jsonEncode(records[1])}',
+    );
+    final totals = report['totals'] as Map;
+    expect(totals['commands_seen'], 2);
+    expect(totals['commands_passed'], 2);
+    expect(totals['returns_passed'], 1);
+    expect(totals['commands_unsupported'], 0);
+    expect(totals['commands_not_executed'], 0);
+    expect(totals['commands_skipped'], 0);
+  });
+
+  group('continuation settlement', () {
+    late Directory directory;
+    setUp(() async {
+      directory = await _continuationFixtures();
+      addTearDown(() => directory.delete(recursive: true));
+    });
+
+    Future<Map<String, Object?>> run(List<Map<String, Object?>> commands) =>
+        runner
+            .executeComponentSpecScript(
+              jsonDecode(jsonEncode({'commands': commands}))
+                  as Map<String, dynamic>,
+              directory: directory,
+            )
+            .timeout(const Duration(seconds: 2));
+
+    for (final trap in [true, false]) {
+      for (final successor in [
+        'valid',
+        'signature lookup',
+        'argument count',
+        'argument value',
+      ]) {
+        test(
+          '${trap ? 'attributes late trap to starter' : 'preserves success'} '
+          'with $successor successor',
+          () async {
+            final report = await run([
+              {
+                'type': 'module',
+                'filename': trap ? 'late-trap.wasm' : 'returned.wasm',
+              },
+              _continuationInvoke('run', 42),
+              _continuationInvoke(
+                successor == 'signature lookup' ? 'missing' : 'ping',
+                7,
+                args: successor == 'argument count'
+                    ? []
+                    : [
+                        {
+                          'type': 'u32',
+                          'value': successor == 'argument value'
+                              ? 'seven'
+                              : '7',
+                        },
+                      ],
+              ),
+            ]);
+            final records = report['commands'] as List;
+            final starter = records[1] as Map;
+            expect(starter['actual'], 42);
+            expect(starter['passed'], !trap, reason: jsonEncode(report));
+            expect(starter['phase'], trap ? 'settle' : 'invoke');
+            if (trap) expect(starter['error'], contains('unreachable'));
+            final later = records[2] as Map;
+            expect(later['passed'], successor == 'valid');
+            expect(later['phase'], successor == 'valid' ? 'invoke' : 'input');
+            switch (successor) {
+              case 'valid':
+                expect(later['actual'], 7);
+              case 'signature lookup':
+                expect(later['error'], contains('export `missing` not found'));
+              case 'argument count':
+                expect(later['error'], contains('argument count mismatch'));
+              case 'argument value':
+                expect(later['error'], contains('Invalid u32 value'));
+            }
+            final totals = report['totals'] as Map;
+            expect(
+              totals['commands_failed'],
+              (trap ? 1 : 0) + (successor == 'valid' ? 0 : 1),
+            );
+          },
+        );
+      }
+    }
+
+    test('attributes nested child continuation to outer starter', () async {
+      final report = await run([
+        {'type': 'module', 'filename': 'nested-late-trap.wasm'},
+        _continuationInvoke('run', 42),
+        _continuationInvoke(
+          'ping',
+          7,
+          args: [
+            {'type': 'u32', 'value': '7'},
+          ],
+        ),
+      ]);
+      final records = report['commands'] as List;
+      expect(records[1]['passed'], false, reason: jsonEncode(report));
+      expect(records[1]['phase'], 'settle');
+      expect(records[1]['error'], contains('unreachable'));
+      expect(records[2]['passed'], true);
+      expect(records[2]['actual'], 7);
+    });
+
+    test('attributes starter when a later invoke observes its trap', () async {
+      final report = await run([
+        {'type': 'module', 'filename': 'late-trap-wait.wasm'},
+        _continuationInvoke('run', 42),
+        _continuationInvoke(
+          'ping',
+          7,
+          args: [
+            {'type': 'u32', 'value': '7'},
+          ],
+        ),
+      ]);
+      final records = report['commands'] as List;
+      expect(records[1]['passed'], false, reason: jsonEncode(report));
+      expect(records[1]['phase'], 'settle');
+      expect(records[2]['passed'], false);
+      expect(records[2]['phase'], 'invoke');
+      expect(records[2]['dependency_index'], 1);
+      expect((report['totals'] as Map)['commands_failed'], 2);
+    });
+
+    test(
+      'preserves result mismatch beside late continuation failure',
+      () async {
+        final report = await run([
+          {'type': 'module', 'filename': 'late-trap.wasm'},
+          _continuationInvoke('run', 0),
+          _continuationInvoke(
+            'ping',
+            7,
+            args: [
+              {'type': 'u32', 'value': '7'},
+            ],
+          ),
+        ]);
+        final records = report['commands'] as List;
+        expect(records[1]['phase'], 'invoke');
+        expect(
+          records[1]['error'],
+          contains('differs from the expected value'),
+        );
+        expect(records[1]['settlement_failure'], isA<Map>());
+        expect(records[1]['settlement_failure']['phase'], 'settle');
+        expect(
+          records[1]['settlement_failure']['error'],
+          contains('unreachable'),
+        );
+        expect(records[2]['passed'], true);
+      },
+    );
+
+    test('prior store trap cannot satisfy a later trap assertion', () async {
+      final report = await _runNumerics(
+        jsonDecode(
+              jsonEncode({
+                'commands': [
+                  {'type': 'module', 'filename': 'script.4.wasm'},
+                  for (final name in ['run-d800', 'run-dfff'])
+                    {
+                      'type': 'assert_trap',
+                      'action': {'type': 'invoke', 'field': name, 'args': []},
+                      'text': 'invalid `char` bit pattern',
+                    },
+                ],
+              }),
+            )
+            as Map<String, dynamic>,
+      );
+      final records = report['commands'] as List;
+      expect(records[1]['passed'], true);
+      expect(records[1]['phase'], 'invoke');
+      expect(records[2]['passed'], false);
+      expect(records[2]['phase'], 'invoke');
+      expect(records[2]['dependency_index'], 1);
+      expect(records[2]['status'], 'not_executed');
+      expect((report['totals'] as Map)['commands_not_executed'], 1);
+      expect((report['totals'] as Map)['traps_passed'], 1);
+    });
+
+    test('allows returned continuation to depend on a later invoke', () async {
+      final report = await run([
+        {'type': 'module', 'filename': 'cross-command.wasm'},
+        _continuationInvoke('run', 42),
+        _continuationInvoke('finish', 7),
+      ]);
+      expect(report['status'], 'passed', reason: jsonEncode(report));
+      expect((report['totals'] as Map)['commands_passed'], 3);
+    });
+  });
+
   group('negative spec commands', () {
     late Directory directory;
     setUp(() async {
@@ -482,21 +707,21 @@ void main() {
     expect(totals['traps_passed'], 5);
   });
 
-  test('three complete frozen files execute all 59 commands', () async {
+  test('four complete frozen files execute all 61 commands', () async {
     final report = await runner.runComponentSpecManifest(
       File('test/fixtures/component_spec/manifest.json'),
       usePreparedInputs: true,
     );
     expect(report['status'], 'passed');
     final totals = report['totals'] as Map;
-    expect(totals['files_total'], 3);
-    expect(totals['files_passed'], 3);
-    expect(totals['commands_passed'], 59);
+    expect(totals['files_total'], 4);
+    expect(totals['files_passed'], 4);
+    expect(totals['commands_passed'], 61);
     expect(totals['commands_failed'], 0);
     expect(totals['commands_skipped'], 0);
-    expect(totals['instantiations_passed'], 23);
+    expect(totals['instantiations_passed'], 24);
     expect(totals['definitions_passed'], 5);
-    expect(totals['returns_passed'], 19);
+    expect(totals['returns_passed'], 20);
     expect(totals['traps_passed'], 12);
   });
 
@@ -1748,6 +1973,7 @@ Map<String, Object?> _next(String value) => {
 Future<Directory> _copyFixtures({
   bool stringsOnly = true,
   bool includeRealloc = false,
+  bool includeSyncStreams = false,
 }) async {
   final temp = await Directory.systemTemp.createTemp(
     'wasd-component-manifest-',
@@ -1765,6 +1991,11 @@ Future<Directory> _copyFixtures({
   if (stringsOnly) {
     inventory['files'] = (inventory['files'] as List)
         .where((entry) => entry['path'] == 'test/values/strings.wast')
+        .toList();
+  }
+  if (!includeSyncStreams) {
+    inventory['files'] = (inventory['files'] as List)
+        .where((entry) => entry['path'] != 'test/async/sync-streams.wast')
         .toList();
   }
   if (!includeRealloc) {
@@ -1821,4 +2052,71 @@ final class _UnknownCause implements Exception {
   _UnknownCause(this.cause);
 
   final Object cause;
+}
+
+Map<String, Object?> _continuationInvoke(
+  String name,
+  int result, {
+  List<Map<String, Object?>> args = const [],
+}) => {
+  'type': 'assert_return',
+  'action': {'type': 'invoke', 'field': name, 'args': args},
+  'expected': [
+    {'type': 'u32', 'value': '$result'},
+  ],
+};
+
+Future<Directory> _continuationFixtures() async {
+  final directory = await Directory.systemTemp.createTemp(
+    'wasd-continuation-spec-',
+  );
+  // Synthetic components: run returns 42, then yields with/without a trap;
+  // cross-command run instead waits for finish to read its pending stream.
+  for (final entry in const {
+    'late-trap.wasm':
+        'AGFzbQ0AAQAIBwIJAHkADAABjgEAYXNtAQAAAAEVBGABfwBgAAF/YAN/f38Bf2ABfwF/AhYCAWgGcmV0dXJuAAABaA'
+        'V5aWVsZAABAwQDAQIDBxkDA3J1bgACCGNhbGxiYWNrAAMEcGluZwAEChcDDABBKhAAEAEaAEEACwMAAAsEACAACwAb'
+        'BG5hbWUAAgFtARACAAZyZXR1cm4BBXlpZWxkAhsCAQIGcmV0dXJuAAAFeWllbGQAAQAAAQFoEgAHBQFDAAB5BhYCAA'
+        'ABAQNydW4AAAEBCGNhbGxiYWNrCAkBAAACAgYHAwAHDAFAAQV2YWx1ZXkAeQYKAQAAAQEEcGluZwgGAQAABAABCxIC'
+        'AANydW4BAAAABHBpbmcBAQAANg5jb21wb25lbnQtbmFtZQESAAACAAZyZXR1cm4BBXlpZWxkAQYAEQEAAW0BCQASAg'
+        'ABaAEBbQ==',
+    'late-trap-wait.wasm':
+        'AGFzbQ0AAQAIBwIJAHkADAABkQEAYXNtAQAAAAEVBGABfwBgAAF/YAN/f38Bf2ABfwF/AhYCAWgGcmV0dXJuAAABaA'
+        'V5aWVsZAABAwQDAQIDBxkDA3J1bgACCGNhbGxiYWNrAAMEcGluZwAEChoDDABBKhAAEAEaAEEACwMAAAsHABABGiAA'
+        'CwAbBG5hbWUAAgFtARACAAZyZXR1cm4BBXlpZWxkAhsCAQIGcmV0dXJuAAAFeWllbGQAAQAAAQFoEgAHBQFDAAB5Bh'
+        'YCAAABAQNydW4AAAEBCGNhbGxiYWNrCAkBAAACAgYHAwAHDAFAAQV2YWx1ZXkAeQYKAQAAAQEEcGluZwgGAQAABAAB'
+        'CxICAANydW4BAAAABHBpbmcBAQAANg5jb21wb25lbnQtbmFtZQESAAACAAZyZXR1cm4BBXlpZWxkAQYAEQEAAW0BCQ'
+        'ASAgABaAEBbQ==',
+    'nested-late-trap.wasm':
+        'AGFzbQ0AAQAE3wIAYXNtDQABAAgHAgkAeQAMAAGOAQBhc20BAAAAARUEYAF/AGAAAX9gA39/fwF/YAF/AX8CFgIBaA'
+        'ZyZXR1cm4AAAFoBXlpZWxkAAEDBAMBAgMHGQMDcnVuAAIIY2FsbGJhY2sAAwRwaW5nAAQKFwMMAEEqEAAQARoAQQAL'
+        'AwAACwQAIAALABsEbmFtZQACAW0BEAIABnJldHVybgEFeWllbGQCGwIBAgZyZXR1cm4AAAV5aWVsZAABAAABAWgSAA'
+        'cFAUMAAHkGFgIAAAEBA3J1bgAAAQEIY2FsbGJhY2sICQEAAAICBgcDAAcMAUABBXZhbHVleQB5BgoBAAABAQRwaW5n'
+        'CAYBAAAEAAELEgIAA3J1bgEAAAAEcGluZwEBAAA+DmNvbXBvbmVudC1uYW1lAAYFY2hpbGQBEgAAAgAGcmV0dXJuAQ'
+        'V5aWVsZAEGABEBAAFtAQkAEgIAAWgBAW0FBAEAAAAGCAEBAAADcnVuCwkBAANydW4BAAAGCQEBAAAEcGluZwsKAQAE'
+        'cGluZwECAAAlDmNvbXBvbmVudC1uYW1lAQkEAQAFY2hpbGQBCQUBAAVjaGlsZA==',
+    'returned.wasm':
+        'AGFzbQ0AAQAIBwIJAHkADAABjQEAYXNtAQAAAAEVBGABfwBgAAF/YAN/f38Bf2ABfwF/AhYCAWgGcmV0dXJuAAABaA'
+        'V5aWVsZAABAwQDAQIDBxkDA3J1bgACCGNhbGxiYWNrAAMEcGluZwAEChYDCwBBKhAAEAEaQQALAwAACwQAIAALABsE'
+        'bmFtZQACAW0BEAIABnJldHVybgEFeWllbGQCGwIBAgZyZXR1cm4AAAV5aWVsZAABAAABAWgSAAcFAUMAAHkGFgIAAA'
+        'EBA3J1bgAAAQEIY2FsbGJhY2sICQEAAAICBgcDAAcMAUABBXZhbHVleQB5BgoBAAABAQRwaW5nCAYBAAAEAAELEgIA'
+        'A3J1bgEAAAAEcGluZwEBAAA2DmNvbXBvbmVudC1uYW1lARIAAAIABnJldHVybgEFeWllbGQBBgARAQABbQEJABICAA'
+        'FoAQFt',
+    'cross-command.wasm':
+        'AGFzbQ0AAQAHBAFmAX0BJgBhc20BAAAABQMBAAEHBwEDbWVtAgAADgRuYW1lAAcGbWVtb3J5AgQBAAAACAMBDgAGCQ'
+        'EAAgEAA21lbQgGARAAAQMABgkBAAIBAANtZW0IDwQPAAIGAwETABQACQB5AAGbAgBhc20BAAAAARQEYAABfmADf39/'
+        'AX9gAX8AYAABfwI9BgFoA25ldwAAAWgFd3JpdGUAAQFoBHJlYWQAAQFoBmRyb3AtcgACAWgGZHJvcC13AAIBaAZyZX'
+        'R1cm4AAgMEAwMBAwYLAn8BQQALfwFBAAsHGwMDcnVuAAYIY2FsbGJhY2sABwZmaW5pc2gACApAAygBAX4QACEAIACn'
+        'JAAgAEIgiKckAUEqEAUjAUEAQQEQARojARAEQQALAwAACxEAIwBBCEEBEAIaIwAQA0EHCwBKBG5hbWUAAgFtASsGAA'
+        'NuZXcBBXdyaXRlAgRyZWFkAwZkcm9wLXIEBmRyb3AtdwUGcmV0dXJuAgkBBgEABHBhaXIHBwIAAXIBAXcCOgIBBgNu'
+        'ZXcAAAV3cml0ZQABBHJlYWQAAgZkcm9wLXIAAwZkcm9wLXcABAZyZXR1cm4ABQABAQFoEgEHBQFDAAB5BhYCAAABAg'
+        'NydW4AAAECCGNhbGxiYWNrCAkBAAAGAgYHBwEHBQFAAAB5BgwBAAABAgZmaW5pc2gIBgEAAAgAAgsUAgADcnVuAQAA'
+        'AAZmaW5pc2gBAQAAbQ5jb21wb25lbnQtbmFtZQEtAAAGAANuZXcBBXdyaXRlAgRyZWFkAwZkcm9wLXIEBmRyb3Atdw'
+        'UGcmV0dXJuAQ4AEQIABm1lbW9yeQEBbQERABIDAAZtZW1vcnkBAWgCAW0BCgMBAAZzdHJlYW0=',
+  }.entries) {
+    await File(
+      '${directory.path}/${entry.key}',
+    ).writeAsBytes(base64Decode(entry.value));
+  }
+  return directory;
 }

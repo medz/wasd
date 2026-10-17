@@ -143,6 +143,28 @@
           "sha256": "8ee98c8cdd0061ad8cd987f4c5d1ed33bc76cb9ea0f79d72b9c271fd7d6bbfea"
         }
       ]
+    },
+    {
+      "path": "test/async/sync-streams.wast",
+      "source": "sync_streams/sync-streams.wast",
+      "blob": "5eb1b7a02aaa0b8a94436c4fbc4573ae31530d7b",
+      "sha256": "bcf37448f4495e986adbd17915060ed6b7cce7e5c0fa11b8c3a4cce2b08919e1",
+      "prepared": "sync_streams/script.json",
+      "commands": 2,
+      "instantiations": 1,
+      "definitions": 0,
+      "returns": 1,
+      "traps": 0,
+      "inputs": [
+        {
+          "path": "sync_streams/script.0.wasm",
+          "sha256": "b8c9769becaf9aab0d89460c9c2e6fa559ece766ce812efc49b1eb13cc9cd555"
+        },
+        {
+          "path": "sync_streams/script.json",
+          "sha256": "3ecdacc33e0f3688a8bedbcec88b52e95fd2820163f106f023334a5dff56e02c"
+        }
+      ]
     }
   ]
 }
