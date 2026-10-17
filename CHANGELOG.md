@@ -1,3 +1,31 @@
+## 0.6.1
+
+- Keep canonical resource, stream/future, task, waitable-set and error-context
+  handles local to each Component instance. Preserve resource type identity,
+  own/borrow lifetimes and invocation-local thread context across supported
+  aliases and asynchronous calls. Validate complete argument/result conversions
+  before consuming owned handles, preserving earlier owners on failure.
+- Transfer owned async values only for accepted prefixes; preserve pending
+  cursors, cumulative progress and once-only cleanup on cancellation, failed
+  stores or destructor traps. Reclaim temporary error-context references.
+- Run concrete local resource destructors with their instantiated Core state,
+  preserve destructor failures, and reject invalid destructor signatures.
+- Support typed Future host callbacks on JavaScript engines with JSPI; preserve
+  original host errors and stacks on VM, Node and browser paths. Reject erased
+  Future results without replaying guest execution. Core start callbacks remain
+  synchronous.
+- Improve the Component specification runner's void assertions, anonymous
+  definitions and phase-specific negative assertions. Keep unsupported commands
+  and dependent actions that were not executed separate from runtime failures.
+- Report blocking synchronous stream copies after `task.return` before
+  retaining a pending buffer. Immediate copies remain executable; complete
+  caller-continuation scheduling is still tracked in #156.
+- Retain the frozen Core 261-file/65,336-command, Component 3-file/59-command,
+  native Preview1 72-case and native Preview3 0.3.0 45-case gates.
+
+Full standards acceptance and broader platform coverage remain tracked in
+`doc/standards.md`.
+
 ## 0.6.0
 
 Regular release, including all changes from `0.6.0-dev.1` through

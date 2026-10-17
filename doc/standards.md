@@ -2,9 +2,10 @@
 
 This implementation and acceptance plan retains the historical `0.5.0`
 (`528b2b828f979d08ba1798f7e8e955e892ab052d`) baseline checked on 2026-10-01.
-Current evidence describes `0.6.0`, which includes the earlier
-`0.6.0-dev.1` through `0.6.0-dev.3` changes and the realloc slice. Historical
-results retain their original versions and scope.
+Current evidence describes `0.6.1`, retaining the `0.6.0` frozen gates and
+adding Component handle ownership, local destructors, stricter assertions and
+JavaScript asynchronous host callbacks. Historical results retain their
+original versions and scope.
 A target in this document is not a support claim. Release support must be backed
 by WASD execution, validation, and host tests at the exact release commit.
 
@@ -124,9 +125,24 @@ Core CI runs these selected complete files on both Dart SDKs. This remains
 separate from the historical decode, external validation and reference-runtime
 results. General Component composition, additional value codecs, full async
 assertion execution and a portable public instance API remain open requirements.
-Nested Component starts and concrete local resource aliases are explicitly
-rejected before execution. Imported resource identities and the numeric
-file's lexical type aliases remain supported.
+Nested Component starts remain unsupported. Resource aliases within the
+same component (`alias outer 0`) and supported interface type scopes preserve
+instantiated identity. Resource aliases crossing a nested Component boundary
+remain rejected. Imported resource identities and the numeric file's lexical
+type aliases remain supported.
+
+The `0.6.1` handle slice keeps canonical indexes local to each instance while
+sharing host backing. Typed own/borrow conversion, async accepted-prefix
+ownership and local resource destructors have focused regressions. Async
+borrowed-resource, error-context and nested stream/future payload codecs remain
+unsupported. The named exported stream-alias result shape tracked in
+[#162](https://github.com/medz/wasd/issues/162) remains unsupported; its inline
+stream equivalent has actual cross-instance controls. A blocking synchronous
+stream copy after `task.return` reports the missing caller-continuation
+capability before registering a pending copy; full continuation scheduling
+remains tracked in [#156](https://github.com/medz/wasd/issues/156). Top-level
+equality-bound component type imports remain unsupported and are tracked in
+[#163](https://github.com/medz/wasd/issues/163).
 Shared canonical-memory regressions also run on Node and Chrome. This does not
 establish JavaScript u64 memory access or general Component execution there.
 
