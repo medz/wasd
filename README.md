@@ -40,19 +40,21 @@ Or add manually in `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  wasd: ^0.6.0
+  wasd: ^0.6.1
 ```
 
-This release is `0.6.0`.
+This release is `0.6.1`.
 
 To select this version explicitly:
 
 ```bash
-dart pub add wasd:^0.6.0
+dart pub add wasd:^0.6.1
 ```
 
-Version `0.6.0` includes the changes from `0.6.0-dev.1` through
-`0.6.0-dev.3`, plus the realloc checks described below. It provides Dart VM
+Version `0.6.1` adds instance-local Component handles, typed ownership
+transfer and resource destructors. JavaScript backends support typed
+asynchronous host imports through JSPI. Original host errors and stacks are
+preserved on supported VM, Node and browser paths. It retains Dart VM
 [multi-memory opt-in](doc/core_features.md), [numeric host globals](doc/host_globals.md),
 [unambiguous import names](doc/import_identity.md), and floating-point/GC
 initialization fixes. [Public numeric tags and exceptions](doc/host_tags.md)
