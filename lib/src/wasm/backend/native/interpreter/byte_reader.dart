@@ -80,7 +80,9 @@ final class ByteReader {
 
       if ((byte & 0x80) == 0) {
         if (i == 4 && (byte & 0xf0) != 0) {
-          throw const FormatException('Invalid varuint32 encoding.');
+          throw const FormatException(
+            'Invalid varuint32 encoding: integer too large.',
+          );
         }
         return result;
       }
@@ -88,7 +90,9 @@ final class ByteReader {
       multiplier *= 128;
     }
 
-    throw const FormatException('Invalid varuint32 encoding.');
+    throw const FormatException(
+      'Invalid varuint32 encoding: integer representation too long.',
+    );
   }
 
   int readVarUint64() {

@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:wasd/src/wasm/backend/native/interpreter/byte_reader.dart'
+    as native_reader;
 import 'package:wasd/src/wasm/backend/native/interpreter/features.dart'
     as native_features;
 import 'package:wasd/src/wasm/backend/native/interpreter/module.dart'
@@ -120,6 +122,40 @@ final _invalidBranchHintCustomSectionBytes = Uint8List.fromList(const <int>[
 final _invalidBytes = Uint8List.fromList([0x00, 0x00, 0x00, 0x00]);
 
 void main() {
+  group('Interpreter u32 decoding', () {
+    for (final (bytes, expected) in <(List<int>, int)>[
+      ([0], 0),
+      ([0x80, 0x80, 0x80, 0x80, 0], 0),
+      ([0xff, 0xff, 0xff, 0xff, 0x0f], 4294967295),
+    ]) {
+      test('accepts in-range encoding $bytes', () {
+        expect(
+          native_reader.ByteReader(Uint8List.fromList(bytes)).readVarUint32(),
+          expected,
+        );
+      });
+    }
+    for (final (bytes, expected) in <(List<int>, String)>[
+      ([0xff, 0xff, 0xff, 0xff, 0x10], 'integer too large'),
+      ([0x80, 0x80, 0x80, 0x80, 0x80, 0], 'integer representation too long'),
+    ]) {
+      test('distinguishes malformed cause: $expected', () {
+        expect(
+          () => native_reader.ByteReader(
+            Uint8List.fromList(bytes),
+          ).readVarUint32(),
+          throwsA(
+            isA<FormatException>().having(
+              (error) => error.message,
+              'message',
+              contains(expected),
+            ),
+          ),
+        );
+      });
+    }
+  });
+
   group('native GC type validation', () {
     const features = native_features.WasmFeatureSet(gc: true);
 

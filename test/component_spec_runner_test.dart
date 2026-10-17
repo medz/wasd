@@ -38,6 +38,369 @@ Future<Map<String, Object?>> _run(Map<String, dynamic> script) =>
     runner.executeComponentSpecScript(script, directory: Directory(_fixture));
 
 void main() {
+  group('negative spec commands', () {
+    late Directory directory;
+    setUp(() async {
+      directory = await _negativeFixtures();
+      addTearDown(() => directory.delete(recursive: true));
+    });
+
+    Future<Map<String, Object?>> run(List<Map<String, Object?>> commands) =>
+        runner.executeComponentSpecScript(
+          jsonDecode(jsonEncode({'commands': commands}))
+              as Map<String, dynamic>,
+          directory: directory,
+        );
+
+    for (final (type, filename, expected, phase) in [
+      (
+        'assert_invalid',
+        'invalid.wasm',
+        'type index out of bounds',
+        'validate',
+      ),
+      (
+        'assert_malformed',
+        'truncated.wasm',
+        'unexpected end-of-file',
+        'decode',
+      ),
+      ('assert_uninstantiable', 'start.wasm', 'unreachable', 'initialize'),
+    ]) {
+      test('$type matches its phase and preserves current state', () async {
+        final report = await run([
+          {'type': 'module', 'filename': 'stateful_void.wasm'},
+          _bump(5, []),
+          _negative(type, filename, expected),
+          _count(5),
+        ]);
+        expect(report['status'], 'passed');
+        final records = report['commands'] as List;
+        expect(records[2]['status'], 'passed');
+        expect(records[2]['phase'], phase);
+        expect(records[2]['expected_diagnostic'], expected);
+        expect(records[2]['binary_sha256'], matches(r'^[0-9a-f]{64}$'));
+        final totals = report['totals'] as Map;
+        expect(totals['commands_seen'], 4);
+        expect(totals['commands_passed'], 4);
+      });
+    }
+
+    for (final (type, filename, expected) in [
+      ('assert_invalid', 'empty.wasm', 'type index out of bounds'),
+      ('assert_invalid', 'truncated.wasm', 'unexpected end-of-file'),
+      ('assert_invalid', 'invalid.wasm', 'function index out of bounds'),
+      ('assert_malformed', 'empty.wasm', ''),
+      ('assert_malformed', 'invalid.wasm', 'type index out of bounds'),
+      ('assert_malformed', 'truncated.wasm', 'malformed UTF-8 encoding'),
+      ('assert_uninstantiable', 'empty.wasm', 'unreachable'),
+      ('assert_uninstantiable', 'invalid.wasm', 'type index out of bounds'),
+      ('assert_uninstantiable', 'unlinked.wasm', 'unreachable'),
+      ('assert_uninstantiable', 'start.wasm', 'invalid `char` bit pattern'),
+    ]) {
+      test(
+        '$type rejects wrong phase or category: $filename / $expected',
+        () async {
+          final report = await run([_negative(type, filename, expected)]);
+          expect(report['status'], 'failed');
+          expect((report['commands'] as List).single['passed'], false);
+        },
+      );
+    }
+
+    for (final (filename, expected) in [
+      ('bad-magic.wasm', 'magic header not detected'),
+      ('bad-length.wasm', 'integer too large'),
+    ]) {
+      test('structural $filename matches only its own diagnostic', () async {
+        final report = await run([
+          _negative('assert_malformed', filename, expected),
+          _negative('assert_malformed', filename, ''),
+          _negative('assert_malformed', filename, 'unexpected end-of-file'),
+        ]);
+        final records = report['commands'] as List;
+        expect(records[0]['passed'], true);
+        expect(records[1]['passed'], true);
+        expect(records[2]['passed'], false);
+      });
+    }
+
+    for (final filename in [
+      'bad-version.wasm',
+      'bad-layer.wasm',
+      'bad-layer-2.wasm',
+      'bad-layer-257.wasm',
+      'nested-bad-version.wasm',
+      'nested-core-header.wasm',
+    ]) {
+      test(
+        'ambiguous $filename diagnostic cannot satisfy assertions',
+        () async {
+          final report = await run([
+            for (final expected in [
+              'unknown binary version',
+              'expected a version header for a component',
+              '',
+            ])
+              _negative('assert_malformed', filename, expected),
+          ]);
+          final records = report['commands'] as List;
+          for (final record in records) {
+            expect(record['passed'], false);
+            expect(record['status'], 'unsupported');
+            expect(record['failure_kind'], 'unsupported_diagnostic');
+            expect(record['phase'], 'decode');
+          }
+          expect((report['totals'] as Map)['commands_passed'], 0);
+        },
+      );
+    }
+
+    test(
+      'u32 overflow and overlong representation are distinct malformed causes',
+      () async {
+        final report = await run([
+          _negative(
+            'assert_malformed',
+            'overlong-length.wasm',
+            'integer representation too long',
+          ),
+          _negative(
+            'assert_malformed',
+            'overlong-length.wasm',
+            'integer too large',
+          ),
+          _negative('assert_malformed', 'bad-length.wasm', 'integer too large'),
+          _negative(
+            'assert_malformed',
+            'bad-length.wasm',
+            'integer representation too long',
+          ),
+        ]);
+        final records = report['commands'] as List;
+        expect(records[0]['passed'], true);
+        expect(records[1]['passed'], false);
+        expect(records[2]['passed'], true);
+        expect(records[3]['passed'], false);
+      },
+    );
+
+    for (final type in [
+      'assert_invalid',
+      'assert_malformed',
+      'assert_uninstantiable',
+    ]) {
+      test('$type reports missing input outside its assertion', () async {
+        final report = await run([_negative(type, 'missing.wasm', '')]);
+        final record = (report['commands'] as List).single as Map;
+        expect(record['passed'], false);
+        expect(record['phase'], 'input');
+        expect(record['error_type'], 'PathNotFoundException');
+      });
+    }
+
+    test(
+      'unsupported binary features and text remain explicit non-passes',
+      () async {
+        final report = await run([
+          _negative(
+            'assert_invalid',
+            'forward.wasm',
+            '`stream.forward` requires a stream type',
+          ),
+          _negative('assert_malformed', 'forward.wasm', ''),
+          _negative('assert_malformed', 'future-forward.wasm', ''),
+          {
+            ..._negative(
+              'assert_malformed',
+              'quote.wat',
+              'invalid string escape',
+            ),
+            'module_type': 'text',
+          },
+        ]);
+        final records = report['commands'] as List;
+        expect(records.every((record) => record['passed'] == false), true);
+        expect(records[0]['failure_kind'], 'unsupported_feature');
+        expect(records[0]['phase'], 'decode');
+        expect(records[1]['failure_kind'], 'unsupported_feature');
+        expect(records[2]['failure_kind'], 'unsupported_feature');
+        expect(records[3]['failure_kind'], 'unsupported_text');
+        final totals = report['totals'] as Map;
+        expect(totals['commands_unsupported'], 4);
+        expect(totals['commands_passed'], 0);
+        expect(totals['commands_skipped'], 0);
+      },
+    );
+
+    test('standalone action invokes once and ignores its result', () async {
+      final report = await run([
+        {'type': 'module', 'filename': 'stateful_void.wasm'},
+        {'type': 'action', 'action': _bump(3, [])['action']},
+        {'type': 'action', 'action': _count(0)['action']},
+        _count(3),
+      ]);
+      expect(report['status'], 'passed');
+      final totals = report['totals'] as Map;
+      expect(totals['actions_passed'], 2);
+      expect(totals['returns_passed'], 1);
+    });
+
+    test('invalid standalone action cannot mutate state', () async {
+      final report = await run([
+        {'type': 'module', 'filename': 'stateful_void.wasm'},
+        {'type': 'action', 'action': _bump(3, [])['action'], 'expected': []},
+        _count(0),
+      ]);
+      final records = report['commands'] as List;
+      expect(records[1]['passed'], false);
+      expect(records[1]['phase'], 'input');
+      expect(records[2]['passed'], true);
+    });
+
+    test(
+      'initialization trap matcher rejects host errors and unknown wrappers',
+      () {
+        final trap = WasmUnreachableTrap();
+        final cycle = _ExecutionError(trap);
+        cycle.cause = cycle;
+        for (final expected in [
+          'unreachable',
+          'wasm trap: wasm `unreachable` instruction executed',
+        ]) {
+          expect(
+            runner.matchesComponentInitializationTrap(
+              _ExecutionError(_ExecutionError(trap)),
+              expected,
+            ),
+            true,
+          );
+          for (final error in [
+            trap,
+            StateError('unreachable trap'),
+            _ExecutionError(StateError('unreachable trap')),
+            _UnknownCause(trap),
+            _ExecutionError(_UnknownCause(trap)),
+            const FormatException('unreachable'),
+            cycle,
+          ]) {
+            expect(
+              runner.matchesComponentInitializationTrap(error, expected),
+              false,
+            );
+          }
+        }
+        expect(
+          runner.matchesComponentInitializationTrap(
+            _ExecutionError(trap),
+            'any error',
+          ),
+          false,
+        );
+      },
+    );
+
+    test(
+      'failed module records dependencies and independent module recovers',
+      () async {
+        final report = await run([
+          {'type': 'module', 'filename': 'stateful_void.wasm'},
+          _bump(9, []),
+          {'type': 'module', 'filename': 'unlinked.wasm'},
+          _count(9),
+          {'type': 'module', 'filename': 'stateful_void.wasm'},
+          _count(0),
+        ]);
+        final records = report['commands'] as List;
+        expect(records[2]['status'], 'failed');
+        expect(records[3]['status'], 'not_executed');
+        expect(records[3]['dependency_index'], 2);
+        expect(records[4]['passed'], true);
+        expect(records[5]['passed'], true);
+        final totals = report['totals'] as Map;
+        expect(totals['commands_not_executed'], 1);
+        expect(totals['commands_failed'], 1);
+        expect(totals['commands_seen'], 6);
+      },
+    );
+
+    test('failed definition replacement cannot reuse old bytes', () async {
+      Map<String, Object?> definition(String file) => {
+        'type': 'module_definition',
+        'name': 'Counter',
+        'filename': file,
+      };
+      final instance = <String, Object?>{
+        'type': 'module_instance',
+        'module': 'Counter',
+        'instance': 'counter',
+      };
+      final report = await run([
+        {'type': 'module', 'filename': 'stateful_void.wasm'},
+        _bump(7, []),
+        definition('stateful_void.wasm'),
+        definition('invalid.wasm'),
+        _count(7),
+        instance,
+        _count(0),
+        definition('stateful_void.wasm'),
+        instance,
+        _count(0),
+      ]);
+      final records = report['commands'] as List;
+      expect(records[3]['passed'], false);
+      expect(records[4]['passed'], true);
+      expect(records[5]['status'], 'not_executed');
+      expect(records[5]['dependency_index'], 3);
+      expect(records[6]['status'], 'not_executed');
+      expect(records[6]['dependency_index'], 5);
+      expect(records[7]['passed'], true);
+      expect(records[8]['passed'], true);
+      expect(records[9]['passed'], true);
+    });
+
+    for (final (type, encoding) in [
+      ('assert_invalid', 'binary'),
+      ('assert_malformed', 'binary'),
+      ('assert_malformed', 'text'),
+      ('assert_uninstantiable', 'binary'),
+    ]) {
+      test(
+        'prepared $type / $encoding input must have a verified hash',
+        () async {
+          final temp = await _copyFixtures();
+          addTearDown(() => temp.delete(recursive: true));
+          final manifest = File('${temp.path}/manifest.json');
+          final inventory = jsonDecode(await manifest.readAsString()) as Map;
+          final entry = (inventory['files'] as List).single as Map;
+          final prepared = File('${temp.path}/${entry['prepared']}');
+          final script = jsonDecode(await prepared.readAsString()) as Map;
+          (script['commands'] as List).add({
+            ..._negative(type, 'unverified.input', ''),
+            'module_type': encoding,
+          });
+          await prepared.writeAsString(jsonEncode(script));
+          for (final input in entry['inputs'] as List) {
+            if (input['path'] == entry['prepared']) {
+              input['sha256'] = sha256
+                  .convert(await prepared.readAsBytes())
+                  .toString();
+            }
+          }
+          await manifest.writeAsString(jsonEncode(inventory));
+          final report = await runner.runComponentSpecManifest(
+            manifest,
+            usePreparedInputs: true,
+          );
+          final file = (report['files'] as List).single as Map;
+          expect(file['status'], 'failed');
+          expect(file['error'], contains('has no verified hash'));
+          expect(file['commands'], isNull);
+        },
+      );
+    }
+  });
+
   test('complete frozen strings file executes 8 initializations, 5 returns, '
       'and 4 traps through WASD', () async {
     final temp = await _copyFixtures();
@@ -1319,6 +1682,52 @@ Map<String, Object?> _bump(int amount, Object? expected) => {
   },
   'expected': expected,
 };
+
+Map<String, Object?> _negative(String type, String filename, String text) => {
+  'type': type,
+  'filename': filename,
+  'module_type': 'binary',
+  'text': text,
+};
+
+Future<Directory> _negativeFixtures() async {
+  final directory = await Directory.systemTemp.createTemp(
+    'wasd-negative-spec-',
+  );
+  for (final filename in ['stateful_void.wasm', 'unlinked.wasm']) {
+    await File(
+      'test/fixtures/component_spec/regression/$filename',
+    ).copy('${directory.path}/$filename');
+  }
+  // Negative inputs from fixed 0220 binary.wast and async/forward.wast;
+  // start.wasm is a synthetic Core start containing only unreachable/end.
+  for (final entry in const {
+    'invalid.wasm': 'AGFzbQ0AAQAHAwFwAA==',
+    'truncated.wasm': 'AGFzbQ0AAQAHAwA=',
+    'forward.wasm':
+        'AGFzbQ0AAQAHBAFlAX0IAwEuAAAfDmNvbXBvbmVudC1uYW1lAQYAAAEAAWYBBgMBAAJGVA==',
+    'start.wasm':
+        'AGFzbQ0AAQABMQBhc20BAAAAAQQBYAAAAwIBAAgBAAoFAQMAAAsAEwRuYW1lAAIBbQEIAQAFc3RhcnQCBAEAAAAAFw5jb21wb25lbnQtbmFtZQEGABEBAAFt',
+    'empty.wasm': 'AGFzbQ0AAQA=',
+    'bad-magic.wasm': 'AWFzbQ0AAQA=',
+    'bad-version.wasm': 'AGFzbQ4AAQA=',
+    'bad-layer.wasm': 'AGFzbQ0AAAA=',
+    'bad-layer-2.wasm': 'AGFzbQ0AAgA=',
+    'bad-layer-257.wasm': 'AGFzbQ0AAQE=',
+    'nested-bad-version.wasm': 'AGFzbQ0AAQAECABhc20MAAEA',
+    'nested-core-header.wasm': 'AGFzbQ0AAQAECABhc20BAAAA',
+    'bad-length.wasm': 'AGFzbQ0AAQAH/////xA=',
+    'overlong-length.wasm': 'AGFzbQ0AAQAHgICAgIAA',
+    'future-forward.wasm':
+        'AGFzbQ0AAQAHBAFmAX0IAwEvAAAfDmNvbXBvbmVudC1uYW1lAQYAAAEAAWYBBgMBAAJTVA==',
+  }.entries) {
+    await File(
+      '${directory.path}/${entry.key}',
+    ).writeAsBytes(base64Decode(entry.value));
+  }
+  await File('${directory.path}/quote.wat').writeAsString('(component "\\q")');
+  return directory;
+}
 
 Map<String, Object?> _count(int value) => {
   'type': 'assert_return',

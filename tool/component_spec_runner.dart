@@ -96,6 +96,68 @@ Object? _componentTrapCause(Object error) {
   return error;
 }
 
+/// Requires an execution wrapper and a Core instruction-origin trap cause.
+bool matchesComponentInitializationTrap(Object error, String expected) =>
+    (expected == 'unreachable' ||
+        expected == 'wasm trap: wasm `unreachable` instruction executed') &&
+    error is WasmExecutionErrorContext &&
+    _componentTrapCause(error) is WasmUnreachableTrap;
+
+Never _unsupported(Map<String, Object?> record, String kind, String message) {
+  record['status'] = 'unsupported';
+  record['failure_kind'] = kind;
+  throw UnsupportedError(message);
+}
+
+WasmComponent _decodeComponent(Uint8List bytes, Map<String, Object?> record) {
+  record['phase'] = 'decode';
+  try {
+    return WasmComponent.decode(bytes);
+  } on FormatException catch (error) {
+    // These two opcodes are defined in the fixed target, but not decoded yet.
+    // Other invalid enum bytes also say "Unsupported" and are not features.
+    if (error.message ==
+            'Unsupported Wasm component canonical definition: 0x2e.' ||
+        error.message ==
+            'Unsupported Wasm component canonical definition: 0x2f.') {
+      record['status'] = 'unsupported';
+      record['failure_kind'] = 'unsupported_feature';
+    }
+    rethrow;
+  }
+}
+
+String? _malformedDiagnostic(Object error) {
+  if (error is! FormatException) return null;
+  final message = error.message;
+  if (message.startsWith('Unexpected EOF while reading ')) {
+    return 'unexpected end-of-file';
+  }
+  return switch (message) {
+    'Invalid varuint32 encoding: integer too large.' => 'integer too large',
+    'Invalid varuint32 encoding: integer representation too long.' =>
+      'integer representation too long',
+    'Invalid Wasm component magic number.' => 'magic header not detected',
+    // Version/layer errors do not distinguish a nested Core header from an
+    // unknown Component version, which require different spec diagnostics.
+    _ => null,
+  };
+}
+
+bool? _matchesInvalidDiagnostic(
+  List<WasmComponentValidationError> errors,
+  String expected,
+) {
+  if (expected != '' && expected != 'type index out of bounds') return null;
+  return errors.any(
+    (error) =>
+        error.path.startsWith('type[') &&
+        RegExp(
+          r'^Unknown Wasm component value type index: [0-9]+\.$',
+        ).hasMatch(error.message),
+  );
+}
+
 void _checkFields(Map object, Set<String> allowed) {
   if (object.keys.any((key) => !allowed.contains(key))) {
     throw const FormatException('Unsupported Component JSON field.');
@@ -267,7 +329,9 @@ Future<Map<String, Object?>> executeComponentSpecScript(
   final records = <Map<String, Object?>>[];
   final host = WASIComponentHost();
   final definitions = <String, WasmComponent>{};
+  final failedDefinitions = <String, int>{};
   WASIComponentNativeRuntime? current;
+  int? failedCurrent;
   final commands = script['commands'];
   if (commands is! List || commands.isEmpty) {
     return {
@@ -280,7 +344,12 @@ Future<Map<String, Object?>> executeComponentSpecScript(
   await host.table.runScoped(() async {
     for (var i = 0; i < commands.length; i++) {
       final raw = commands[i];
-      final record = <String, Object?>{'index': i, 'passed': false};
+      final record = <String, Object?>{
+        'index': i,
+        'passed': false,
+        'status': 'failed',
+        'phase': 'input',
+      };
       records.add(record);
       try {
         if (raw is! Map<String, dynamic>) {
@@ -292,7 +361,14 @@ Future<Map<String, Object?>> executeComponentSpecScript(
         switch (type) {
           case 'module':
           case 'module_definition':
-            if (type == 'module') current = null;
+            if (type == 'module') {
+              current = null;
+              failedCurrent = i;
+            } else if (raw['name'] case final String name
+                when name.isNotEmpty) {
+              definitions.remove(name);
+              failedDefinitions[name] = i;
+            }
             _checkFields(raw, const {
               'type',
               'line',
@@ -318,8 +394,9 @@ Future<Map<String, Object?>> executeComponentSpecScript(
             final file = _inputFile(directory, raw['filename']);
             final bytes = file.readAsBytesSync();
             record['binary_sha256'] = sha256.convert(bytes).toString();
-            final component = WasmComponent.decode(bytes);
+            final component = _decodeComponent(bytes, record);
             if (type == 'module_definition') {
+              record['phase'] = 'validate';
               final errors = component.validate();
               if (errors.isNotEmpty) {
                 throw FormatException(
@@ -328,6 +405,7 @@ Future<Map<String, Object?>> executeComponentSpecScript(
               }
               if (name is String) {
                 definitions[name] = component;
+                failedDefinitions.remove(name);
                 record['definition'] = name;
               }
             } else {
@@ -335,12 +413,15 @@ Future<Map<String, Object?>> executeComponentSpecScript(
                 component: component,
                 host: host,
               );
+              record['phase'] = 'initialize';
               await runtime.initialize();
               current = runtime;
+              failedCurrent = null;
             }
             break;
           case 'module_instance':
             current = null;
+            failedCurrent = i;
             _checkFields(raw, const {'type', 'line', 'instance', 'module'});
             final name = raw['module'];
             final instance = raw['instance'];
@@ -352,6 +433,12 @@ Future<Map<String, Object?>> executeComponentSpecScript(
                 'Component instance requires definition and instance names.',
               );
             }
+            final definitionFailure = failedDefinitions[name];
+            if (definitionFailure != null) {
+              record['status'] = 'not_executed';
+              record['dependency_index'] = definitionFailure;
+              throw StateError('Component definition `$name` is unavailable.');
+            }
             final component = definitions[name];
             if (component == null) {
               throw StateError('Unknown component definition `$name`.');
@@ -360,16 +447,157 @@ Future<Map<String, Object?>> executeComponentSpecScript(
               component: component,
               host: host,
             );
+            record['phase'] = 'initialize';
             await runtime.initialize();
             current = runtime;
+            failedCurrent = null;
             record['definition'] = name;
             record['instance'] = instance;
             break;
+          case 'assert_invalid':
+          case 'assert_malformed':
+          case 'assert_uninstantiable':
+            _checkFields(raw, const {
+              'type',
+              'line',
+              'filename',
+              'module_type',
+              'text',
+            });
+            final expected = raw['text'];
+            if (expected is! String) {
+              throw const FormatException('Expected a diagnostic string.');
+            }
+            record['expected_diagnostic'] = expected;
+            final encoding = raw['module_type'];
+            if (encoding != 'binary' &&
+                !(type == 'assert_malformed' && encoding == 'text')) {
+              throw const FormatException('Expected a binary Component input.');
+            }
+            final bytes = _inputFile(
+              directory,
+              raw['filename'],
+            ).readAsBytesSync();
+            record['binary_sha256'] = sha256.convert(bytes).toString();
+            if (encoding == 'text') {
+              _unsupported(
+                record,
+                'unsupported_text',
+                'Component text decoding is not implemented.',
+              );
+            }
+            WasmComponent? component;
+            Object? decodeError;
+            try {
+              component = _decodeComponent(bytes, record);
+            } catch (error) {
+              decodeError = error;
+            }
+            if (decodeError != null) {
+              if (type != 'assert_malformed' ||
+                  record['status'] == 'unsupported') {
+                throw decodeError;
+              }
+              record['observed_diagnostic'] = decodeError.toString();
+              final actual = _malformedDiagnostic(decodeError);
+              if (actual == null) {
+                _unsupported(
+                  record,
+                  'unsupported_diagnostic',
+                  'Unrecognized structural decoder diagnostic: $decodeError',
+                );
+              }
+              if (expected.isNotEmpty && actual != expected) {
+                throw StateError(
+                  'Structural decoder diagnostic differs from `$expected`: $decodeError',
+                );
+              }
+              record['error_type'] = decodeError.runtimeType.toString();
+              break;
+            }
+            if (type == 'assert_malformed') {
+              throw StateError(
+                'Component binary decoded without a structural error.',
+              );
+            }
+            record['phase'] = 'validate';
+            final decoded = component!;
+            final errors = decoded.validate();
+            record['validation_errors'] = [
+              for (final error in errors)
+                {'path': error.path, 'message': error.message},
+            ];
+            if (type == 'assert_invalid') {
+              if (errors.isEmpty) {
+                throw StateError('Component passed semantic validation.');
+              }
+              final matches = _matchesInvalidDiagnostic(errors, expected);
+              if (matches == null) {
+                _unsupported(
+                  record,
+                  'unsupported_diagnostic',
+                  'Unsupported expected validation diagnostic: $expected',
+                );
+              }
+              if (!matches) {
+                throw StateError(
+                  'Semantic validation diagnostic differs from `$expected`: ${errors.join(', ')}',
+                );
+              }
+              break;
+            }
+            if (errors.isNotEmpty) {
+              throw StateError(
+                'Component failed validation before initialization: ${errors.join(', ')}',
+              );
+            }
+            record['phase'] = 'initialize';
+            // Negative instantiation owns a separate table; it cannot release
+            // or replace handles belonging to the current positive instance.
+            final candidateHost = WASIComponentHost();
+            Object? initializationError;
+            await candidateHost.table.runScoped(() async {
+              final runtime = WASIComponentNativeRuntime.component(
+                component: decoded,
+                host: candidateHost,
+              );
+              try {
+                await runtime.initialize();
+              } catch (error) {
+                initializationError = error;
+              }
+            });
+            if (initializationError == null) {
+              throw StateError('Component initialized without trapping.');
+            }
+            record['observed_diagnostic'] = initializationError.toString();
+            if (!matchesComponentInitializationTrap(
+              initializationError!,
+              expected,
+            )) {
+              if (expected != 'unreachable' &&
+                  expected !=
+                      'wasm trap: wasm `unreachable` instruction executed') {
+                _unsupported(
+                  record,
+                  'unsupported_diagnostic',
+                  'Unsupported expected initialization trap: $expected',
+                );
+              }
+              throw StateError(
+                'Unexpected initialization error: $initializationError',
+              );
+            }
+            record['error_type'] = initializationError.runtimeType.toString();
+            break;
+          case 'action':
           case 'assert_return':
           case 'assert_trap':
             _checkFields(
               raw,
-              type == 'assert_return'
+              type == 'action'
+                  ? const {'type', 'line', 'action'}
+                  : type == 'assert_return'
                   ? const {'type', 'line', 'action', 'expected'}
                   : const {'type', 'line', 'action', 'text'},
             );
@@ -383,7 +611,13 @@ Future<Map<String, Object?>> executeComponentSpecScript(
             }
             _checkFields(action, const {'type', 'module', 'field', 'args'});
             final runtime = current;
-            if (runtime == null) throw StateError('No initialized component.');
+            if (runtime == null) {
+              record['status'] = 'not_executed';
+              if (failedCurrent != null) {
+                record['dependency_index'] = failedCurrent;
+              }
+              throw StateError('No initialized component.');
+            }
             final name = action['field'] as String;
             final context = _exportType(runtime.component, name);
             final params = context.functionType.params;
@@ -403,7 +637,10 @@ Future<Map<String, Object?>> executeComponentSpecScript(
                 ),
             ];
             record['export'] = name;
-            if (type == 'assert_return') {
+            if (type == 'action') {
+              record['phase'] = 'invoke';
+              await runtime.invokeExport(name, args);
+            } else if (type == 'assert_return') {
               final expected = raw['expected'];
               final resultType = context.functionType.result;
               if (expected is! List ||
@@ -415,6 +652,7 @@ Future<Map<String, Object?>> executeComponentSpecScript(
               final value = resultType == null
                   ? null
                   : _decodeValue(expected.single, resultType, context);
+              record['phase'] = 'invoke';
               final actual = await runtime.invokeExport(name, args);
               record['expected'] = _reportValue(value);
               record['actual'] = _reportValue(actual);
@@ -440,6 +678,7 @@ Future<Map<String, Object?>> executeComponentSpecScript(
               // Only the invocation may satisfy a trap; arguments, signature
               // lookup, decoding, linking and initialization are outside here.
               Object? invocationError;
+              record['phase'] = 'invoke';
               try {
                 await runtime.invokeExport(name, args);
               } catch (error) {
@@ -465,10 +704,19 @@ Future<Map<String, Object?>> executeComponentSpecScript(
             }
             break;
           default:
-            throw UnsupportedError('Unsupported Component command: $type');
+            _unsupported(
+              record,
+              'unsupported_command',
+              'Unsupported Component command: $type',
+            );
         }
         record['passed'] = true;
+        record['status'] = 'passed';
       } catch (error) {
+        if (error is UnsupportedError && record['status'] == 'failed') {
+          record['status'] = 'unsupported';
+          record['failure_kind'] = 'unsupported_feature';
+        }
         record['error'] = error.toString();
         record['error_type'] = error.runtimeType.toString();
       }
@@ -488,7 +736,15 @@ Map<String, int> _totals(List<Map<String, Object?>> records) {
   final result = <String, int>{
     'commands_seen': records.length,
     'commands_passed': passed,
-    'commands_failed': records.length - passed,
+    'commands_failed': records
+        .where((record) => record['status'] == 'failed')
+        .length,
+    'commands_unsupported': records
+        .where((record) => record['status'] == 'unsupported')
+        .length,
+    'commands_not_executed': records
+        .where((record) => record['status'] == 'not_executed')
+        .length,
     'commands_skipped': 0,
   };
   for (final entry in {
@@ -496,6 +752,10 @@ Map<String, int> _totals(List<Map<String, Object?>> records) {
     'definitions': const {'module_definition'},
     'returns': const {'assert_return'},
     'traps': const {'assert_trap'},
+    'invalid': const {'assert_invalid'},
+    'malformed': const {'assert_malformed'},
+    'uninstantiable': const {'assert_uninstantiable'},
+    'actions': const {'action'},
   }.entries) {
     final selected = records.where(
       (record) => entry.value.contains(record['type']),
@@ -625,8 +885,7 @@ Future<Map<String, Object?>> runComponentSpecManifest(
           }
           final script = jsonDecode(prepared.readAsStringSync()) as Map;
           for (final command in script['commands'] as List) {
-            if (command['type'] != 'module' &&
-                command['type'] != 'module_definition') {
+            if (!command.containsKey('filename')) {
               continue;
             }
             final binary = _inputFile(prepared.parent, command['filename']);

@@ -13,6 +13,80 @@ import 'package:wasd/wasi.dart';
 import 'package:wasd/wasm.dart' hide Exception;
 
 void main() {
+  group('execution trap origin', () {
+    for (final duringStart in [true, false]) {
+      test('unreachable has a dedicated cause (start: $duringStart)', () async {
+        final component = await _encodeComponent(
+          duringStart
+              ? '(component (core module \$m (func \$f unreachable) (start \$f)) '
+                    '(core instance (instantiate \$m)))'
+              : '(component (core module \$m (func (export "trap") unreachable)) '
+                    '(core instance \$i (instantiate \$m)) '
+                    '(func (export "trap") (canon lift (core func \$i "trap"))))',
+        );
+        final host = WASIComponentHost();
+        Object? observed;
+        await host.table.runScoped(() async {
+          final runtime = WASIComponentNativeRuntime.component(
+            component: component,
+            host: host,
+          );
+          try {
+            if (duringStart) {
+              await runtime.initialize();
+            } else {
+              await runtime.invokeExport('trap', []);
+            }
+          } catch (error) {
+            observed = error;
+          }
+        });
+        expect(observed, isA<WasmExecutionErrorContext>());
+        while (observed is WasmExecutionErrorContext) {
+          observed = (observed as WasmExecutionErrorContext).cause;
+        }
+        expect(observed.runtimeType.toString(), 'WasmUnreachableTrap');
+        expect(observed, isA<StateError>());
+        expect(host.table.activeCount, 0);
+      });
+    }
+
+    test('host StateError with matching text retains its origin', () async {
+      final component = await _encodeComponent('''
+        (component
+          (import "notify" (func \$notify))
+          (core func \$notify (canon lower (func \$notify)))
+          (core module \$m
+            (import "" "notify" (func \$notify))
+            (func (export "trap") call \$notify))
+          (core instance \$i (instantiate \$m
+            (with "" (instance (export "notify" (func \$notify))))))
+          (func (export "trap") (canon lift (core func \$i "trap"))))
+      ''');
+      final host = WASIComponentHost();
+      Object? observed;
+      await host.table.runScoped(() async {
+        final runtime = WASIComponentNativeRuntime.component(
+          component: component,
+          host: host,
+          imports: {'notify': (_) => throw StateError('unreachable trap')},
+        );
+        try {
+          await runtime.invokeExport('trap', []);
+        } catch (error) {
+          observed = error;
+        }
+      });
+      expect(observed, isA<WasmExecutionErrorContext>());
+      while (observed is WasmExecutionErrorContext) {
+        observed = (observed as WasmExecutionErrorContext).cause;
+      }
+      expect(observed.runtimeType.toString(), 'StateError');
+      expect((observed as StateError).message, 'unreachable trap');
+      expect(host.table.activeCount, 0);
+    });
+  });
+
   group('resource destructors', () {
     test(
       'rejects draft async destructors before allocating host state',
