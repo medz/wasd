@@ -722,7 +722,8 @@ const String _asyncMultiValueCommandWat = r'''
       local.tee $packed
       i32.const 15
       i32.and
-      i32.const 1
+      ;; The same-instance callee cannot enter until main returns WAIT.
+      i32.const 0
       i32.ne
       if
         unreachable

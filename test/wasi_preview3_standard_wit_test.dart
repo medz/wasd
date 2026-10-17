@@ -278,7 +278,15 @@ void main() {
       final changelog = File('CHANGELOG.md').readAsStringSync();
       final readme = File('README.md').readAsStringSync();
       final support = File('doc/wasm_wasi_todo.md').readAsStringSync();
-      expect(changelog, startsWith('## $version\n'));
+      final changelogVersions = RegExp(
+        r'^## (.+)$',
+        multiLine: true,
+      ).allMatches(changelog).map((match) => match.group(1)!).toList();
+      if (changelogVersions.first == 'Unreleased') {
+        changelogVersions.removeAt(0);
+      }
+      expect(changelogVersions.first, version);
+      expect(changelogVersions, isNot(contains('Unreleased')));
       final releaseVersions = RegExp(
         r'This release is `([^`]+)`\.',
       ).allMatches(readme).map((match) => match.group(1)!).toList();
