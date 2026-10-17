@@ -94,7 +94,10 @@ P2/P3 work starts only after these P1 gates are green.
   - Remaining acceptance includes six imports absent from the selected suite
     (`fd_datasync`, `fd_sync`, `proc_raise`, `sock_accept`, `sock_recv`,
     `sock_send`), successful inherited-socket shutdown, host sync/durability,
-    and process/thread CPU-clock behavior. See the pinned scope and runtime
+    CPU timers and per-guest CPU accounting. Unreleased CPU-clock reads now
+    use actual host counters on supported Linux/macOS and Node capabilities;
+    missing capabilities fail explicitly rather than using elapsed wall time.
+    CPU subscriptions return an event with `INVAL`. See the pinned scope and runtime
     boundaries in [the standards plan](standards.md).
 
 ## Next Blocking TODO

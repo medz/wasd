@@ -126,7 +126,14 @@ dart run tool/wasi_testsuite_preview1_gate.dart --testsuite-dir third_party/wasi
 This selected suite does not import `fd_datasync`, `fd_sync`, `proc_raise`,
 `sock_accept`, `sock_recv` or `sock_send`; `sock_shutdown` has error cases only.
 Successful inherited-socket operations, host sync/durability and process/thread
-CPU-clock semantics still need separate acceptance. Node and browser CI runs
+CPU timers and guest-specific CPU accounting still need separate acceptance.
+The unreleased CPU-clock read fix uses existing libc `clock_gettime/getres`
+on 64-bit Linux/macOS, with the correct OS clock IDs and measured resolution.
+Node uses capability-detected process/thread CPU APIs and preserves full u64
+nanosecond output. Missing, invalid or failed CPU APIs return `INVAL` without
+writing output; browsers do not substitute a wall clock. CPU subscriptions
+are explicitly unsupported and produce clock events with `INVAL`.
+Node and browser CI runs
 `test/wasi_test.dart` as in-repo regressions with explicit platform skips;
 neither profile executes these 72 official guests.
 
