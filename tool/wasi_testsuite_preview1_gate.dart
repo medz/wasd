@@ -296,6 +296,29 @@ Map<String, Object?> validatePreview1Results(
   };
 }
 
+/// Records the requested runner profile without treating a bad opt-in as JIT.
+Map<String, Object?> preview1RunnerMetadata({String? nativeRunner}) {
+  final entrypoint = File('tool/wasi_testsuite_preview1_runner.dart').absolute;
+  final metadata = <String, Object?>{
+    'profile': nativeRunner == null ? 'jit' : 'native-aot',
+    'entrypoint': entrypoint.path,
+    'entrypoint_sha256': sha256
+        .convert(entrypoint.readAsBytesSync())
+        .toString(),
+  };
+  if (nativeRunner != null) {
+    final executable = File(nativeRunner).absolute;
+    if (!executable.existsSync() || (executable.statSync().mode & 0x49) == 0) {
+      throw StateError('WASD_PREVIEW1_RUNNER must name an executable file.');
+    }
+    metadata['executable'] = executable.path;
+    metadata['executable_sha256'] = sha256
+        .convert(executable.readAsBytesSync())
+        .toString();
+  }
+  return metadata;
+}
+
 Future<int> _runOfficial(
   Directory fixtures,
   Directory runner,
@@ -376,6 +399,10 @@ Future<void> main(List<String> args) async {
     'suite': 'official-wasi-testsuite-preview1',
     'engine': 'wasd',
     'runtime': 'dart-vm',
+    'execution_profile':
+        Platform.environment.containsKey('WASD_PREVIEW1_RUNNER')
+        ? 'native-aot'
+        : 'jit',
     'status': 'failed',
     'input_verification': {
       'files_total': 137,
@@ -386,6 +413,10 @@ Future<void> main(List<String> args) async {
     'started_at': DateTime.now().toUtc().toIso8601String(),
   };
   try {
+    final runnerMetadata = preview1RunnerMetadata(
+      nativeRunner: Platform.environment['WASD_PREVIEW1_RUNNER'],
+    );
+    report['runner'] = runnerMetadata;
     final contract = readPreview1Contract();
     report['contract_sha256'] = sha256
         .convert(File(_contractPath).readAsBytesSync())
@@ -425,6 +456,13 @@ Future<void> main(List<String> args) async {
       options['--python']!,
       rawPath,
     );
+    if (runnerMetadata['profile'] == 'native-aot') {
+      final executable = File(runnerMetadata['executable']! as String);
+      final digest = sha256.convert(executable.readAsBytesSync()).toString();
+      if (digest != runnerMetadata['executable_sha256']) {
+        throw StateError('Preview1 runner executable changed during the gate.');
+      }
+    }
     report['runner_exit_code'] = code;
     report.addAll(
       validatePreview1Results(

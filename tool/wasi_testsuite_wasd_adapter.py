@@ -58,9 +58,17 @@ def compute_argv(
         )
 
     args, env, root = args_env_root
-    native_runner = (
-        os.getenv("WASD_PREVIEW3_RUNNER") if wasi_version == "wasm32-wasip3" else None
-    )
+    native_runner = None
+    if wasi_version == "wasm32-wasip1":
+        native_runner = os.getenv("WASD_PREVIEW1_RUNNER")
+        if native_runner is not None and (
+            not Path(native_runner).is_file() or not os.access(native_runner, os.X_OK)
+        ):
+            raise ValueError("WASD_PREVIEW1_RUNNER must name an executable file")
+        if native_runner is not None:
+            native_runner = str(Path(native_runner).absolute())
+    elif wasi_version == "wasm32-wasip3":
+        native_runner = os.getenv("WASD_PREVIEW3_RUNNER")
     argv = [native_runner] if native_runner else [*DART, str(_runner_for(wasi_version))]
     if wasi_version == "wasm32-wasip3":
         argv += ["--world", wasi_world]

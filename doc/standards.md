@@ -130,6 +130,11 @@ and 15 runner source files by SHA-256 and Git blob before executing exactly
 72 unique cases (AssemblyScript 12, C 14, Rust 46). Missing, duplicate,
 unexecuted, skipped, xfailed or xpassed cases fail the gate. Native CI runs
 this profile on Linux and macOS and preserves the raw result and gate report.
+CI compiles WASD's Dart Preview1 runner to native AOT once and reuses that
+executable for all 72 processes. `WASD_PREVIEW1_RUNNER` selects that single
+executable path; leaving it unset retains the Dart JIT runner. Reports record
+the selected profile and executable identity. The guest fixtures, per-case
+timeout and Preview2/Preview3 runner selection stay unchanged.
 
 ```sh
 dart run tool/wasi_testsuite_preview1_gate.dart --testsuite-dir third_party/wasi-testsuite-fixtures --runner-dir third_party/wasi-testsuite-source/test-runner --python build/wasi-testsuite-venv/bin/python --json build/wasi-preview1.json

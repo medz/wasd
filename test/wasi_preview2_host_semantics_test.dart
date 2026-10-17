@@ -1837,13 +1837,6 @@ world test {
         );
         sockets.table.dropNamed('wasi:sockets/tcp@0.2.0.tcp-socket', tcp);
 
-        final reservation = await io.RawDatagramSocket.bind(
-          io.InternetAddress.loopbackIPv4,
-          0,
-        );
-        final port = reservation.port;
-        reservation.close();
-        await Future<void>.delayed(Duration.zero);
         final udp = _resultHandle(
           imports['wasi:sockets/udp-create-socket@0.2.0.create-udp-socket']!(
                 <Object?>[_enum('ipv4', 0)],
@@ -1855,13 +1848,24 @@ world test {
             imports['wasi:sockets/udp@0.2.0.udp-socket.start-bind']!(<Object?>[
                   udp,
                   network,
-                  _ipv4SocketAddress(port: port),
+                  _ipv4SocketAddress(port: 0),
                 ])!
                 as WasmComponentValueData,
           ),
           isNull,
         );
         expect(_resultError(await _finishUdpBind(sockets, udp)), isNull);
+        final localAddress =
+            imports['wasi:sockets/udp@0.2.0.udp-socket.local-address']!(
+                  <Object?>[udp],
+                )!
+                as WasmComponentValueData;
+        expect(_resultError(localAddress), isNull);
+        final address = localAddress.associatedValue!;
+        expect(address.label, 'ipv4');
+        final port = (address.associatedValue!.items.first.integer! as num)
+            .toInt();
+        expect(port, greaterThan(0));
         sockets.table.dropNamed('wasi:sockets/udp@0.2.0.udp-socket', udp);
         await Future<void>.delayed(Duration.zero);
 
@@ -1894,6 +1898,7 @@ Future<io.RawDatagramSocket> _bindUdpEventually(int port) async {
       return await io.RawDatagramSocket.bind(
         io.InternetAddress.loopbackIPv4,
         port,
+        reuseAddress: false,
       );
     } on io.SocketException {
       if (attempt == 19) {

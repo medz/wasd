@@ -143,7 +143,11 @@ jobs:
           DART: dart
           WASD_PREVIEW3_RUNNER: "${{ github.workspace }}/build/wasi-preview3-runner"
         run: dart run tool/wasi_testsuite_preview3_runner.dart --testsuite-dir third_party/wasi-testsuite-fixtures --runner-dir third_party/wasi-testsuite-source/test-runner --python build/wasi-testsuite-venv/bin/python --json build/wasi-preview3.json --markdown build/wasi-preview3.md
-      - name: Run official Preview1 tests (Dart VM)
+      - name: Compile Preview1 runner (native AOT)
+        run: dart compile exe tool/wasi_testsuite_preview1_runner.dart -o "$GITHUB_WORKSPACE/build/wasi-preview1-runner"
+      - name: Run official Preview1 tests (native AOT)
+        env:
+          WASD_PREVIEW1_RUNNER: "${{ github.workspace }}/build/wasi-preview1-runner"
         run: dart run tool/wasi_testsuite_preview1_gate.dart --testsuite-dir third_party/wasi-testsuite-fixtures --runner-dir third_party/wasi-testsuite-source/test-runner --python build/wasi-testsuite-venv/bin/python --json build/wasi-preview1.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
