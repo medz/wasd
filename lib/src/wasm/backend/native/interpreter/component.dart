@@ -2940,6 +2940,7 @@ final class _WasmComponentValidationContext {
         const <_WasmComponentTypeAliasScope>[],
   }) {
     final localTypeDefinitions = <WasmComponentTypeDefinition>[];
+    final localCoreTypes = <WasmComponentCoreType>[];
     final localCoreTypeKinds = <WasmComponentCoreTypeKind>[];
     _WasmComponentExternNameSet? importNames;
     _WasmComponentExternNameSet? exportNames;
@@ -3016,8 +3017,18 @@ final class _WasmComponentValidationContext {
           if (coreType == null) {
             break;
           }
-          validateCoreTypeDefinition(coreType, '$path.declarations[$i]');
-          localCoreTypeKinds.add(coreType.kind);
+          validateCoreTypeDefinition(
+            coreType,
+            '$path.declarations[$i]',
+            outerCoreTypes: localCoreTypes,
+          );
+          for (final entry
+              in coreType.kind == WasmComponentCoreTypeKind.recursive
+                  ? coreType.types
+                  : [coreType]) {
+            localCoreTypes.add(entry);
+            localCoreTypeKinds.add(entry.kind);
+          }
         case WasmComponentTypeDeclarationKind.alias:
           final alias = declaration.alias;
           if (alias == null) {

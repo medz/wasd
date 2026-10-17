@@ -126,6 +126,43 @@ void main() {
       );
     });
 
+    for (final (kind, name) in [(0x41, 'component'), (0x42, 'instance')]) {
+      test('resolves module outer core aliases inside a $name type', () {
+        expect(
+          WasmComponent.decode(_moduleOuterAliasInTypeBytes(kind)).validate(),
+          isEmpty,
+        );
+      });
+      test('rejects module forward core aliases inside a $name type', () {
+        expect(
+          WasmComponent.decode(
+            _moduleOuterAliasInTypeBytes(kind, forward: true),
+          ).validate().map((error) => error.message),
+          contains(contains('Unknown Wasm component core type index')),
+        );
+      });
+      test('resolves recursive core type indexes inside a $name type', () {
+        expect(
+          WasmComponent.decode(
+            _moduleOuterAliasInTypeBytes(kind, recursive: true),
+          ).validate(),
+          isEmpty,
+        );
+      });
+      test('checks recursive core type kinds inside a $name type', () {
+        expect(
+          WasmComponent.decode(
+            _moduleOuterAliasInTypeBytes(
+              kind,
+              recursive: true,
+              wrongModuleType: true,
+            ),
+          ).validate().map((error) => error.message),
+          contains(contains('core module type index')),
+        );
+      });
+    }
+
     for (final (parameter, result, valid) in [
       (0x79, null, true),
       (0x77, null, false),
@@ -10042,6 +10079,53 @@ Uint8List _resourceDestructorCoreFunctionBytes({
       _componentSection(6, [1, 0, 0, 1, 1, ...name]),
     ],
     _componentSection(7, [1, 0x3f, 0x7f, 1, inlineAlias ? 1 : 0]),
+  ]);
+}
+
+Uint8List _moduleOuterAliasInTypeBytes(
+  int kind, {
+  bool forward = false,
+  bool recursive = false,
+  bool wrongModuleType = false,
+}) {
+  final function = [
+    0x00,
+    if (recursive) ...[0x4e, 0x02, 0x60, 0x00, 0x00],
+    0x60,
+    0x01,
+    0x7f,
+    0x00,
+  ];
+  final module = [
+    0x00,
+    0x50,
+    0x02,
+    0x02,
+    0x10,
+    0x01,
+    0x01,
+    forward || recursive ? 1 : 0,
+    0x03,
+    ..._componentNameBytes('dtor'),
+    0x00,
+    0x00,
+  ];
+  return _componentBytes([
+    _componentSection(0x07, [
+      0x01,
+      kind,
+      recursive ? 0x03 : 0x02,
+      if (!forward) ...function,
+      ...module,
+      if (forward) ...function,
+      if (recursive) ...[
+        0x04,
+        ..._componentExternNameBytes('m', null),
+        0x00,
+        0x11,
+        wrongModuleType ? 0x01 : 0x02,
+      ],
+    ]),
   ]);
 }
 
