@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/host_control_flow.dart';
+import '../component/resource_table.dart';
 import '../component/wit_adapter.dart';
 import 'io.dart';
 
@@ -312,4 +313,16 @@ WasmComponentValueData _optionalHandle(int? handle) {
       integer: handle,
     ),
   );
+}
+
+/// Internal canonical ABI access to this host's resource identities.
+extension WASIPreview2CliResourceTypes on WASIPreview2CliHost {
+  /// Returns the actual nominal type owned by this host.
+  WASIComponentResourceType<Object>? canonicalResourceType(
+    String resourceName,
+  ) => switch (resourceName) {
+    'terminal-input' => _terminalInputType,
+    'terminal-output' => _terminalOutputType,
+    _ => null,
+  };
 }

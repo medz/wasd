@@ -928,3 +928,19 @@ int _expectHandle(int canonicalIndex, Object? value) {
     'WASI component canonical resource index $canonicalIndex expected an i32 handle.',
   );
 }
+
+/// Explicit host registrations supplied through the existing resource API.
+extension WASIComponentCanonicalRegisteredResourceTypes
+    on WASIComponentResourceHost {
+  /// Reads only explicit registrations; diagnostic names never define identity.
+  WASIComponentResourceType<Object>? canonicalRegisteredTypeAt(int index) =>
+      _resourceTypes[index]?.type;
+}
+
+/// Internal nominal lookup for the concrete definitions of one instance.
+extension WASIComponentCanonicalResourceBindingTypes<T extends Object>
+    on WASIComponentResourceBindingSet<T> {
+  /// Returns the already-created token for this local resource definition.
+  WASIComponentResourceType<Object> canonicalResourceTypeAt(int index) =>
+      _registeredTypes[index]!.type;
+}

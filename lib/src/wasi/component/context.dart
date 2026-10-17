@@ -218,3 +218,12 @@ int _expectI32(int canonicalIndex, Object? value) {
     'WASI component canonical context index $canonicalIndex expected i32.',
   );
 }
+
+/// Runtime-only context binding for a canonical invocation's full lifetime.
+extension WASIComponentCanonicalContextBinding on WASIComponentContextHost {
+  /// Preserves this invocation's TLS context across asynchronous continuations.
+  T runWithCanonicalContext<T>(
+    WASIComponentContext context,
+    T Function() callback,
+  ) => _currentContext.runWithLifetime(context, callback);
+}

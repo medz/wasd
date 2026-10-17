@@ -2125,3 +2125,24 @@ const List<String> _httpErrorCodeCases = <String>[
 ];
 
 const int _maxU32 = 0xffffffff;
+
+/// Internal canonical ABI access to this host's resource identities.
+extension WASIPreview2HttpResourceTypes on WASIPreview2HttpHost {
+  /// Returns the actual nominal type owned by this host.
+  WASIComponentResourceType<Object>? canonicalResourceType(
+    String resourceName,
+  ) => switch (resourceName) {
+    'fields' => _fieldsType,
+    'incoming-request' => _incomingRequestType,
+    'outgoing-request' => _outgoingRequestType,
+    'request-options' => _requestOptionsType,
+    'response-outparam' => _responseOutparamType,
+    'incoming-response' => _incomingResponseType,
+    'incoming-body' => _incomingBodyType,
+    'future-trailers' => _futureTrailersType,
+    'outgoing-response' => _outgoingResponseType,
+    'outgoing-body' => _outgoingBodyType,
+    'future-incoming-response' => _futureIncomingResponseType,
+    _ => null,
+  };
+}

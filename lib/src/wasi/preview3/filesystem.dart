@@ -3092,3 +3092,14 @@ const Map<String, int> _filesystemVariantIndexes = <String, int>{
 };
 
 final BigInt _u64Mask = (BigInt.one << 64) - BigInt.one;
+
+/// Internal canonical ABI access to this host's resource identities.
+extension WASIPreview3FilesystemResourceTypes on WASIPreview3FilesystemHost {
+  /// Returns the actual nominal type owned by this host.
+  WASIComponentResourceType<Object>? canonicalResourceType(
+    String resourceName,
+  ) => switch (resourceName) {
+    'descriptor' => _descriptorType,
+    _ => null,
+  };
+}

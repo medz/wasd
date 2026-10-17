@@ -1741,3 +1741,17 @@ const List<String> _requestOptionsErrorCases = <String>[
 ];
 
 const int _maxU32 = 0xffffffff;
+
+/// Internal canonical ABI access to this host's resource identities.
+extension WASIPreview3HttpResourceTypes on WASIPreview3HttpHost {
+  /// Returns the actual nominal type owned by this host.
+  WASIComponentResourceType<Object>? canonicalResourceType(
+    String resourceName,
+  ) => switch (resourceName) {
+    'fields' => _fieldsType,
+    'request' => _requestType,
+    'request-options' => _requestOptionsType,
+    'response' => _responseType,
+    _ => null,
+  };
+}

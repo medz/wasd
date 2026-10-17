@@ -493,3 +493,54 @@ int _preview2ExitCode(Object? value) {
     _ => throw StateError('Expected WASI CLI u8 exit code, got $value.'),
   };
 }
+
+/// Internal standard-contract access to this host's resource identities.
+extension WASIPreview2ComponentResourceTypes on WASIPreview2ComponentHost {
+  /// Resolves a standard WIT contract to its actual host-owned nominal type.
+  WASIComponentResourceType<Object>? canonicalResourceType(
+    String interfaceName,
+    String resourceName,
+  ) {
+    final separator = interfaceName.lastIndexOf('@');
+    if (separator < 0) return null;
+    final version = interfaceName.substring(separator + 1);
+    if (!version.startsWith('0.2.')) return null;
+    final patch = int.tryParse(version.substring(4));
+    if (patch == null || patch < 0 || patch > 12 || version != '0.2.$patch') {
+      return null;
+    }
+    return switch ((interfaceName.substring(0, separator), resourceName)) {
+      ('wasi:cli/terminal-input', 'terminal-input') =>
+        cliHost.canonicalResourceType(resourceName),
+      ('wasi:cli/terminal-output', 'terminal-output') =>
+        cliHost.canonicalResourceType(resourceName),
+      ('wasi:io/error', 'error') => errorHost.canonicalResourceType(
+        resourceName,
+      ),
+      ('wasi:io/poll', 'pollable') => pollHost.canonicalResourceType(
+        resourceName,
+      ),
+      ('wasi:io/streams', _) => streamsHost.canonicalResourceType(resourceName),
+      ('wasi:filesystem/types', _) => filesystemHost.canonicalResourceType(
+        resourceName,
+      ),
+      ('wasi:http/types', _) => httpHost.canonicalResourceType(resourceName),
+      ('wasi:sockets/network', 'network') => socketsHost.canonicalResourceType(
+        resourceName,
+      ),
+      ('wasi:sockets/ip-name-lookup', 'resolve-address-stream') =>
+        socketsHost.canonicalResourceType(resourceName),
+      ('wasi:sockets/tcp', 'tcp-socket') => socketsHost.canonicalResourceType(
+        resourceName,
+      ),
+      (
+        'wasi:sockets/udp',
+        'udp-socket' ||
+            'incoming-datagram-stream' ||
+            'outgoing-datagram-stream',
+      ) =>
+        socketsHost.canonicalResourceType(resourceName),
+      _ => null,
+    };
+  }
+}

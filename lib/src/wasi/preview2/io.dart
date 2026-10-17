@@ -754,3 +754,26 @@ WasmComponentValueData _result(bool isOk, WasmComponentValueData? value) {
 }
 
 const int _maxU32 = 0xffffffff;
+
+/// Internal canonical ABI access to this host's resource identities.
+extension WASIPreview2IoErrorResourceTypes on WASIPreview2IoErrorHost {
+  /// Returns the actual nominal type owned by this host.
+  WASIComponentResourceType<Object>? canonicalResourceType(
+    String resourceName,
+  ) => switch (resourceName) {
+    'error' => _errorType,
+    _ => null,
+  };
+}
+
+/// Internal canonical ABI access to this host's resource identities.
+extension WASIPreview2StreamsResourceTypes on WASIPreview2StreamsHost {
+  /// Returns the actual nominal type owned by this host.
+  WASIComponentResourceType<Object>? canonicalResourceType(
+    String resourceName,
+  ) => switch (resourceName) {
+    'input-stream' => _inputStreamType,
+    'output-stream' => _outputStreamType,
+    _ => null,
+  };
+}

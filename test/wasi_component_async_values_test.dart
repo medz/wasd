@@ -2,6 +2,1348 @@ import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/async_values.dart';
 
 void main() {
+  group('canonical same-owner copies', () {
+    test(
+      'reader-first stream traps before loading a same-owner source',
+      () async {
+        final owner = Object();
+        final stream = WASIComponentStream<int>(
+          'same reader first',
+          maxBufferedElements: 0,
+        );
+        var loads = 0;
+        final reader = stream.readable.readIntoWhenAvailableForCopy(
+          WASIComponentAsyncCopyTarget<int>(
+            length: 1,
+            owner: owner,
+            writePrefix: (_) => fail('must not store'),
+          ),
+        );
+        final failedReader = expectLater(reader, throwsStateError);
+        expect(
+          () => stream.writable.writeSourceForCopy(
+            WASIComponentAsyncCopySource<int>(
+              length: 1,
+              owner: owner,
+              checkSameOwner: true,
+              readPrefix: (_) {
+                loads++;
+                return [7];
+              },
+            ),
+          ),
+          throwsStateError,
+        );
+        await failedReader;
+        expect(loads, 0);
+      },
+    );
+
+    test(
+      'writer-first stream traps before loading a synchronous target',
+      () async {
+        final owner = Object();
+        final stream = WASIComponentStream<int>(
+          'same writer first sync',
+          maxBufferedElements: 0,
+        );
+        var loads = 0;
+        final writer = stream.writable.writeSourceWhenAvailableForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 1,
+            owner: owner,
+            checkSameOwner: true,
+            readPrefix: (_) {
+              loads++;
+              return [7];
+            },
+          ),
+        );
+        final failedWriter = expectLater(writer, throwsStateError);
+        expect(
+          () => stream.readable.readIntoForCopy(
+            WASIComponentAsyncCopyTarget<int>(
+              length: 1,
+              owner: owner,
+              writePrefix: (_) => fail('must not store'),
+            ),
+          ),
+          throwsStateError,
+        );
+        await failedWriter;
+        expect(loads, 0);
+      },
+    );
+
+    test(
+      'writer-first stream traps before loading an asynchronous target',
+      () async {
+        final owner = Object();
+        final stream = WASIComponentStream<int>(
+          'same writer first async',
+          maxBufferedElements: 0,
+        );
+        var loads = 0;
+        final writer = stream.writable.writeSourceWhenAvailableForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 1,
+            owner: owner,
+            checkSameOwner: true,
+            readPrefix: (_) {
+              loads++;
+              return [7];
+            },
+          ),
+        );
+        final failedWriter = expectLater(writer, throwsStateError);
+        await expectLater(
+          stream.readable.readIntoWhenAvailableForCopy(
+            WASIComponentAsyncCopyTarget<int>(
+              length: 1,
+              owner: owner,
+              writePrefix: (_) => fail('must not store'),
+            ),
+          ),
+          throwsStateError,
+        );
+        await failedWriter;
+        expect(loads, 0);
+      },
+    );
+
+    test(
+      'reader-first future traps before loading a same-owner source',
+      () async {
+        final owner = Object();
+        final future = WASIComponentFuture<int>('same future reader first');
+        var loads = 0;
+        final reader = future.readable.readWhenReadyForCanonicalCopy(
+          owner: owner,
+        );
+        final failedReader = expectLater(reader, throwsStateError);
+        expect(
+          () => future.writable.completeSourceForCopy(
+            WASIComponentAsyncCopySource<int>(
+              length: 1,
+              owner: owner,
+              checkSameOwner: true,
+              readPrefix: (_) {
+                loads++;
+                return [7];
+              },
+            ),
+          ),
+          throwsStateError,
+        );
+        await failedReader;
+        expect(loads, 0);
+      },
+    );
+
+    test(
+      'writer-first future traps before loading a same-owner source',
+      () async {
+        final owner = Object();
+        final future = WASIComponentFuture<int>('same future writer first');
+        var loads = 0;
+        final writer = future.writable.completeSourceWhenReadForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 1,
+            owner: owner,
+            checkSameOwner: true,
+            readPrefix: (_) {
+              loads++;
+              return [7];
+            },
+          ),
+        );
+        final failedWriter = expectLater(writer, throwsStateError);
+        expect(
+          () => future.readable.readForCanonicalCopy(owner: owner),
+          throwsStateError,
+        );
+        await failedWriter;
+        expect(loads, 0);
+      },
+    );
+
+    test(
+      'numeric copies, distinct owners and host buffers remain allowed',
+      () async {
+        final owner = Object();
+        for (final (sourceOwner, targetOwner, check) in [
+          (owner, owner, false),
+          (owner, Object(), true),
+          (null, owner, true),
+          (owner, null, true),
+        ]) {
+          final stream = WASIComponentStream<int>(
+            'allowed stream',
+            maxBufferedElements: 0,
+          );
+          final values = <int>[];
+          final reader = stream.readable.readIntoWhenAvailableForCopy(
+            WASIComponentAsyncCopyTarget<int>(
+              length: 1,
+              owner: targetOwner,
+              writePrefix: values.addAll,
+            ),
+          );
+          expect(
+            stream.writable.writeSourceForCopy(
+              WASIComponentAsyncCopySource<int>(
+                length: 1,
+                owner: sourceOwner,
+                checkSameOwner: check,
+                readPrefix: (_) => [7],
+              ),
+            ),
+            1,
+          );
+          expect(await reader, 1);
+          expect(values, [7]);
+        }
+      },
+    );
+
+    test('numeric and host future copies remain allowed', () async {
+      final owner = Object();
+      for (final (sourceOwner, targetOwner, check) in [
+        (owner, owner, false),
+        (owner, Object(), true),
+        (null, owner, true),
+        (owner, null, true),
+      ]) {
+        final future = WASIComponentFuture<int>('allowed future');
+        final reader = future.readable.readWhenReadyForCanonicalCopy(
+          owner: targetOwner,
+        );
+        future.writable.completeSourceForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 1,
+            owner: sourceOwner,
+            checkSameOwner: check,
+            readPrefix: (_) => [7],
+          ),
+        );
+        expect(await reader, 7);
+      }
+    });
+
+    test(
+      'a retained source checks the owner before every later prefix',
+      () async {
+        final owner = Object();
+        final stream = WASIComponentStream<int>(
+          'retained checked source',
+          maxBufferedElements: 0,
+        );
+        var loads = 0;
+        final writer = stream.writable.writeSourceWhenAvailableForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 2,
+            owner: owner,
+            checkSameOwner: true,
+            readPrefix: (_) => [++loads],
+          ),
+          deferCompletion: true,
+        );
+        final copied = <int>[];
+        expect(
+          stream.readable.readIntoForCopy(
+            WASIComponentAsyncCopyTarget<int>(
+              length: 1,
+              owner: Object(),
+              writePrefix: copied.addAll,
+            ),
+          ),
+          1,
+        );
+        expect(await writer, 1);
+        expect(
+          () => stream.readable.readIntoForCopy(
+            WASIComponentAsyncCopyTarget<int>(
+              length: 1,
+              owner: owner,
+              writePrefix: copied.addAll,
+            ),
+          ),
+          throwsStateError,
+        );
+        expect(copied, [1]);
+        expect(loads, 1);
+        stream.writable.finishDeferredCopy(dropped: false);
+      },
+    );
+
+    test('a retained target checks each new source before it loads', () async {
+      final owner = Object();
+      final stream = WASIComponentStream<int>(
+        'retained checked target',
+        maxBufferedElements: 0,
+      );
+      final copied = <int>[];
+      final reader = stream.readable.readIntoWhenAvailableForCopy(
+        WASIComponentAsyncCopyTarget<int>(
+          length: 2,
+          owner: owner,
+          writePrefix: copied.addAll,
+        ),
+        deferCompletion: true,
+      );
+      stream.writable.writeSourceForCopy(
+        WASIComponentAsyncCopySource<int>(
+          length: 1,
+          owner: Object(),
+          checkSameOwner: true,
+          readPrefix: (_) => [7],
+        ),
+      );
+      expect(await reader, 1);
+      var loads = 0;
+      expect(
+        () => stream.writable.writeSourceForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 1,
+            owner: owner,
+            checkSameOwner: true,
+            readPrefix: (_) {
+              loads++;
+              return [8];
+            },
+          ),
+        ),
+        throwsStateError,
+      );
+      expect(loads, 0);
+      expect(copied, [7]);
+      stream.readable.finishDeferredCopy(dropped: false);
+    });
+
+    test('bounded direct copies also reject before source loading', () async {
+      final owner = Object();
+      final stream = WASIComponentStream<int>(
+        'bounded checked source',
+        maxBufferedElements: 1,
+      );
+      var loads = 0;
+      final reader = stream.readable.readIntoWhenAvailableForCopy(
+        WASIComponentAsyncCopyTarget<int>(
+          length: 1,
+          owner: owner,
+          writePrefix: (_) => fail('must not store'),
+        ),
+      );
+      final failedReader = expectLater(reader, throwsStateError);
+      expect(
+        () => stream.writable.writeSourceForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 1,
+            owner: owner,
+            checkSameOwner: true,
+            readPrefix: (_) {
+              loads++;
+              return [7];
+            },
+          ),
+        ),
+        throwsStateError,
+      );
+      await failedReader;
+      expect(loads, 0);
+    });
+
+    test(
+      'writer-first future checks an asynchronous canonical reader',
+      () async {
+        final owner = Object();
+        final future = WASIComponentFuture<int>('same async future reader');
+        var loads = 0;
+        final writer = future.writable.completeSourceWhenReadForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 1,
+            owner: owner,
+            checkSameOwner: true,
+            readPrefix: (_) {
+              loads++;
+              return [7];
+            },
+          ),
+        );
+        final failedWriter = expectLater(writer, throwsStateError);
+        await expectLater(
+          Future<int>.sync(
+            () => future.readable.readWhenReadyForCanonicalCopy(owner: owner),
+          ),
+          throwsStateError,
+        );
+        await failedWriter;
+        expect(loads, 0);
+      },
+    );
+
+    test(
+      'cancelled future reader releases its buffer owner before a host retry',
+      () async {
+        final owner = Object();
+        final future = WASIComponentFuture<int>('cancelled checked future');
+        final reader = future.readable.readWhenReadyForCanonicalCopy(
+          owner: owner,
+        );
+        final cancelled = expectLater(reader, throwsStateError);
+        future.readable.requestCopyCancellation();
+        future.readable.cancelRequestedCopy();
+        await cancelled;
+        final writer = future.writable.completeSourceWhenReadForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 1,
+            owner: owner,
+            checkSameOwner: true,
+            readPrefix: (_) => [7],
+          ),
+        );
+        expect(future.readable.readForCopy(), 7);
+        await writer;
+      },
+    );
+
+    test('legacy host reads accept a checked guest source', () async {
+      final owner = Object();
+      final stream = WASIComponentStream<int>(
+        'host reader',
+        maxBufferedElements: 0,
+      );
+      final writer = stream.writable.writeSourceWhenAvailableForCopy(
+        WASIComponentAsyncCopySource<int>(
+          length: 1,
+          owner: owner,
+          checkSameOwner: true,
+          readPrefix: (_) => [7],
+        ),
+      );
+      expect(stream.readable.readForCopy(1), [7]);
+      expect(await writer, 1);
+      final future = WASIComponentFuture<int>('host future reader');
+      final completed = future.writable.completeSourceWhenReadForCopy(
+        WASIComponentAsyncCopySource<int>(
+          length: 1,
+          owner: owner,
+          checkSameOwner: true,
+          readPrefix: (_) => [8],
+        ),
+      );
+      expect(future.readable.readForCopy(), 8);
+      await completed;
+    });
+  });
+
+  group('pending stream copy cursors', () {
+    test(
+      'blocked writer keeps its suffix until the completion event is delivered',
+      () async {
+        final stream = WASIComponentStream<int>(
+          'pending writer',
+          maxBufferedElements: 0,
+        );
+        final values = [7, 8];
+        var offset = 0;
+        final loaded = <int>[];
+        final pending = stream.writable.writeSourceWhenAvailableForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: values.length,
+            readPrefix: (count) {
+              loaded.add(count);
+              final prefix = values.sublist(offset, offset + count);
+              offset += count;
+              return prefix;
+            },
+          ),
+          deferCompletion: true,
+        );
+        expect(stream.readable.readForCopy(1), [7]);
+        expect(await pending, 1);
+        expect(stream.readable.readForCopy(1), [8]);
+        expect(loaded, [1, 1]);
+        expect(stream.writable.copyProgress, 2);
+        stream.writable.finishDeferredCopy(dropped: false);
+        expect(stream.readable.readForCopy(1), isEmpty);
+      },
+    );
+
+    test(
+      'blocked bounded writer retains its cursor across freed capacity',
+      () async {
+        final stream = WASIComponentStream<int>(
+          'bounded pending writer',
+          maxBufferedElements: 1,
+        );
+        stream.writable.write(3);
+        var offset = 0;
+        final pending = stream.writable.writeSourceWhenAvailableForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 2,
+            readPrefix: (count) {
+              final prefix = [7, 8].sublist(offset, offset + count);
+              offset += count;
+              return prefix;
+            },
+          ),
+          deferCompletion: true,
+        );
+        expect(stream.readable.read(1), [3]);
+        expect(await pending, 1);
+        expect(stream.readable.read(1), [7]);
+        expect(stream.readable.read(1), [8]);
+        expect(offset, 2);
+        stream.writable.finishDeferredCopy(dropped: false);
+      },
+    );
+
+    test('event delivery releases an unaccepted writer suffix', () async {
+      final stream = WASIComponentStream<int>(
+        'delivered writer',
+        maxBufferedElements: 0,
+      );
+      var loaded = 0;
+      final pending = stream.writable.writeSourceWhenAvailableForCopy(
+        WASIComponentAsyncCopySource<int>(
+          length: 2,
+          readPrefix: (count) {
+            loaded += count;
+            return [7];
+          },
+        ),
+        deferCompletion: true,
+      );
+      expect(stream.readable.readForCopy(1), [7]);
+      expect(await pending, 1);
+      stream.writable.finishDeferredCopy(dropped: false);
+      expect(stream.readable.readForCopy(1), isEmpty);
+      expect(loaded, 1);
+    });
+
+    test('cancellation releases an unaccepted writer suffix', () async {
+      final stream = WASIComponentStream<int>(
+        'cancelled writer',
+        maxBufferedElements: 0,
+      );
+      var loaded = 0;
+      final pending = stream.writable.writeSourceWhenAvailableForCopy(
+        WASIComponentAsyncCopySource<int>(
+          length: 2,
+          readPrefix: (count) {
+            loaded += count;
+            return [7];
+          },
+        ),
+        deferCompletion: true,
+      );
+      expect(stream.readable.readForCopy(1), [7]);
+      expect(await pending, 1);
+      expect(stream.writable.copyProgress, 1);
+      stream.writable.requestCopyCancellation();
+      stream.writable.cancelRequestedCopy();
+      expect(stream.writable.copyProgress, 1);
+      expect(stream.readable.readForCopy(1), isEmpty);
+      expect(loaded, 1);
+      stream.writable.finishDeferredCopy(dropped: false);
+    });
+
+    test(
+      'a failure in a retained source stops the cursor without reloading',
+      () async {
+        final stream = WASIComponentStream<int>(
+          'failed suffix',
+          maxBufferedElements: 0,
+        );
+        final failure = StateError('suffix failed');
+        var loaded = 0;
+        final pending = stream.writable.writeSourceWhenAvailableForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 2,
+            readPrefix: (count) {
+              if (loaded++ != 0) throw failure;
+              return [7];
+            },
+          ),
+          deferCompletion: true,
+        );
+        expect(stream.readable.readForCopy(1), [7]);
+        expect(await pending, 1);
+        expect(() => stream.readable.readForCopy(1), throwsA(same(failure)));
+        stream.writable.finishDeferredCopy(dropped: false);
+        expect(stream.readable.readForCopy(1), isEmpty);
+        expect(loaded, 2);
+      },
+    );
+  });
+
+  group('retained stream targets', () {
+    test('blocked target accepts two writes before event delivery', () async {
+      final stream = WASIComponentStream<int>(
+        'pending target',
+        maxBufferedElements: 0,
+      );
+      final copied = <int>[];
+      final pending = stream.readable.readIntoWhenAvailableForCopy(
+        WASIComponentAsyncCopyTarget<int>(
+          length: 2,
+          writePrefix: copied.addAll,
+        ),
+        deferCompletion: true,
+      );
+      expect(stream.writable.canWriteImmediately(2), isFalse);
+      expect(stream.writable.canWriteSourceImmediately(2), isTrue);
+      expect(
+        stream.writable.writeSourceForCopy(
+          WASIComponentAsyncCopySource<int>(length: 1, readPrefix: (_) => [7]),
+        ),
+        1,
+      );
+      expect(await pending, 1);
+      expect(stream.readable.copyProgress, 1);
+      expect(
+        stream.writable.writeSourceForCopy(
+          WASIComponentAsyncCopySource<int>(length: 1, readPrefix: (_) => [8]),
+        ),
+        1,
+      );
+      expect(copied, [7, 8]);
+      expect(stream.readable.copyProgress, 2);
+      stream.readable.finishDeferredCopy(dropped: false);
+      expect(stream.writable.canWriteSourceImmediately(1), isFalse);
+    });
+
+    test('blocked target also accepts successive queued prefixes', () async {
+      final stream = WASIComponentStream<int>(
+        'bounded target',
+        maxBufferedElements: 1,
+      );
+      final copied = <int>[];
+      final pending = stream.readable.readIntoWhenAvailableForCopy(
+        WASIComponentAsyncCopyTarget<int>(
+          length: 2,
+          writePrefix: copied.addAll,
+        ),
+        deferCompletion: true,
+      );
+      stream.writable.write(7);
+      expect(await pending, 1);
+      stream.writable.write(8);
+      expect(copied, [7, 8]);
+      expect(stream.readable.copyProgress, 2);
+      stream.readable.finishDeferredCopy(dropped: false);
+    });
+
+    test(
+      'event delivery clears a target before it accepts its suffix',
+      () async {
+        final stream = WASIComponentStream<int>(
+          'delivered target',
+          maxBufferedElements: 0,
+        );
+        final copied = <int>[];
+        final pending = stream.readable.readIntoWhenAvailableForCopy(
+          WASIComponentAsyncCopyTarget<int>(
+            length: 2,
+            writePrefix: copied.addAll,
+          ),
+          deferCompletion: true,
+        );
+        stream.writable.writeSourceForCopy(
+          WASIComponentAsyncCopySource<int>(length: 1, readPrefix: (_) => [7]),
+        );
+        expect(await pending, 1);
+        stream.readable.finishDeferredCopy(dropped: false);
+        expect(stream.writable.canWriteSourceImmediately(1), isFalse);
+        var loaded = 0;
+        expect(
+          () => stream.writable.writeSourceForCopy(
+            WASIComponentAsyncCopySource<int>(
+              length: 1,
+              readPrefix: (_) {
+                loaded++;
+                return [8];
+              },
+            ),
+          ),
+          throwsStateError,
+        );
+        expect(loaded, 0);
+        expect(copied, [7]);
+      },
+    );
+
+    test(
+      'cancellation keeps target progress and releases the remaining buffer',
+      () async {
+        for (final count in [1, 2]) {
+          final stream = WASIComponentStream<int>(
+            'cancel target',
+            maxBufferedElements: 0,
+          );
+          final copied = <int>[];
+          final pending = stream.readable.readIntoWhenAvailableForCopy(
+            WASIComponentAsyncCopyTarget<int>(
+              length: 3,
+              writePrefix: copied.addAll,
+            ),
+            deferCompletion: true,
+          );
+          stream.writable.writeSourceForCopy(
+            WASIComponentAsyncCopySource<int>(
+              length: 1,
+              readPrefix: (_) => [7],
+            ),
+          );
+          expect(await pending, 1);
+          if (count == 2) {
+            stream.writable.writeSourceForCopy(
+              WASIComponentAsyncCopySource<int>(
+                length: 1,
+                readPrefix: (_) => [8],
+              ),
+            );
+          }
+          stream.readable.requestCopyCancellation();
+          stream.readable.cancelRequestedCopy();
+          expect(stream.readable.copyProgress, count);
+          expect(stream.writable.canWriteSourceImmediately(1), isFalse);
+          stream.readable.finishDeferredCopy(dropped: false);
+          expect(copied.length, count);
+        }
+      },
+    );
+
+    test(
+      'an immediately matched target does not retain its own suffix',
+      () async {
+        final stream = WASIComponentStream<int>(
+          'immediate target',
+          maxBufferedElements: 0,
+        );
+        final writer = stream.writable.writeSourceWhenAvailableForCopy(
+          WASIComponentAsyncCopySource<int>(length: 1, readPrefix: (_) => [7]),
+        );
+        final copied = <int>[];
+        final count = await stream.readable.readIntoWhenAvailableForCopy(
+          WASIComponentAsyncCopyTarget<int>(
+            length: 2,
+            writePrefix: copied.addAll,
+          ),
+          deferCompletion: true,
+        );
+        expect(count, 1);
+        expect(await writer, 1);
+        expect(stream.writable.canWriteSourceImmediately(1), isFalse);
+        expect(copied, [7]);
+        stream.readable.finishDeferredCopy(dropped: false);
+      },
+    );
+
+    test(
+      'an immediately matched source does not retain its own suffix',
+      () async {
+        final stream = WASIComponentStream<int>(
+          'immediate source',
+          maxBufferedElements: 0,
+        );
+        final reader = stream.readable.readWhenAvailableForCopy(1);
+        var loaded = 0;
+        final count = await stream.writable.writeSourceWhenAvailableForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 2,
+            readPrefix: (_) {
+              loaded++;
+              return [7];
+            },
+          ),
+          deferCompletion: true,
+        );
+        expect(count, 1);
+        expect(await reader, [7]);
+        expect(stream.readable.readForCopy(1), isEmpty);
+        expect(loaded, 1);
+        stream.writable.finishDeferredCopy(dropped: false);
+      },
+    );
+
+    test(
+      'a failing target fails both endpoints and stops its cursor',
+      () async {
+        final stream = WASIComponentStream<int>(
+          'failed target',
+          maxBufferedElements: 0,
+        );
+        final failure = StateError('target store failed');
+        var attempts = 0;
+        final reader = stream.readable.readIntoWhenAvailableForCopy(
+          WASIComponentAsyncCopyTarget<int>(
+            length: 2,
+            writePrefix: (_) {
+              attempts++;
+              throw failure;
+            },
+          ),
+          deferCompletion: true,
+        );
+        final observed = expectLater(reader, throwsA(same(failure)));
+        expect(
+          () => stream.writable.writeSourceForCopy(
+            WASIComponentAsyncCopySource<int>(
+              length: 1,
+              readPrefix: (_) => [7],
+            ),
+          ),
+          throwsA(same(failure)),
+        );
+        await observed;
+        expect(attempts, 1);
+        expect(stream.writable.canWriteSourceImmediately(1), isFalse);
+        stream.readable.finishDeferredCopy(dropped: false);
+      },
+    );
+
+    test('a target failure also rejects an already blocked writer', () async {
+      final stream = WASIComponentStream<int>(
+        'writer before failed target',
+        maxBufferedElements: 0,
+      );
+      final failure = StateError('target store failed');
+      final writer = stream.writable.writeSourceWhenAvailableForCopy(
+        WASIComponentAsyncCopySource<int>(length: 1, readPrefix: (_) => [7]),
+      );
+      final observedWriter = expectLater(writer, throwsA(same(failure)));
+      await expectLater(
+        Future<int>.sync(
+          () => stream.readable.readIntoWhenAvailableForCopy(
+            WASIComponentAsyncCopyTarget<int>(
+              length: 2,
+              writePrefix: (_) => throw failure,
+            ),
+          ),
+        ),
+        throwsA(same(failure)),
+      );
+      await observedWriter;
+      expect(stream.writable.canWriteSourceImmediately(1), isFalse);
+    });
+
+    test('empty targets never call the value store', () async {
+      final stream = WASIComponentStream<int>(
+        'empty target',
+        maxBufferedElements: 0,
+      );
+      var stored = 0;
+      expect(
+        await stream.readable.readIntoWhenAvailableForCopy(
+          WASIComponentAsyncCopyTarget<int>(
+            length: 0,
+            writePrefix: (_) => stored++,
+          ),
+        ),
+        0,
+      );
+      expect(stored, 0);
+    });
+  });
+
+  group('canonical copy sources', () {
+    test(
+      'synchronous read accepts a waiting unbuffered source prefix',
+      () async {
+        final loaded = <int>[];
+        final stream = WASIComponentStream<int>(
+          'sync rendezvous',
+          maxBufferedElements: 0,
+        );
+        final pending = stream.writable.writeSourceWhenAvailableForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 2,
+            readPrefix: (count) {
+              loaded.add(count);
+              return [7, 8].take(count).toList();
+            },
+          ),
+        );
+        expect(stream.readable.readForCopy(1), [7]);
+        expect(await pending, 1);
+        expect(loaded, [1]);
+        expect(stream.queuedLength, 0);
+      },
+    );
+
+    test('stream loads only the accepted bounded prefix', () async {
+      final loaded = <int>[];
+      final discarded = <int>[];
+      final stream = WASIComponentStream<int>(
+        'prefix',
+        maxBufferedElements: 1,
+        onDiscard: discarded.add,
+      );
+      final source = WASIComponentAsyncCopySource<int>(
+        length: 2,
+        readPrefix: (count) {
+          loaded.add(count);
+          return [for (var i = 0; i < count; i++) i + 7];
+        },
+      );
+      expect(await stream.writable.writeSourceWhenAvailableForCopy(source), 1);
+      expect(loaded, [1]);
+      stream.readable.drop();
+      stream.writable.drop();
+      expect(discarded, [7]);
+    });
+
+    test(
+      'stream waits and cancels without loading an unaccepted source',
+      () async {
+        var loaded = 0;
+        final stream = WASIComponentStream<int>(
+          'cancel',
+          maxBufferedElements: 1,
+        );
+        stream.writable.write(1);
+        final pending = stream.writable.writeSourceWhenAvailableForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 2,
+            readPrefix: (count) {
+              loaded++;
+              return [2, 3].take(count).toList();
+            },
+          ),
+        );
+        final observed = expectLater(
+          pending,
+          throwsA(isA<WASIComponentAsyncEndpointStateError>()),
+        );
+        expect(loaded, 0);
+        stream.writable.cancelPendingCopy();
+        await observed;
+        expect(loaded, 0);
+        expect(stream.readable.read(2), [1]);
+      },
+    );
+
+    test(
+      'stream reader drop rejects a waiting source without loading',
+      () async {
+        var loaded = 0;
+        final stream = WASIComponentStream<int>('drop', maxBufferedElements: 0);
+        final pending = stream.writable.writeSourceWhenAvailableForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 1,
+            readPrefix: (count) {
+              loaded++;
+              return [7];
+            },
+          ),
+        );
+        final observed = expectLater(
+          pending,
+          throwsA(isA<WASIComponentAsyncEndpointStateError>()),
+        );
+        stream.readable.drop();
+        await observed;
+        expect(loaded, 0);
+      },
+    );
+
+    test('stream rendezvous loads exactly the matched reader prefix', () async {
+      final loaded = <int>[];
+      final stream = WASIComponentStream<int>(
+        'rendezvous',
+        maxBufferedElements: 0,
+      );
+      final pending = stream.writable.writeSourceWhenAvailableForCopy(
+        WASIComponentAsyncCopySource<int>(
+          length: 2,
+          readPrefix: (count) {
+            loaded.add(count);
+            return [7, 8].take(count).toList();
+          },
+        ),
+      );
+      expect(loaded, isEmpty);
+      expect(await stream.readable.readWhenAvailableForCopy(1), [7]);
+      expect(await pending, 1);
+      expect(loaded, [1]);
+      expect(stream.queuedLength, 0);
+    });
+
+    test(
+      'synchronous source copies accept a prefix and preserve eager APIs',
+      () {
+        final loaded = <int>[];
+        final stream = WASIComponentStream<int>(
+          'sync-prefix',
+          maxBufferedElements: 1,
+        );
+        final source = WASIComponentAsyncCopySource<int>(
+          length: 2,
+          readPrefix: (count) {
+            loaded.add(count);
+            return [7, 8].take(count).toList();
+          },
+        );
+        expect(stream.writable.writeSourceForCopy(source), 1);
+        expect(
+          () => stream.writable.writeSourceForCopy(source),
+          throwsStateError,
+        );
+        expect(loaded, [1]);
+        expect(stream.readable.read(1), [7]);
+        expect(() => stream.writable.writeAllForCopy([1, 2]), throwsStateError);
+        expect(stream.queuedLength, 0);
+      },
+    );
+
+    test(
+      'synchronous rendezvous source copies match an awaiting reader',
+      () async {
+        var loaded = 0;
+        final stream = WASIComponentStream<int>(
+          'sync-rendezvous',
+          maxBufferedElements: 0,
+        );
+        final read = stream.readable.readWhenAvailableForCopy(1);
+        expect(
+          stream.writable.writeSourceForCopy(
+            WASIComponentAsyncCopySource<int>(
+              length: 2,
+              readPrefix: (count) {
+                loaded++;
+                expect(count, 1);
+                return [7];
+              },
+            ),
+          ),
+          1,
+        );
+        expect(await read, [7]);
+        expect(loaded, 1);
+      },
+    );
+
+    test('empty stream sources do not load values', () async {
+      var loaded = 0;
+      final stream = WASIComponentStream<int>('empty', maxBufferedElements: 0);
+      final source = WASIComponentAsyncCopySource<int>(
+        length: 0,
+        readPrefix: (count) {
+          loaded++;
+          return [];
+        },
+      );
+      expect(stream.writable.writeSourceForCopy(source), 0);
+      expect(await stream.writable.writeSourceWhenAvailableForCopy(source), 0);
+      expect(loaded, 0);
+    });
+
+    test(
+      'a failing rendezvous source fails both waits and permits retry',
+      () async {
+        final stream = WASIComponentStream<int>(
+          'failure',
+          maxBufferedElements: 0,
+        );
+        final failure = StateError('source failed');
+        final write = stream.writable.writeSourceWhenAvailableForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 1,
+            readPrefix: (_) => throw failure,
+          ),
+        );
+        final writeFailure = expectLater(write, throwsA(same(failure)));
+        await expectLater(
+          stream.readable.readWhenAvailableForCopy(1),
+          throwsA(same(failure)),
+        );
+        await writeFailure;
+        final read = stream.readable.readWhenAvailableForCopy(1);
+        expect(
+          await stream.writable.writeSourceWhenAvailableForCopy(
+            WASIComponentAsyncCopySource<int>(
+              length: 1,
+              readPrefix: (_) => [9],
+            ),
+          ),
+          1,
+        );
+        expect(await read, [9]);
+      },
+    );
+
+    test(
+      'a failing bounded source does not lose an unrelated queued read',
+      () async {
+        final stream = WASIComponentStream<int>(
+          'bounded-failure',
+          maxBufferedElements: 1,
+        );
+        stream.writable.write(3);
+        final failure = StateError('source failed');
+        final write = stream.writable.writeSourceWhenAvailableForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 1,
+            readPrefix: (_) => throw failure,
+          ),
+        );
+        final observed = expectLater(write, throwsA(same(failure)));
+        expect(stream.readable.read(1), [3]);
+        await observed;
+        expect(stream.queuedLength, 0);
+        expect(
+          stream.writable.writeSourceForCopy(
+            WASIComponentAsyncCopySource<int>(
+              length: 1,
+              readPrefix: (_) => [9],
+            ),
+          ),
+          1,
+        );
+        expect(stream.readable.read(1), [9]);
+      },
+    );
+
+    test('future loads only when a reader actually accepts', () async {
+      var loaded = 0;
+      final discarded = <int>[];
+      final future = WASIComponentFuture<int>(
+        'future',
+        onDiscard: discarded.add,
+      );
+      final write = future.writable.completeSourceWhenReadForCopy(
+        WASIComponentAsyncCopySource<int>(
+          length: 1,
+          readPrefix: (count) {
+            loaded++;
+            expect(count, 1);
+            return [7];
+          },
+        ),
+      );
+      expect(loaded, 0);
+      expect(future.writable.hasPendingWriteDelivery, isTrue);
+      final readyBeforeRead = future.readable.isReady;
+      final completedBeforeRead = future.writable.isCompleted;
+      expect(future.readable.readForCopy(), 7);
+      await write;
+      expect(readyBeforeRead, isTrue);
+      expect(completedBeforeRead, isFalse);
+      expect(loaded, 1);
+      future.readable.drop();
+      future.writable.drop();
+      expect(discarded, isEmpty);
+    });
+
+    test('future cancellation leaves the offered source untouched', () async {
+      var loaded = 0;
+      final future = WASIComponentFuture<int>('cancelled-future');
+      final source = WASIComponentAsyncCopySource<int>(
+        length: 1,
+        readPrefix: (_) {
+          loaded++;
+          return [7];
+        },
+      );
+      final write = future.writable.completeSourceWhenReadForCopy(source);
+      final observed = expectLater(
+        write,
+        throwsA(isA<WASIComponentAsyncEndpointStateError>()),
+      );
+      future.writable.cancelPendingCopy();
+      await observed;
+      expect(loaded, 0);
+      final retry = future.writable.completeSourceWhenReadForCopy(source);
+      expect(await future.readable.readWhenReadyForCopy(), 7);
+      await retry;
+      expect(loaded, 1);
+    });
+
+    test(
+      'future readable drop does not load or discard an unaccepted source',
+      () async {
+        var loaded = 0;
+        final discarded = <int>[];
+        final future = WASIComponentFuture<int>(
+          'dropped-future',
+          onDiscard: discarded.add,
+        );
+        final write = future.writable.completeSourceWhenReadForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 1,
+            readPrefix: (_) {
+              loaded++;
+              return [7];
+            },
+          ),
+        );
+        final observed = expectLater(
+          write,
+          throwsA(isA<WASIComponentAsyncEndpointStateError>()),
+        );
+        future.readable.drop();
+        await observed;
+        expect(loaded, 0);
+        expect(discarded, isEmpty);
+      },
+    );
+
+    test('synchronous future source requires an accepting reader', () async {
+      var loaded = 0;
+      final future = WASIComponentFuture<int>('sync-future');
+      final source = WASIComponentAsyncCopySource<int>(
+        length: 1,
+        readPrefix: (_) {
+          loaded++;
+          return [7];
+        },
+      );
+      expect(
+        () => future.writable.completeSourceForCopy(source),
+        throwsStateError,
+      );
+      expect(loaded, 0);
+      final read = future.readable.readWhenReadyForCopy();
+      future.writable.completeSourceForCopy(source);
+      expect(await read, 7);
+      expect(loaded, 1);
+    });
+
+    test(
+      'a failing future source fails both waits and permits retry',
+      () async {
+        final future = WASIComponentFuture<int>('failed-future');
+        final failure = StateError('future source failed');
+        final read = future.readable.readWhenReadyForCopy();
+        final observed = expectLater(read, throwsA(same(failure)));
+        final write = future.writable.completeSourceWhenReadForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 1,
+            readPrefix: (_) => throw failure,
+          ),
+        );
+        await expectLater(write, throwsA(same(failure)));
+        await observed;
+        final retry = future.writable.completeSourceWhenReadForCopy(
+          WASIComponentAsyncCopySource<int>(length: 1, readPrefix: (_) => [9]),
+        );
+        expect(await future.readable.readWhenReadyForCopy(), 9);
+        await retry;
+      },
+    );
+
+    test('future producer disposal clears an unaccepted source', () async {
+      var loaded = 0;
+      final discarded = <int>[];
+      final future = WASIComponentFuture<int>(
+        'disposed-future',
+        onDiscard: discarded.add,
+      );
+      final write = future.writable.completeSourceWhenReadForCopy(
+        WASIComponentAsyncCopySource<int>(
+          length: 1,
+          readPrefix: (_) {
+            loaded++;
+            return [7];
+          },
+        ),
+      );
+      final observed = expectLater(
+        write,
+        throwsA(isA<WASIComponentAsyncEndpointStateError>()),
+      );
+      future.writable.dispose();
+      await observed;
+      future.readable.drop();
+      expect(loaded, 0);
+      expect(discarded, isEmpty);
+      expect(future.isDropped, isTrue);
+    });
+
+    test('future source arity errors never invoke the loader', () {
+      var loaded = 0;
+      final future = WASIComponentFuture<int>('arity');
+      for (final length in [0, 2]) {
+        final source = WASIComponentAsyncCopySource<int>(
+          length: length,
+          readPrefix: (_) {
+            loaded++;
+            return [7];
+          },
+        );
+        expect(
+          () => future.writable.completeSourceForCopy(source),
+          throwsStateError,
+        );
+        expect(
+          () => future.writable.completeSourceWhenReadForCopy(source),
+          throwsStateError,
+        );
+      }
+      expect(loaded, 0);
+    });
+
+    test(
+      'deferred future cancellation retains copy state until delivery',
+      () async {
+        var loaded = 0;
+        final future = WASIComponentFuture<int>('deferred-cancel');
+        final source = WASIComponentAsyncCopySource<int>(
+          length: 1,
+          readPrefix: (_) {
+            loaded++;
+            return [7];
+          },
+        );
+        final pending = future.writable.completeSourceWhenReadForCopy(
+          source,
+          deferCompletion: true,
+        );
+        final observed = expectLater(
+          pending,
+          throwsA(isA<WASIComponentAsyncEndpointStateError>()),
+        );
+        future.writable.cancelPendingCopy();
+        await observed;
+        expect(loaded, 0);
+        expect(future.writable.requireDroppable, throwsStateError);
+        future.writable.finishDeferredCopy(cancelled: true);
+        final retry = future.writable.completeSourceWhenReadForCopy(source);
+        expect(await future.readable.readWhenReadyForCopy(), 7);
+        await retry;
+        expect(loaded, 1);
+      },
+    );
+
+    test(
+      'queued host writes retain priority over a waiting guest source',
+      () async {
+        var loaded = 0;
+        final stream = WASIComponentStream<int>('fifo', maxBufferedElements: 1);
+        stream.writable.write(3);
+        final host = stream.writable.writeWhenAvailable([4]);
+        final guest = stream.writable.writeSourceWhenAvailableForCopy(
+          WASIComponentAsyncCopySource<int>(
+            length: 1,
+            readPrefix: (_) {
+              loaded++;
+              return [7];
+            },
+          ),
+        );
+        expect(stream.readable.read(1), [3]);
+        expect(await host, 1);
+        expect(loaded, 0);
+        expect(stream.readable.read(1), [4]);
+        expect(await guest, 1);
+        expect(loaded, 1);
+        expect(stream.readable.read(1), [7]);
+      },
+    );
+  });
+
   group('WASIComponentStream', () {
     test('moves values through readable and writable endpoints', () {
       final dropped = <String>[];

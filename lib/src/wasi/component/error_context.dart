@@ -317,3 +317,10 @@ WASIComponentCanonicalRealloc _requireRealloc(
     'WASI component canonical error-context index $canonicalIndex requires a realloc callback.',
   );
 }
+
+/// Internal reference copies used by canonical component boundaries.
+extension WASIComponentCanonicalErrorContextCopies
+    on WASIComponentErrorContextHost {
+  /// Copies the immutable context while keeping reference handles independent.
+  int copyHandle(int handle) => table.insert(_type, table.get(_type, handle));
+}

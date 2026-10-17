@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/backend/native/interpreter/features.dart';
@@ -12,6 +13,9 @@ import '../../wasm/backend/native/memory.dart' as native_memory;
 import '../component/adapter_host.dart';
 import '../component/adapter_plan.dart';
 import '../component/host.dart';
+import '../component/resource_host.dart';
+import '../component/async_host.dart';
+import '../component/canonical_handles.dart';
 import '../component/string_memory.dart';
 import '../component/subtask.dart';
 import '../component/waitable_set.dart';
@@ -163,6 +167,21 @@ final class WASIComponentNativeRuntime {
   final List<WasmComponentTypeDefinition> _visibleTypes =
       <WasmComponentTypeDefinition>[];
   final List<String?> _visibleResourceTypeNames = <String?>[];
+  final List<WASIComponentCanonicalResourceIdentity?> _visibleResources = [];
+  final Map<String, WASIComponentCanonicalResourceIdentity> _exportedResources =
+      {};
+  final Map<int, WASIComponentCanonicalAdapterPlan> _runtimeAdapterPlans = {};
+  final List<WASIComponentCanonicalResourceIdentity> _hostResourceIdentities =
+      [];
+  late final WASIComponentCanonicalHandles _handles =
+      WASIComponentCanonicalHandles(
+        table: _componentHost.table,
+        errorContexts: _componentHost.canonicalHost.errorContextHost,
+        contextHost: _componentHost.canonicalHost.contextHost,
+        resourceIdentity: _runtimeResourceIdentity,
+        adapterResourceIdentity: _adapterResourceIdentity,
+        collectErrorCarriers: _collectAdapterErrorCarriers,
+      );
   final Map<String, _ComponentFunction> _exportedFunctions =
       <String, _ComponentFunction>{};
   final Map<String, _ComponentInstance> _exportedInstances =
@@ -342,6 +361,7 @@ final class WASIComponentNativeRuntime {
     }
     _prepareExecution();
     _processDefinitions();
+    _checkHostResourceIdentities();
     _initialized = true;
   }
 
@@ -354,7 +374,26 @@ final class WASIComponentNativeRuntime {
         _processDefinition(event);
       }
     }
+    _checkHostResourceIdentities();
     _initialized = true;
+  }
+
+  void _checkHostResourceIdentities() {
+    if (_hostResourceIdentities.any((identity) => identity.type == null)) {
+      throw const WASIPreview2ComponentExecutionException(
+        'Unregistered abstract host resource: alias its provider type and bind that component type index with resourceHost.defineResourceType before execution.',
+      );
+    }
+  }
+
+  void _bindRegisteredHostResource(
+    WASIComponentCanonicalResourceIdentity? identity,
+    int index,
+  ) {
+    if (identity == null || identity.type != null) return;
+    final registered = _componentHost.canonicalHost.resourceHost
+        .canonicalRegisteredTypeAt(index);
+    if (registered != null) identity.type = registered;
   }
 
   void _prepareExecution() {
@@ -365,12 +404,33 @@ final class WASIComponentNativeRuntime {
         if (definition.resource != null && !definition.resource!.isAbstract)
           definition,
     };
+    _runtimeAdapterPlans.addEntries(
+      plan.adapterPlans.map((plan) => MapEntry(plan.canonicalIndex, plan)),
+    );
     _initializeAdapterCallbacks(plan.adapterPlans);
+    plan.bindCanonicalHandles((bindings) {
+      _handles.asyncBindings = bindings;
+      if (bindings is WASIComponentAsyncValueBindingSet) {
+        _handles.bindAsyncValues(
+          bindings,
+          plan.asyncValueBindings,
+          _asyncResourceIdentity,
+        );
+      }
+      for (final binding in plan.asyncValueBindings) {
+        _handles.endpointKinds[binding.componentTypeIndex] =
+            binding.kind == WASIComponentAsyncValueBindingKind.stream
+            ? WASIComponentCanonicalHandleKind.streamReadable
+            : WASIComponentCanonicalHandleKind.futureReadable;
+      }
+      return _handles;
+    });
     _binding = plan.bind(
       coreFunctions: _adapterCoreCallbacks,
       componentFunctions: _adapterComponentCallbacks,
-      maxBufferedElementsForStream: _preview3Host == null ? null : (_) => 0,
+      maxBufferedElementsForStream: (_) => 0,
       instanceLocalAsyncValues: true,
+
       onResourceDrop: (binding, representation) {
         final definition = types[binding.componentTypeIndex];
         // A foreign alias's destructor index belongs to its defining runtime.
@@ -407,21 +467,6 @@ final class WASIComponentNativeRuntime {
       if (type.resource?.isAsync == true) {
         throw const WASIPreview2ComponentExecutionException(
           'Asynchronous resource destructors are not executable yet.',
-        );
-      }
-    }
-    for (final alias in component.aliases) {
-      if (alias.sort.kind != WasmComponentSortKind.componentType ||
-          alias.target.kind != WasmComponentAliasTargetKind.outer ||
-          alias.target.componentDepth != 0) {
-        continue;
-      }
-      final resource = component.componentTypeIndexScope
-          .definitionAt(alias.target.index)
-          ?.resource;
-      if (resource != null && !resource.isAbstract) {
-        throw const WASIPreview2ComponentExecutionException(
-          'Concrete local resource aliases are not executable yet.',
         );
       }
     }
@@ -571,12 +616,22 @@ final class WASIComponentNativeRuntime {
     if (count <= _decodedTypeDefinitionCount) {
       return;
     }
-    _visibleTypes.addAll(
-      component.typeDefinitions.getRange(_decodedTypeDefinitionCount, count),
-    );
-    _visibleResourceTypeNames.addAll(
-      List<String?>.filled(count - _decodedTypeDefinitionCount, null),
-    );
+    for (final type in component.typeDefinitions.getRange(
+      _decodedTypeDefinitionCount,
+      count,
+    )) {
+      final index = _visibleTypes.length;
+      _visibleTypes.add(type);
+      _visibleResourceTypeNames.add(null);
+      _visibleResources.add(
+        type.kind == WasmComponentTypeKind.resource
+            ? WASIComponentCanonicalResourceIdentity(
+                _binding.canonicalResourceTypeAt(index),
+                _handles,
+              )
+            : null,
+      );
+    }
     _decodedTypeDefinitionCount = count;
   }
 
@@ -608,6 +663,7 @@ final class WASIComponentNativeRuntime {
           }
           _visibleTypes.add(type.definition);
           _visibleResourceTypeNames.add(type.resourceTypeName);
+          _visibleResources.add(type.resourceIdentity);
         case WasmComponentExternKind.coreModule:
         case WasmComponentExternKind.value:
         case WasmComponentExternKind.component:
@@ -620,7 +676,21 @@ final class WASIComponentNativeRuntime {
     }
     switch (import.descriptor.kind) {
       case WasmComponentExternKind.function:
-        _componentFunctions.add(_hostComponentFunction(name));
+        final functionType = _typeDefinitionAt(
+          import.descriptor.typeIndex,
+        )?.function;
+        _componentFunctions.add(
+          _hostComponentFunction(
+            name,
+            resources: functionType == null
+                ? null
+                : () => _functionResourceIdentities(
+                    functionType,
+                    _visibleTypes,
+                    _visibleResources,
+                  ),
+          ),
+        );
       case WasmComponentExternKind.instance:
         _componentInstances.add(
           _hostComponentInstance(name, import.descriptor),
@@ -629,8 +699,21 @@ final class WASIComponentNativeRuntime {
         throw WASIPreview2ComponentExecutionException(
           'Imported core modules are not supported yet: $name.',
         );
-      case WasmComponentExternKind.component:
       case WasmComponentExternKind.componentType:
+        final type = _typeExportDefinition(import.descriptor, _visibleTypes);
+        final registered = _componentHost.canonicalHost.resourceHost
+            .canonicalRegisteredTypeAt(_visibleTypes.length);
+        if (type?.resource == null || registered == null) {
+          throw WASIPreview2ComponentExecutionException(
+            'Unregistered abstract host resource `$name`; bind its component type index with resourceHost.defineResourceType.',
+          );
+        }
+        _visibleTypes.add(type!);
+        _visibleResourceTypeNames.add(null);
+        _visibleResources.add(
+          WASIComponentCanonicalResourceIdentity(registered, null),
+        );
+      case WasmComponentExternKind.component:
       case WasmComponentExternKind.value:
         throw WASIPreview2ComponentExecutionException(
           'Unsupported component import `$name` of kind '
@@ -655,6 +738,8 @@ final class WASIComponentNativeRuntime {
     final functions = <String, _ComponentFunction>{};
     final types = <String, WasmComponentTypeDefinition>{};
     final resourceTypeNames = <String, String>{};
+    final resources = <String, WASIComponentCanonicalResourceIdentity>{};
+    final localResources = <WASIComponentCanonicalResourceIdentity?>[];
     final localTypes = <WasmComponentTypeDefinition>[];
     final localResourceTypeNames = <String?>[];
     for (final declaration in instanceType.declarations) {
@@ -665,6 +750,7 @@ final class WASIComponentNativeRuntime {
           if (type != null) {
             localTypes.add(type);
             localResourceTypeNames.add(null);
+            localResources.add(null);
           }
         case WasmComponentTypeDeclarationKind.export:
           if (export == null) {
@@ -674,6 +760,11 @@ final class WASIComponentNativeRuntime {
           if (export.descriptor.kind == WasmComponentExternKind.function) {
             functions[name] = _hostComponentFunction(
               _witCallbackKey(interfaceName, name),
+              resources: () => _functionResourceIdentities(
+                localTypes[export.descriptor.typeIndex!].function!,
+                localTypes,
+                localResources,
+              ),
             );
             continue;
           }
@@ -690,7 +781,23 @@ final class WASIComponentNativeRuntime {
             if (resourceTypeName != null) {
               resourceTypeNames[name] = resourceTypeName;
             }
+            final identity = type.resource == null
+                ? null
+                : export.descriptor.boundKind ==
+                      WasmComponentExternBoundKind.equality
+                ? localResources[export.descriptor.typeIndex!]
+                : WASIComponentCanonicalResourceIdentity(
+                    _preview2Host?.canonicalResourceType(interfaceName, name) ??
+                        _preview3Host?.canonicalResourceType(
+                          interfaceName,
+                          name,
+                        ),
+                    null,
+                  );
+            if (identity != null) _hostResourceIdentities.add(identity);
+            if (identity != null) resources[name] = identity;
             localTypes.add(type);
+            localResources.add(identity);
             localResourceTypeNames.add(resourceTypeName);
           }
         case WasmComponentTypeDeclarationKind.import:
@@ -710,12 +817,14 @@ final class WASIComponentNativeRuntime {
           }
           localTypes.add(_visibleTypes[index]);
           localResourceTypeNames.add(_visibleResourceTypeNames[index]);
+          localResources.add(_visibleResources[index]);
       }
     }
     return _ComponentInstance(
       functions: Map.unmodifiable(functions),
       types: Map.unmodifiable(types),
       resourceTypeNames: Map.unmodifiable(resourceTypeNames),
+      resources: Map.unmodifiable(resources),
     );
   }
 
@@ -742,7 +851,10 @@ final class WASIComponentNativeRuntime {
     return localTypes[index];
   }
 
-  _ComponentFunction _hostComponentFunction(String key) {
+  _ComponentFunction _hostComponentFunction(
+    String key, {
+    List<WASIComponentCanonicalResourceIdentity> Function()? resources,
+  }) {
     var resolvedKey = key;
     var callback = _standardImports[resolvedKey];
     if (callback == null) {
@@ -763,6 +875,8 @@ final class WASIComponentNativeRuntime {
       );
     }
     return _ComponentFunction(
+      resources: resources,
+      isHost: true,
       name: resolvedKey,
       invoke: callback,
       // Generic imports accept FutureOr. Synchronous initialization (notably a
@@ -822,6 +936,11 @@ final class WASIComponentNativeRuntime {
             _visibleResourceTypeNames.add(
               alias.target.componentDepth == 0
                   ? _visibleResourceTypeNames[alias.target.index!]
+                  : null,
+            );
+            _visibleResources.add(
+              alias.target.componentDepth == 0
+                  ? _visibleResources[alias.target.index!]
                   : null,
             );
             return;
@@ -887,8 +1006,11 @@ final class WASIComponentNativeRuntime {
             '${instance.types.keys.join(', ')}.',
           );
         }
+        final identity = instance.resources[name];
+        _bindRegisteredHostResource(identity, _visibleTypes.length);
         _visibleTypes.add(type);
         _visibleResourceTypeNames.add(instance.resourceTypeNames[name]);
+        _visibleResources.add(identity);
       case WasmComponentSortKind.instance:
       case WasmComponentSortKind.value:
       case WasmComponentSortKind.component:
@@ -957,23 +1079,40 @@ final class WASIComponentNativeRuntime {
         _componentFunctions.add(
           _ComponentFunction(
             name: 'canonical[$canonicalIndex].lift',
+            resources: () => [
+              for (final use
+                  in _runtimeAdapterPlans[canonicalIndex]!.resourceUses)
+                _runtimeResourceIdentity(use.resourceTypeIndex),
+            ],
             invoke: isAsync
-                ? (args) => _invokeAsyncLift(canonicalIndex, definition, args)
-                : (args) => _adapterProgram.invokeLiftedCoreAsync(
-                    canonicalIndex,
-                    args,
-                    memory: _canonicalMemory(definition),
-                    realloc: _canonicalRealloc(definition),
+                ? (args) => _handles.withThread(
+                    () => _handles.withHandleCall(
+                      () => _invokeAsyncLift(canonicalIndex, definition, args),
+                    ),
+                  )
+                : (args) => _handles.withThread(
+                    () => _handles.withHandleCall(
+                      () => _adapterProgram.invokeLiftedCoreAsync(
+                        canonicalIndex,
+                        args,
+                        memory: _canonicalMemory(definition),
+                        realloc: _canonicalRealloc(definition),
+                      ),
+                    ),
                   ),
             invokeSync: isAsync
                 ? (_) => throw WASIPreview2ComponentExecutionException(
                     'Canonical async lift $canonicalIndex cannot be invoked synchronously.',
                   )
-                : (args) => _synchronousAdapterProgram.invokeLiftedCore(
-                    canonicalIndex,
-                    args,
-                    memory: _canonicalMemory(definition),
-                    realloc: _canonicalRealloc(definition),
+                : (args) => _handles.withThread(
+                    () => _handles.withHandleCall(
+                      () => _synchronousAdapterProgram.invokeLiftedCore(
+                        canonicalIndex,
+                        args,
+                        memory: _canonicalMemory(definition),
+                        realloc: _canonicalRealloc(definition),
+                      ),
+                    ),
                   ),
           ),
         );
@@ -987,40 +1126,11 @@ final class WASIComponentNativeRuntime {
           ),
         );
       case WasmComponentCanonicalKind.resourceDrop:
-        final typeIndex = definition.typeIndex;
-        final resourceTypeName =
-            typeIndex == null ||
-                typeIndex < 0 ||
-                typeIndex >= _visibleResourceTypeNames.length
-            ? null
-            : _visibleResourceTypeNames[typeIndex];
-        if (resourceTypeName == null) {
-          _coreFunctions.add(
-            _CoreFunction(
-              name: 'canonical[$canonicalIndex].resourceDrop',
-              invoke: (args) => _invokeResourceBuiltin(canonicalIndex, args),
-              invokeSync: (args) =>
-                  _invokeResourceBuiltin(canonicalIndex, args),
-            ),
-          );
-          break;
-        }
-        Object? dropImportedResource(List<Object?> args) {
-          _requireMayLeave(canonicalIndex);
-          if (args.length != 1 || args.single is! int) {
-            throw WASIPreview2ComponentExecutionException(
-              'Canonical resource.drop $canonicalIndex expected one handle.',
-            );
-          }
-          _componentHost.table.dropNamed(resourceTypeName, args.single as int);
-          return null;
-        }
-
         _coreFunctions.add(
           _CoreFunction(
             name: 'canonical[$canonicalIndex].resourceDrop',
-            invoke: dropImportedResource,
-            invokeSync: dropImportedResource,
+            invoke: (args) => _invokeResourceBuiltin(canonicalIndex, args),
+            invokeSync: (args) => _invokeResourceBuiltin(canonicalIndex, args),
           ),
         );
       case WasmComponentCanonicalKind.backpressureInc:
@@ -1066,36 +1176,65 @@ final class WASIComponentNativeRuntime {
         // Async lifts drive their callback loop through the immediate/event
         // paths. Synchronous callers use the Future-returning paths instead.
         FutureOr<Object?> invoke(List<Object?> args) {
-          if (memory == null) {
-            return isAsync
-                ? _binding.program.invoke(canonicalIndex, args)
-                : _binding.program.invokeAsync(canonicalIndex, args);
+          if (definition.kind == WasmComponentCanonicalKind.threadIndex) {
+            return _handles.currentThread;
           }
-          return isAsync
-              ? _binding.program.invokeWithMemoryEvent(
-                  canonicalIndex,
-                  memory,
-                  args,
-                  realloc: realloc,
-                )
-              : _binding.program.invokeWithMemoryAsync(
-                  canonicalIndex,
-                  memory,
-                  args,
-                  realloc: realloc,
-                );
+          final hostArgs = _canonicalHostArgs(definition, args);
+          final resultPointer =
+              definition.kind ==
+                  WasmComponentCanonicalKind.errorContextDebugMessage
+              ? (hostArgs.removeLast() as int).toUnsigned(32)
+              : null;
+          final FutureOr<Object?> result;
+          if (memory == null) {
+            result = isAsync
+                ? _binding.program.invoke(canonicalIndex, hostArgs)
+                : _binding.program.invokeAsync(canonicalIndex, hostArgs);
+          } else {
+            result = isAsync
+                ? _binding.program.invokeWithMemoryEvent(
+                    canonicalIndex,
+                    memory,
+                    hostArgs,
+                    realloc: realloc,
+                    resultPointer: resultPointer,
+                  )
+                : _binding.program.invokeWithMemoryAsync(
+                    canonicalIndex,
+                    memory,
+                    hostArgs,
+                    realloc: realloc,
+                    resultPointer: resultPointer,
+                  );
+          }
+          if (result is Future) {
+            return result.then(
+              (value) => _canonicalGuestResult(definition, args, value, memory),
+            );
+          }
+          return _canonicalGuestResult(definition, args, result, memory);
         }
 
         Object? invokeSync(List<Object?> args) {
-          if (memory == null) {
-            return _binding.program.invoke(canonicalIndex, args);
+          if (definition.kind == WasmComponentCanonicalKind.threadIndex) {
+            return _handles.currentThread;
           }
-          return _binding.program.invokeWithMemoryEvent(
-            canonicalIndex,
-            memory,
-            args,
-            realloc: realloc,
-          );
+          final hostArgs = _canonicalHostArgs(definition, args);
+          final resultPointer =
+              definition.kind ==
+                  WasmComponentCanonicalKind.errorContextDebugMessage
+              ? (hostArgs.removeLast() as int).toUnsigned(32)
+              : null;
+          final result = memory == null
+              ? _binding.program.invoke(canonicalIndex, hostArgs)
+              : _binding.program.invokeWithMemoryEvent(
+                  canonicalIndex,
+                  memory,
+                  hostArgs,
+                  realloc: realloc,
+                  resultPointer: resultPointer,
+                );
+          return _canonicalGuestResult(definition, args, result, memory);
         }
 
         _coreFunctions.add(
@@ -1121,6 +1260,275 @@ final class WASIComponentNativeRuntime {
     }
   }
 
+  List<Object?> _canonicalHostArgs(
+    WasmComponentCanonicalDefinition definition,
+    List<Object?> args,
+  ) {
+    switch (definition.kind) {
+      case WasmComponentCanonicalKind.streamNew ||
+          WasmComponentCanonicalKind.futureNew:
+        _handles.requireCapacity(2);
+      case WasmComponentCanonicalKind.waitableSetNew ||
+          WasmComponentCanonicalKind.errorContextNew:
+        _handles.requireCapacity(1);
+      default:
+        break;
+    }
+    final result = List<Object?>.of(args);
+    if (definition.kind == WasmComponentCanonicalKind.waitableJoin) {
+      result[0] = _handles.host(result[0] as int);
+      if (result[1] != 0) {
+        result[1] = _handles.host(
+          result[1] as int,
+          kind: WASIComponentCanonicalHandleKind.waitableSet,
+        );
+      }
+      return result;
+    }
+    final kind = switch (definition.kind) {
+      WasmComponentCanonicalKind.streamRead ||
+      WasmComponentCanonicalKind.streamCancelRead ||
+      WasmComponentCanonicalKind.streamDropReadable =>
+        WASIComponentCanonicalHandleKind.streamReadable,
+      WasmComponentCanonicalKind.streamWrite ||
+      WasmComponentCanonicalKind.streamCancelWrite ||
+      WasmComponentCanonicalKind.streamDropWritable =>
+        WASIComponentCanonicalHandleKind.streamWritable,
+      WasmComponentCanonicalKind.futureRead ||
+      WasmComponentCanonicalKind.futureCancelRead ||
+      WasmComponentCanonicalKind.futureDropReadable =>
+        WASIComponentCanonicalHandleKind.futureReadable,
+      WasmComponentCanonicalKind.futureWrite ||
+      WasmComponentCanonicalKind.futureCancelWrite ||
+      WasmComponentCanonicalKind.futureDropWritable =>
+        WASIComponentCanonicalHandleKind.futureWritable,
+      WasmComponentCanonicalKind.waitableSetDrop ||
+      WasmComponentCanonicalKind.waitableSetWait ||
+      WasmComponentCanonicalKind.waitableSetPoll =>
+        WASIComponentCanonicalHandleKind.waitableSet,
+      WasmComponentCanonicalKind.subtaskDrop ||
+      WasmComponentCanonicalKind.subtaskCancel =>
+        WASIComponentCanonicalHandleKind.subtask,
+      WasmComponentCanonicalKind.errorContextDrop ||
+      WasmComponentCanonicalKind.errorContextDebugMessage =>
+        WASIComponentCanonicalHandleKind.errorContext,
+      _ => null,
+    };
+    if (kind != null) {
+      result[0] = _handles.host((result[0] as int).toUnsigned(32), kind: kind);
+    }
+    return result;
+  }
+
+  Object? _canonicalGuestResult(
+    WasmComponentCanonicalDefinition definition,
+    List<Object?> args,
+    Object? result,
+    native_memory.Memory? memory,
+  ) {
+    final kind = definition.kind;
+    switch (kind) {
+      case WasmComponentCanonicalKind.streamNew:
+      case WasmComponentCanonicalKind.futureNew:
+        final pair = WASIComponentAsyncEndpointHandles.unpack(result as int);
+        final stream = kind == WasmComponentCanonicalKind.streamNew;
+        final read = _handles.add(
+          pair.readable,
+          stream
+              ? WASIComponentCanonicalHandleKind.streamReadable
+              : WASIComponentCanonicalHandleKind.futureReadable,
+        );
+        final write = _handles.add(
+          pair.writable,
+          stream
+              ? WASIComponentCanonicalHandleKind.streamWritable
+              : WASIComponentCanonicalHandleKind.futureWritable,
+        );
+        return WASIComponentAsyncEndpointHandles(
+          readable: read,
+          writable: write,
+        ).packed;
+      case WasmComponentCanonicalKind.waitableSetNew:
+        return _handles.add(
+          result as int,
+          WASIComponentCanonicalHandleKind.waitableSet,
+        );
+      case WasmComponentCanonicalKind.errorContextNew:
+        return _handles.add(
+          result as int,
+          WASIComponentCanonicalHandleKind.errorContext,
+        );
+      case WasmComponentCanonicalKind.waitableSetWait:
+      case WasmComponentCanonicalKind.waitableSetPoll:
+        if (memory != null &&
+            result != 0 &&
+            result != WASIComponentWaitableEventCode.taskCancelled.value) {
+          final data = ByteData.view(memory.buffer);
+          final pointer = args[1] as int;
+          data.setUint32(
+            pointer,
+            _handles.guest(data.getUint32(pointer, Endian.little)),
+            Endian.little,
+          );
+        }
+        return result;
+      case WasmComponentCanonicalKind.streamDropReadable:
+      case WasmComponentCanonicalKind.streamDropWritable:
+      case WasmComponentCanonicalKind.futureDropReadable:
+      case WasmComponentCanonicalKind.futureDropWritable:
+      case WasmComponentCanonicalKind.subtaskDrop:
+      case WasmComponentCanonicalKind.waitableSetDrop:
+      case WasmComponentCanonicalKind.errorContextDrop:
+        return result;
+      default:
+        return result;
+    }
+  }
+
+  List<WASIComponentCanonicalResourceIdentity> _functionResourceIdentities(
+    WasmComponentFunctionType function,
+    List<WasmComponentTypeDefinition> definitions,
+    List<WASIComponentCanonicalResourceIdentity?> identities,
+  ) {
+    final result = <WASIComponentCanonicalResourceIdentity>[];
+    void visit(WasmComponentValueType? value) {
+      final index = value?.typeIndex;
+      if (index == null) return;
+      final type = definitions[index].definedValue;
+      if (type == null) return;
+      switch (type.kind) {
+        case WasmComponentDefinedValueTypeKind.own:
+        case WasmComponentDefinedValueTypeKind.borrow:
+          final identity = identities[type.typeIndex!];
+          if (identity == null) {
+            throw StateError('Missing runtime host resource type.');
+          }
+          result.add(identity);
+        case WasmComponentDefinedValueTypeKind.record:
+          for (final field in type.fields) {
+            visit(field.type);
+          }
+        case WasmComponentDefinedValueTypeKind.variant:
+          for (final item in type.cases) {
+            visit(item.type);
+          }
+        case WasmComponentDefinedValueTypeKind.tuple:
+          for (final item in type.types) {
+            visit(item);
+          }
+        case WasmComponentDefinedValueTypeKind.result:
+          visit(type.okType);
+          visit(type.errorType);
+        case WasmComponentDefinedValueTypeKind.list:
+        case WasmComponentDefinedValueTypeKind.fixedList:
+        case WasmComponentDefinedValueTypeKind.option:
+        case WasmComponentDefinedValueTypeKind.stream:
+        case WasmComponentDefinedValueTypeKind.future:
+          visit(type.elementType);
+        case WasmComponentDefinedValueTypeKind.map:
+          visit(type.keyType);
+          visit(type.valueType);
+        case WasmComponentDefinedValueTypeKind.primitive:
+        case WasmComponentDefinedValueTypeKind.flags:
+        case WasmComponentDefinedValueTypeKind.enumeration:
+          break;
+      }
+    }
+
+    for (final parameter in function.params) {
+      visit(parameter.type);
+    }
+    visit(function.result);
+    return result;
+  }
+
+  WASIComponentCanonicalResourceIdentity _runtimeResourceIdentity(int index) =>
+      _visibleResources[index] ??
+      (throw StateError('Unknown runtime resource type: $index.'));
+
+  WASIComponentCanonicalResourceIdentity _adapterResourceIdentity(
+    int canonicalIndex,
+    int index,
+  ) {
+    final plan = _runtimeAdapterPlans[canonicalIndex]!;
+    if (plan.kind == WasmComponentCanonicalKind.lift) {
+      return _runtimeResourceIdentity(index);
+    }
+    final function = _componentFunctions[plan.definition.functionIndex!];
+    final resources = function.resources?.call();
+    if (resources != null) {
+      if (resources.length != plan.resourceUses.length) {
+        throw StateError('Runtime function resource signature mismatch.');
+      }
+      WASIComponentCanonicalResourceIdentity? result;
+      for (var i = 0; i < plan.resourceUses.length; i++) {
+        if (plan.resourceUses[i].resourceTypeIndex != index) continue;
+        if (result != null && !identical(result, resources[i])) {
+          throw StateError('Conflicting nominal resource signature.');
+        }
+        result = resources[i];
+      }
+      if (result != null) return result;
+    }
+    throw StateError(
+      'Missing concrete runtime resource provenance for canonical adapter $canonicalIndex type $index.',
+    );
+  }
+
+  bool _collectAdapterErrorCarriers(int canonicalIndex) {
+    final plan = _runtimeAdapterPlans[canonicalIndex]!;
+    if (plan.kind != WasmComponentCanonicalKind.lower ||
+        _componentFunctions[plan.definition.functionIndex!].isHost) {
+      return false;
+    }
+    bool contains(WASIComponentCanonicalAdapterFlatValuePlan? layout) =>
+        layout != null &&
+        (layout.kind ==
+                WASIComponentCanonicalAdapterFlatValueKind.errorContext ||
+            layout.fields.any((field) => contains(field.value)) ||
+            layout.cases.any((item) => contains(item.value)) ||
+            contains(layout.element) ||
+            contains(layout.ok) ||
+            contains(layout.error));
+    return plan.params.any((param) => contains(param.flatLayout)) ||
+        contains(plan.result?.flatLayout);
+  }
+
+  WASIComponentCanonicalResourceIdentity _asyncResourceIdentity(
+    WASIComponentAsyncValueBinding binding,
+    int index,
+  ) {
+    if (binding.componentTypeIndex <
+            component.componentTypeIndexDefinitions.length &&
+        index < _visibleResources.length &&
+        _visibleResources[index] != null) {
+      return _runtimeResourceIdentity(index);
+    }
+    bool contains(WASIComponentCanonicalAdapterFlatValuePlan? layout) {
+      if (layout == null) return false;
+      if (layout.asyncTypeIndex == binding.componentTypeIndex) return true;
+      return layout.fields.any((field) => contains(field.value)) ||
+          layout.cases.any((item) => contains(item.value)) ||
+          contains(layout.element) ||
+          contains(layout.ok) ||
+          contains(layout.error);
+    }
+
+    WASIComponentCanonicalResourceIdentity? result;
+    for (final plan in _runtimeAdapterPlans.values) {
+      if (!plan.params.any((value) => contains(value.flatLayout)) &&
+          !contains(plan.result?.flatLayout)) {
+        continue;
+      }
+      final candidate = _adapterResourceIdentity(plan.canonicalIndex, index);
+      if (result != null && !identical(result.type, candidate.type)) {
+        throw StateError('Conflicting runtime async resource signature.');
+      }
+      result = candidate;
+    }
+    return result ?? _runtimeResourceIdentity(index);
+  }
+
   void _requireMayLeave(int canonicalIndex) {
     _adapterProgram.requireMayLeave(canonicalIndex);
     _synchronousAdapterProgram.requireMayLeave(canonicalIndex);
@@ -1128,7 +1536,23 @@ final class WASIComponentNativeRuntime {
 
   Object? _invokeResourceBuiltin(int canonicalIndex, List<Object?> args) {
     _requireMayLeave(canonicalIndex);
-    return _binding.program.invoke(canonicalIndex, args);
+    final definition = component.canonicalDefinitions[canonicalIndex];
+    if (args.length != 1 || args.single is! int) {
+      throw StateError('Resource operation expects one i32.');
+    }
+    final value = args.single as int;
+    final index = definition.typeIndex!;
+    switch (definition.kind) {
+      case WasmComponentCanonicalKind.resourceNew:
+        return _handles.newResource(index, value);
+      case WasmComponentCanonicalKind.resourceRep:
+        return _handles.resourceRep(index, value.toUnsigned(32));
+      case WasmComponentCanonicalKind.resourceDrop:
+        _handles.resourceDrop(index, value.toUnsigned(32));
+        return null;
+      default:
+        throw StateError('Not a resource operation.');
+    }
   }
 
   Future<Object?> _invokeAsyncLift(
@@ -1157,72 +1581,72 @@ final class WASIComponentNativeRuntime {
     final task = canonicalHost.taskHost.createTask(
       name: 'canonical[$canonicalIndex].lift',
     );
-    final thread = canonicalHost.threadHost.currentThread;
-
-    return canonicalHost.threadHost.runWithThreadAsync(thread, () {
-      return canonicalHost.taskHost.runWithTaskAsync(task, () async {
-        final entered = await task.enter(canonicalHost.asyncHost.backpressure);
-        if (!entered) {
-          return null;
-        }
-        final coreArgs = _adapterProgram.prepareAsyncLiftCoreArgs(
-          canonicalIndex,
-          args,
-          memory: _canonicalMemory(definition),
-          realloc: _canonicalRealloc(definition),
-        );
-        var packed = _asyncCallbackResult(
-          await coreFunction.invoke(List<Object?>.unmodifiable(coreArgs)),
-          canonicalIndex,
-        );
-        while ((packed & 0xf) != 0) {
-          final code = packed & 0xf;
-          WASIComponentWaitableEvent event;
-          switch (code) {
-            case 1:
-              final yieldStatus = await canonicalHost.threadHost.threadYield(
-                cancellable: true,
-              );
-              event = yieldStatus == 0
-                  ? WASIComponentWaitableEvent.none
-                  : WASIComponentWaitableEvent.taskCancelled;
-            case 2:
-              event = await canonicalHost.waitableHost.waitableSetWait(
+    return canonicalHost.taskHost.runWithTaskAsync(task, () async {
+      final entered = await task.enter(canonicalHost.asyncHost.backpressure);
+      if (!entered) {
+        return null;
+      }
+      final coreArgs = _adapterProgram.prepareAsyncLiftCoreArgs(
+        canonicalIndex,
+        args,
+        memory: _canonicalMemory(definition),
+        realloc: _canonicalRealloc(definition),
+      );
+      var packed = _asyncCallbackResult(
+        await coreFunction.invoke(List<Object?>.unmodifiable(coreArgs)),
+        canonicalIndex,
+      );
+      while ((packed & 0xf) != 0) {
+        final code = packed & 0xf;
+        WASIComponentWaitableEvent event;
+        switch (code) {
+          case 1:
+            final yieldStatus = await canonicalHost.threadHost.threadYield(
+              cancellable: true,
+            );
+            event = yieldStatus == 0
+                ? WASIComponentWaitableEvent.none
+                : WASIComponentWaitableEvent.taskCancelled;
+          case 2:
+            event = await canonicalHost.waitableHost.waitableSetWait(
+              _handles.host(
                 packed >>> 4,
-                cancellable: true,
-              );
-            default:
-              throw WASIPreview2ComponentExecutionException(
-                'Canonical async lift $canonicalIndex returned unsupported callback code $code.',
-              );
-          }
-          packed = _asyncCallbackResult(
-            await callback.invoke(<Object?>[
-              event.code.value,
-              event.payload1,
-              event.payload2,
-            ]),
-            canonicalIndex,
-          );
+                kind: WASIComponentCanonicalHandleKind.waitableSet,
+              ),
+              cancellable: true,
+            );
+          default:
+            throw WASIPreview2ComponentExecutionException(
+              'Canonical async lift $canonicalIndex returned unsupported callback code $code.',
+            );
         }
-        if (!task.state.isResolved) {
-          throw WASIPreview2ComponentExecutionException(
-            'Canonical async lift $canonicalIndex exited before task.return.',
-          );
-        }
-        if (!task.hasResult) {
-          return _adapterProgram.finishAsyncLiftResult(
-            canonicalIndex,
-            null,
-            memory: _canonicalMemory(definition),
-          );
-        }
+        event = _handles.event(event);
+        packed = _asyncCallbackResult(
+          await callback.invoke(<Object?>[
+            event.code.value,
+            event.payload1,
+            event.payload2,
+          ]),
+          canonicalIndex,
+        );
+      }
+      if (!task.state.isResolved) {
+        throw WASIPreview2ComponentExecutionException(
+          'Canonical async lift $canonicalIndex exited before task.return.',
+        );
+      }
+      if (!task.hasResult) {
         return _adapterProgram.finishAsyncLiftResult(
           canonicalIndex,
-          task.result,
+          null,
           memory: _canonicalMemory(definition),
         );
-      });
+      }
+      return _adapterProgram.finishAsyncLiftResult(
+        canonicalIndex,
+        task.result,
+        memory: _canonicalMemory(definition),
+      );
     });
   }
 
@@ -1243,6 +1667,7 @@ final class WASIComponentNativeRuntime {
     Object? synchronousError;
     StackTrace? synchronousStackTrace;
     var waitingForResult = false;
+    void Function()? releaseOnImmediateFailure;
     final execution = canonicalHost.taskHost.runWithTaskAsync(task, () async {
       try {
         task.markStarted();
@@ -1252,6 +1677,8 @@ final class WASIComponentNativeRuntime {
           memory: _canonicalMemory(definition),
           realloc: _canonicalRealloc(definition),
         );
+        releaseOnImmediateFailure = call.releaseCanonicalBorrows;
+        subtask.retainCanonicalBorrows(call.releaseCanonicalBorrows);
         final pendingResult = call.result;
         final Object? result;
         if (pendingResult is Future) {
@@ -1263,6 +1690,17 @@ final class WASIComponentNativeRuntime {
             ),
           ]);
           if (outcome.cancelled) {
+            // A Future-only host callback cannot acknowledge cancellation while
+            // it is still using borrowed arguments. Keep the task and loans live.
+            if (call.requiresCanonicalCallbackSettlement) {
+              Object? abandoned;
+              var returned = false;
+              try {
+                abandoned = await pendingResult;
+                returned = true;
+              } catch (_) {}
+              if (returned) call.discardCanonicalResult(abandoned);
+            }
             task.deliverCancellation();
             task.cancel();
             return;
@@ -1277,6 +1715,7 @@ final class WASIComponentNativeRuntime {
         if (!waitingForResult) {
           synchronousError = error;
           synchronousStackTrace = stackTrace;
+          releaseOnImmediateFailure?.call();
           return;
         }
         if (!subtask.resolved) {
@@ -1295,10 +1734,13 @@ final class WASIComponentNativeRuntime {
     }
     if (subtask.resolved) {
       unawaited(execution);
-      return subtask.state.code;
+      return subtask.deliverCanonicalResolve();
     }
 
-    final handle = canonicalHost.subtaskHost.insertSubtask(subtask);
+    final handle = _handles.add(
+      canonicalHost.subtaskHost.insertSubtask(subtask),
+      WASIComponentCanonicalHandleKind.subtask,
+    );
     unawaited(execution);
     return subtask.state.code | (handle << 4);
   }
@@ -1550,6 +1992,12 @@ final class WASIComponentNativeRuntime {
               if (export.sort.kind == WasmComponentSortKind.componentType)
                 export.name: _visibleTypes[export.sort.index],
           }),
+          resources: Map.unmodifiable({
+            for (final export in instance.exports)
+              if (export.sort.kind == WasmComponentSortKind.componentType &&
+                  _visibleResources[export.sort.index] != null)
+                export.name: _visibleResources[export.sort.index]!,
+          }),
           resourceTypeNames: Map.unmodifiable({
             for (final export in instance.exports)
               if (export.sort.kind == WasmComponentSortKind.componentType &&
@@ -1597,6 +2045,7 @@ final class WASIComponentNativeRuntime {
           suppliedTypes[argument.name] = _NestedComponentType(
             definition: _visibleTypes[argument.sort.index],
             resourceTypeName: _visibleResourceTypeNames[argument.sort.index],
+            resourceIdentity: _visibleResources[argument.sort.index],
           );
         case WasmComponentSortKind.core:
         case WasmComponentSortKind.value:
@@ -1627,6 +2076,7 @@ final class WASIComponentNativeRuntime {
       functions: Map.unmodifiable(child._exportedFunctions),
       types: Map.unmodifiable(child._exportedTypes),
       resourceTypeNames: Map.unmodifiable(child._exportedResourceTypeNames),
+      resources: Map.unmodifiable(child._exportedResources),
     );
   }
 
@@ -1647,6 +2097,9 @@ final class WASIComponentNativeRuntime {
         if (resourceTypeName != null) {
           _exportedResourceTypeNames[name] = resourceTypeName;
         }
+        final runtimeResource = _visibleResources[export.sort.index];
+        if (runtimeResource != null) _exportedResources[name] = runtimeResource;
+        _visibleResources.add(runtimeResource);
         _visibleTypes.add(_visibleTypes[export.sort.index]);
         _visibleResourceTypeNames.add(
           _visibleResourceTypeNames[export.sort.index],
@@ -1968,8 +2421,12 @@ final class _ComponentFunction {
     required this.name,
     required this.invoke,
     this.invokeSync,
+    this.resources,
+    this.isHost = false,
   });
 
+  final bool isHost;
+  final List<WASIComponentCanonicalResourceIdentity> Function()? resources;
   final String name;
   final FutureOr<Object?> Function(List<Object?> args) invoke;
   final Object? Function(List<Object?> args)? invokeSync;
@@ -1994,11 +2451,13 @@ final class _ComponentInstance {
     required this.functions,
     required this.types,
     required this.resourceTypeNames,
+    this.resources = const {},
   });
 
   final Map<String, _ComponentFunction> functions;
   final Map<String, WasmComponentTypeDefinition> types;
   final Map<String, String> resourceTypeNames;
+  final Map<String, WASIComponentCanonicalResourceIdentity> resources;
 }
 
 final class _NestedComponentArguments {
@@ -2017,10 +2476,12 @@ final class _NestedComponentType {
   const _NestedComponentType({
     required this.definition,
     required this.resourceTypeName,
+    this.resourceIdentity,
   });
 
   final WasmComponentTypeDefinition definition;
   final String? resourceTypeName;
+  final WASIComponentCanonicalResourceIdentity? resourceIdentity;
 }
 
 Object? _coreHostResult(List<Object?> flatResults) {

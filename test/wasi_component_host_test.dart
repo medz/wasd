@@ -1,6 +1,10 @@
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:wasd/src/wasi/preview2/component_host.dart';
+import 'package:wasd/src/wasi/preview2/io.dart';
+import 'package:wasd/src/wasi/preview2/cli.dart';
+import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/canonical_host.dart';
 import 'package:wasd/src/wasi/component/host.dart';
@@ -12,6 +16,191 @@ import 'package:wasd/src/wasm/memory.dart';
 import 'support/component_fixtures.dart' as component_fixtures;
 
 void main() {
+  group('canonical standard host nominal tokens', () {
+    test(
+      'all Preview2 contracts resolve before any H and preserve version aliases',
+      () {
+        final host = WASIPreview2ComponentHost();
+        final table = host.componentHost.table;
+        for (final contract in _preview2ResourceContracts.entries) {
+          for (final resource in contract.value) {
+            final fake = table.defineType<Object>(
+              '${contract.key}@0.2.0.$resource',
+            );
+            final token = host.canonicalResourceType(
+              '${contract.key}@0.2.0',
+              resource,
+            );
+            expect(token, isNotNull, reason: '${contract.key}.$resource');
+            expect(token, isNot(same(fake)));
+            for (var patch = 0; patch <= 12; patch++) {
+              expect(
+                host.canonicalResourceType(
+                  '${contract.key}@0.2.$patch',
+                  resource,
+                ),
+                same(token),
+              );
+            }
+            expect(
+              host.canonicalResourceType('${contract.key}@0.2.13', resource),
+              isNull,
+            );
+            expect(
+              host.canonicalResourceType('${contract.key}@0.2.01', resource),
+              isNull,
+            );
+            expect(
+              host.canonicalResourceType('${contract.key}@0.2.0', 'unknown'),
+              isNull,
+            );
+          }
+        }
+        expect(
+          host.canonicalResourceType(
+            'example:io/streams@0.2.0',
+            'input-stream',
+          ),
+          isNull,
+        );
+        expect(
+          host.canonicalResourceType('wasi:sockets/tcp@0.2.0', 'network'),
+          isNull,
+        );
+        expect(table.activeCount, 0);
+      },
+    );
+
+    test(
+      'real stream token accepts its owner and rejects a same-name fake H',
+      () {
+        final host = WASIPreview2ComponentHost();
+        final table = host.componentHost.table;
+        final fake = table.defineType<WASIPreview2InputStream>(
+          'wasi:io/streams@0.2.0.input-stream',
+        );
+        final fakeHandle = table.insert(
+          fake,
+          WASIPreview2InputStream(closed: true),
+        );
+        final token = host.canonicalResourceType(
+          'wasi:io/streams@0.2.0',
+          'input-stream',
+        )!;
+        expect(() => table.get(token, fakeHandle), throwsStateError);
+        final value = WASIPreview2InputStream(closed: true);
+        final actual = host.streamsHost.insertInputStream(value);
+        expect(table.get(token, actual), same(value));
+        table.drop(fake, fakeHandle);
+        table.drop(token, actual);
+        expect(table.activeCount, 0);
+      },
+    );
+
+    test(
+      'constructor override resolves the actual owner among same-table hosts',
+      () {
+        final shared = WASIComponentHost();
+        final owner = WASIPreview2StreamsHost(table: shared.table);
+        final other = WASIPreview2StreamsHost(table: shared.table);
+        final host = WASIPreview2ComponentHost(
+          componentHost: shared,
+          streamsHost: owner,
+        );
+        final token = host.canonicalResourceType(
+          'wasi:io/streams@0.2.12',
+          'input-stream',
+        )!;
+        expect(token, same(owner.canonicalResourceType('input-stream')));
+        final otherType = other.canonicalResourceType('input-stream')!;
+        expect(token, isNot(same(otherType)));
+        final otherHandle = other.insertInputStream(
+          WASIPreview2InputStream(closed: true),
+        );
+        expect(() => shared.table.get(token, otherHandle), throwsStateError);
+        shared.table.drop(otherType, otherHandle);
+        expect(shared.table.activeCount, 0);
+      },
+    );
+
+    test(
+      'all Preview3 contracts keep their owner token across supported aliases',
+      () {
+        final host = WASIPreview3ComponentHost();
+        final table = host.componentHost.table;
+        for (final contract in _preview3ResourceContracts.entries) {
+          for (final resource in contract.value) {
+            final fake = table.defineType<Object>(
+              '${contract.key}@0.3.0.$resource',
+            );
+            final token = host.canonicalResourceType(
+              '${contract.key}@0.3.0',
+              resource,
+            );
+            expect(token, isNotNull, reason: '${contract.key}.$resource');
+            expect(token, isNot(same(fake)));
+            expect(
+              host.canonicalResourceType('${contract.key}@0.3.1', resource),
+              same(token),
+            );
+            expect(
+              host.canonicalResourceType('${contract.key}@0.3.2', resource),
+              isNull,
+            );
+          }
+        }
+        expect(table.activeCount, 0);
+        host.close(force: true);
+      },
+    );
+
+    test('Preview3 compatibility uses the supplied actual Preview2 owner', () {
+      final shared = WASIComponentHost();
+      final compatibility = WASIPreview2ComponentHost(
+        componentHost: shared,
+        terminalStdin: true,
+      );
+      final host = WASIPreview3ComponentHost(
+        componentHost: shared,
+        preview2CompatibilityHost: compatibility,
+        terminalStdin: true,
+      );
+      for (final contract in _preview2ResourceContracts.entries) {
+        for (final resource in contract.value) {
+          expect(
+            host.canonicalResourceType('${contract.key}@0.2.12', resource),
+            same(
+              compatibility.canonicalResourceType(
+                '${contract.key}@0.2.0',
+                resource,
+              ),
+            ),
+          );
+        }
+      }
+      final handle = compatibility.cliHost.terminalStdinHandle!;
+      final token = host.canonicalResourceType(
+        'wasi:cli/terminal-input@0.2.12',
+        'terminal-input',
+      )!;
+      expect(shared.table.get(token, handle), isA<WASIPreview2TerminalInput>());
+      expect(
+        token,
+        isNot(
+          same(
+            host.canonicalResourceType(
+              'wasi:cli/terminal-input@0.3.0',
+              'terminal-input',
+            ),
+          ),
+        ),
+      );
+      shared.table.drop(token, handle);
+      host.close(force: true);
+      expect(shared.table.activeCount, 0);
+    });
+  });
+
   test('missing adapter callbacks do not allocate local async types', () {
     final host = WASIComponentHost();
     final component = WasmComponent.decode(
@@ -2662,3 +2851,41 @@ Uint8List _streamIndexedNestedAsyncCanonicalBytes() =>
       0x0e,
       0x01,
     ]);
+
+const _preview2ResourceContracts = <String, List<String>>{
+  'wasi:cli/terminal-input': ['terminal-input'],
+  'wasi:cli/terminal-output': ['terminal-output'],
+  'wasi:io/error': ['error'],
+  'wasi:io/poll': ['pollable'],
+  'wasi:io/streams': ['input-stream', 'output-stream'],
+  'wasi:filesystem/types': ['descriptor', 'directory-entry-stream'],
+  'wasi:http/types': [
+    'fields',
+    'incoming-request',
+    'outgoing-request',
+    'request-options',
+    'response-outparam',
+    'incoming-response',
+    'incoming-body',
+    'future-trailers',
+    'outgoing-response',
+    'outgoing-body',
+    'future-incoming-response',
+  ],
+  'wasi:sockets/network': ['network'],
+  'wasi:sockets/ip-name-lookup': ['resolve-address-stream'],
+  'wasi:sockets/tcp': ['tcp-socket'],
+  'wasi:sockets/udp': [
+    'udp-socket',
+    'incoming-datagram-stream',
+    'outgoing-datagram-stream',
+  ],
+};
+
+const _preview3ResourceContracts = <String, List<String>>{
+  'wasi:cli/terminal-input': ['terminal-input'],
+  'wasi:cli/terminal-output': ['terminal-output'],
+  'wasi:filesystem/types': ['descriptor'],
+  'wasi:http/types': ['fields', 'request', 'request-options', 'response'],
+  'wasi:sockets/types': ['tcp-socket', 'udp-socket'],
+};

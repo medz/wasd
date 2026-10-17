@@ -2576,3 +2576,15 @@ const Map<String, int> _filesystemErrorIndexes = <String, int>{
 };
 
 final BigInt _u64Mask = (BigInt.one << 64) - BigInt.one;
+
+/// Internal canonical ABI access to this host's resource identities.
+extension WASIPreview2FilesystemResourceTypes on WASIPreview2FilesystemHost {
+  /// Returns the actual nominal type owned by this host.
+  WASIComponentResourceType<Object>? canonicalResourceType(
+    String resourceName,
+  ) => switch (resourceName) {
+    'descriptor' => _descriptorType,
+    'directory-entry-stream' => _directoryEntryStreamType,
+    _ => null,
+  };
+}

@@ -123,6 +123,25 @@ final class WASIComponentCanonicalAdapterHost {
   WASIComponentCanonicalAdapterProgram bindAdapterPlans(
     Iterable<WASIComponentCanonicalAdapterPlan> plans, {
     WASIComponentAsyncValueBindingSet? asyncValueBindingSet,
+    Map<int, WASIComponentCanonicalAdapterCallback> coreFunctions = const {},
+    Map<int, WASIComponentCanonicalAdapterCallback> componentFunctions =
+        const {},
+  }) => bindCanonicalAdapterPlans(
+    plans,
+    asyncValueBindingSet: asyncValueBindingSet,
+    coreFunctions: coreFunctions,
+    componentFunctions: componentFunctions,
+  );
+}
+
+/// Runtime-only binding of canonical G/H conversions.
+extension WASIComponentCanonicalAdapterBindings
+    on WASIComponentCanonicalAdapterHost {
+  /// Binds the runtime handle boundary without exposing it through the host API.
+  WASIComponentCanonicalAdapterProgram bindCanonicalAdapterPlans(
+    Iterable<WASIComponentCanonicalAdapterPlan> plans, {
+    WASIComponentAsyncValueBindingSet? asyncValueBindingSet,
+    WASIComponentAsyncEndpointBindings? endpointBindings,
     Map<int, WASIComponentCanonicalAdapterCallback> coreFunctions =
         const <int, WASIComponentCanonicalAdapterCallback>{},
     Map<int, WASIComponentCanonicalAdapterCallback> componentFunctions =
@@ -142,7 +161,7 @@ final class WASIComponentCanonicalAdapterHost {
           callback: callbacks.$1,
           postReturnCallback: callbacks.$2,
           callState: callState,
-          asyncHost: asyncValueBindingSet ?? asyncHost,
+          asyncHost: endpointBindings ?? asyncValueBindingSet ?? asyncHost,
           borrowLowering: borrowLowering,
           directValueSupported: _supportsDirectValuePlan(plan),
           memoryValueSupported: _supportsMemoryValuePlan(plan),
@@ -479,14 +498,17 @@ final class WASIComponentCanonicalAsyncLowerCall {
   const WASIComponentCanonicalAsyncLowerCall._({
     required WASIComponentCanonicalAdapterOperation operation,
     required this.result,
+    void Function()? releaseBorrows,
     required int? resultPointer,
     required wasm.Memory? memory,
     required WASIComponentCanonicalRealloc? realloc,
-  }) : _operation = operation,
+  }) : _releaseBorrows = releaseBorrows,
+       _operation = operation,
        _resultPointer = resultPointer,
        _memory = memory,
        _realloc = realloc;
 
+  final void Function()? _releaseBorrows;
   final WASIComponentCanonicalAdapterOperation _operation;
   final int? _resultPointer;
   final wasm.Memory? _memory;
@@ -531,7 +553,7 @@ Map<int, WASIComponentCanonicalAdapterOperation> _indexOperations(
 
 /// Executable direct value canonical adapter operation.
 final class WASIComponentCanonicalAdapterOperation {
-  const WASIComponentCanonicalAdapterOperation._({
+  WASIComponentCanonicalAdapterOperation._({
     required this.plan,
     required WASIComponentCanonicalAdapterCallback callback,
     required WASIComponentCanonicalAdapterCallback? postReturnCallback,
@@ -543,7 +565,9 @@ final class WASIComponentCanonicalAdapterOperation {
   }) : _callback = callback,
        _postReturnCallback = postReturnCallback,
        _callState = callState,
-       _asyncHost = asyncHost,
+       _asyncHost = asyncHost is WASIComponentCanonicalHandleBindings
+           ? asyncHost.forCanonicalAdapter(plan.canonicalIndex)
+           : asyncHost,
        _borrowLowering = borrowLowering,
        _directValueSupported = directValueSupported,
        _memoryValueSupported = memoryValueSupported;
@@ -668,20 +692,22 @@ final class WASIComponentCanonicalAdapterOperation {
     wasm.Memory? memory,
     WASIComponentCanonicalRealloc? realloc,
   }) {
-    _requireLoweredCoreOperation();
-    _requireMayLeaveForLower();
-    _checkSyncInvokeSupported(
-      'lowered core invocation',
-      'invokeLoweredCoreAsync',
-    );
-    final invocation = _loadLoweredCoreArgs(coreArgs, memory);
-    final result = _invokeFlatCallback(invocation.args);
-    return _storeLoweredCoreResult(
-      result,
-      invocation.resultPointer,
-      memory,
-      _guardRealloc(realloc),
-    );
+    return _withHandleCall(() {
+      _requireLoweredCoreOperation();
+      _requireMayLeaveForLower();
+      _checkSyncInvokeSupported(
+        'lowered core invocation',
+        'invokeLoweredCoreAsync',
+      );
+      final invocation = _loadLoweredCoreArgs(coreArgs, memory);
+      final result = _invokeFlatCallback(invocation.args);
+      return _storeLoweredCoreResult(
+        result,
+        invocation.resultPointer,
+        memory,
+        _guardRealloc(realloc),
+      );
+    });
   }
 
   /// Invokes this lowered function using the core signature produced by the
@@ -691,16 +717,18 @@ final class WASIComponentCanonicalAdapterOperation {
     wasm.Memory? memory,
     WASIComponentCanonicalRealloc? realloc,
   }) async {
-    _requireLoweredCoreOperation();
-    _requireMayLeaveForLower();
-    final invocation = _loadLoweredCoreArgs(coreArgs, memory);
-    final result = await _invokeFlatCallbackAsync(invocation.args);
-    return _storeLoweredCoreResult(
-      result,
-      invocation.resultPointer,
-      memory,
-      _guardRealloc(realloc),
-    );
+    return await _withHandleCall(() async {
+      _requireLoweredCoreOperation();
+      _requireMayLeaveForLower();
+      final invocation = _loadLoweredCoreArgs(coreArgs, memory);
+      final result = await _invokeFlatCallbackAsync(invocation.args);
+      return _storeLoweredCoreResult(
+        result,
+        invocation.resultPointer,
+        memory,
+        _guardRealloc(realloc),
+      );
+    });
   }
 
   /// Starts this async lowered function and returns before a future callback
@@ -710,22 +738,26 @@ final class WASIComponentCanonicalAdapterOperation {
     wasm.Memory? memory,
     WASIComponentCanonicalRealloc? realloc,
   }) {
-    _requireLoweredCoreOperation();
-    if (!plan.isAsync) {
-      throw StateError(
-        'WASI component canonical adapter index $canonicalIndex is not async.',
+    void Function()? release;
+    return _withHandleCall(() {
+      _requireLoweredCoreOperation();
+      if (!plan.isAsync) {
+        throw StateError(
+          'WASI component canonical adapter index $canonicalIndex is not async.',
+        );
+      }
+      _requireMayLeaveForLower();
+      final invocation = _loadLoweredCoreArgs(coreArgs, memory);
+      final result = _callback(List<Object?>.unmodifiable(invocation.args));
+      return WASIComponentCanonicalAsyncLowerCall._(
+        operation: this,
+        releaseBorrows: () => release?.call(),
+        result: result,
+        resultPointer: invocation.resultPointer,
+        memory: memory,
+        realloc: _guardRealloc(realloc),
       );
-    }
-    _requireMayLeaveForLower();
-    final invocation = _loadLoweredCoreArgs(coreArgs, memory);
-    final result = _callback(List<Object?>.unmodifiable(invocation.args));
-    return WASIComponentCanonicalAsyncLowerCall._(
-      operation: this,
-      result: result,
-      resultPointer: invocation.resultPointer,
-      memory: memory,
-      realloc: _guardRealloc(realloc),
-    );
+    }, retain: (close) => release = close);
   }
 
   /// Invokes this lifted function through the core signature produced by the
@@ -1110,7 +1142,7 @@ final class WASIComponentCanonicalAdapterOperation {
         stringEncoding: plan.stringEncoding,
       );
       final flatLayout = valuePlan.flatLayout;
-      return flatLayout != null && _flatLayoutContainsAsyncHandle(flatLayout)
+      return flatLayout != null && _flatLayoutContainsHandle(flatLayout)
           ? _liftAsyncHandlesFromMemory(
               flatLayout,
               valuePlan.path,
@@ -1151,7 +1183,7 @@ final class WASIComponentCanonicalAdapterOperation {
     if (codec != null) {
       final flatLayout = valuePlan.flatLayout;
       final hasAsyncHandles =
-          flatLayout != null && _flatLayoutContainsAsyncHandle(flatLayout);
+          flatLayout != null && _flatLayoutContainsHandle(flatLayout);
       if (hasAsyncHandles) {
         _checkAllocatedMemoryRange(
           memory,
@@ -1362,6 +1394,16 @@ final class WASIComponentCanonicalAdapterOperation {
     return value.toUnsigned(32);
   }
 
+  T _withHandleCall<T>(
+    T Function() callback, {
+    void Function(void Function() close)? retain,
+  }) {
+    final host = _asyncHost;
+    return host is WASIComponentCanonicalHandleBindings
+        ? host.withHandleCall(callback, retain: retain)
+        : callback();
+  }
+
   void _requireLoweredCoreOperation() {
     if (kind != WasmComponentCanonicalKind.lower) {
       throw StateError(
@@ -1399,6 +1441,7 @@ final class WASIComponentCanonicalAdapterOperation {
   }
 
   WASIComponentCanonicalBorrowLowering? _openBorrowLowering() {
+    if (_asyncHost is WASIComponentCanonicalHandleBindings) return null;
     if (kind != WasmComponentCanonicalKind.lift ||
         !plan.resourceUses.any(
           (use) => use.handleKind == WASIComponentResourceHandleKind.borrow,
@@ -1890,9 +1933,10 @@ void _validateFlatDirectValue(
         path,
         flatArgs,
         offset,
+        asyncHost,
       ),
       WASIComponentCanonicalAdapterFlatValueKind.errorContext =>
-        _loadFlatErrorContext(path, flatArgs, offset),
+        _loadFlatErrorContext(path, flatArgs, offset, asyncHost),
       WASIComponentCanonicalAdapterFlatValueKind.stream ||
       WASIComponentCanonicalAdapterFlatValueKind.future =>
         _loadFlatAsyncEndpoint(layout, path, flatArgs, offset, asyncHost),
@@ -2185,6 +2229,7 @@ void _validateFlatDirectValue(
   String path,
   List<Object?> flatArgs,
   int offset,
+  WASIComponentAsyncEndpointBindings? asyncHost,
 ) {
   if (offset >= flatArgs.length) {
     throw StateError(
@@ -2192,7 +2237,14 @@ void _validateFlatDirectValue(
     );
   }
   return (
-    value: _expectFlatResourceHandle(path, flatArgs[offset]),
+    value: asyncHost is WASIComponentCanonicalHandleBindings
+        ? asyncHost.liftResourceHandle(
+            layout.resourceTypeIndex!,
+            _expectFlatResourceHandle(path, flatArgs[offset]),
+            owned: layout.handleKind == WASIComponentResourceHandleKind.own,
+            path: path,
+          )
+        : _expectFlatResourceHandle(path, flatArgs[offset]),
     nextOffset: offset + layout.flatLength,
   );
 }
@@ -2201,6 +2253,7 @@ void _validateFlatDirectValue(
   String path,
   List<Object?> flatArgs,
   int offset,
+  WASIComponentAsyncEndpointBindings? asyncHost,
 ) {
   if (offset >= flatArgs.length) {
     throw StateError(
@@ -2208,7 +2261,11 @@ void _validateFlatDirectValue(
     );
   }
   return (
-    value: _expectFlatErrorContextHandle(path, flatArgs[offset]),
+    value: asyncHost is WASIComponentCanonicalHandleBindings
+        ? asyncHost.liftErrorContextHandle(
+            _expectFlatErrorContextHandle(path, flatArgs[offset]),
+          )
+        : _expectFlatErrorContextHandle(path, flatArgs[offset]),
     nextOffset: offset + 1,
   );
 }
@@ -2263,7 +2320,7 @@ void _validateFlatDirectValue(
     path,
   ).loadFlatList(memoryRef, pointer, length, stringEncoding: stringEncoding);
   return (
-    value: _flatLayoutContainsAsyncHandle(layout)
+    value: _flatLayoutContainsHandle(layout)
         ? _liftAsyncHandlesFromMemory(layout, path, value, asyncHost)
         : value,
     nextOffset: offset + 2,
@@ -2333,7 +2390,7 @@ List<Object?> _storeFlatValue(
       'WASI component canonical adapter value ${valuePlan.path} does not support flat values.',
     );
   }
-  if (!_flatLayoutContainsAsyncHandle(layout)) {
+  if (!_flatLayoutContainsHandle(layout)) {
     valuePlan.memoryCodec?.validate(valuePlan.path, value);
   }
   return _storeFlatLayout(
@@ -2413,6 +2470,41 @@ bool _flatLayoutContainsAsyncHandle(
     case WASIComponentCanonicalAdapterFlatValueKind.resource:
     case WASIComponentCanonicalAdapterFlatValueKind.errorContext:
       return false;
+  }
+}
+
+bool _flatLayoutContainsHandle(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+) {
+  switch (layout.kind) {
+    case WASIComponentCanonicalAdapterFlatValueKind.stream:
+    case WASIComponentCanonicalAdapterFlatValueKind.future:
+      return true;
+    case WASIComponentCanonicalAdapterFlatValueKind.record:
+    case WASIComponentCanonicalAdapterFlatValueKind.tuple:
+    case WASIComponentCanonicalAdapterFlatValueKind.fixedList:
+      return layout.fields.any(
+        (field) => _flatLayoutContainsHandle(field.value),
+      );
+    case WASIComponentCanonicalAdapterFlatValueKind.list:
+    case WASIComponentCanonicalAdapterFlatValueKind.map:
+    case WASIComponentCanonicalAdapterFlatValueKind.option:
+      return _flatLayoutContainsHandle(layout.element!);
+    case WASIComponentCanonicalAdapterFlatValueKind.result:
+      return (layout.ok != null && _flatLayoutContainsHandle(layout.ok!)) ||
+          (layout.error != null && _flatLayoutContainsHandle(layout.error!));
+    case WASIComponentCanonicalAdapterFlatValueKind.variant:
+      return layout.cases.any(
+        (case_) =>
+            case_.value != null && _flatLayoutContainsHandle(case_.value!),
+      );
+    case WASIComponentCanonicalAdapterFlatValueKind.primitive:
+    case WASIComponentCanonicalAdapterFlatValueKind.flags:
+    case WASIComponentCanonicalAdapterFlatValueKind.enumeration:
+      return false;
+    case WASIComponentCanonicalAdapterFlatValueKind.resource:
+    case WASIComponentCanonicalAdapterFlatValueKind.errorContext:
+      return true;
   }
 }
 
@@ -2585,9 +2677,28 @@ Object? _liftAsyncHandlesFromMemory(
     case WASIComponentCanonicalAdapterFlatValueKind.primitive:
     case WASIComponentCanonicalAdapterFlatValueKind.flags:
     case WASIComponentCanonicalAdapterFlatValueKind.enumeration:
-    case WASIComponentCanonicalAdapterFlatValueKind.resource:
-    case WASIComponentCanonicalAdapterFlatValueKind.errorContext:
       return value;
+    case WASIComponentCanonicalAdapterFlatValueKind.resource:
+      final raw = _flatResourceHandleToInt(layout, path, value);
+      final lifted = asyncHost is WASIComponentCanonicalHandleBindings
+          ? asyncHost.liftResourceHandle(
+              layout.resourceTypeIndex!,
+              raw,
+              owned: layout.handleKind == WASIComponentResourceHandleKind.own,
+              path: path,
+            )
+          : raw;
+      return value is WasmComponentValueData
+          ? _resourceHandleDataFromFlatValue(path, lifted)
+          : lifted;
+    case WASIComponentCanonicalAdapterFlatValueKind.errorContext:
+      final raw = _flatErrorContextHandleToInt(path, value);
+      final lifted = asyncHost is WASIComponentCanonicalHandleBindings
+          ? asyncHost.liftErrorContextHandle(raw)
+          : raw;
+      return value is WasmComponentValueData
+          ? _errorContextHandleDataFromFlatValue(path, lifted)
+          : lifted;
   }
 }
 
@@ -2699,11 +2810,19 @@ Object? _lowerAsyncHandlesForMemory(
     case WASIComponentCanonicalAdapterFlatValueKind.primitive:
     case WASIComponentCanonicalAdapterFlatValueKind.flags:
     case WASIComponentCanonicalAdapterFlatValueKind.enumeration:
-    case WASIComponentCanonicalAdapterFlatValueKind.resource:
-    case WASIComponentCanonicalAdapterFlatValueKind.errorContext:
       return value is WasmComponentValueData
           ? value
           : _componentValueDataFromFlatValue(layout, path, value);
+    case WASIComponentCanonicalAdapterFlatValueKind.resource:
+      return _resourceHandleDataFromFlatValue(
+        path,
+        _storeResourceHandle(layout, path, value, asyncHost),
+      );
+    case WASIComponentCanonicalAdapterFlatValueKind.errorContext:
+      return _errorContextHandleDataFromFlatValue(
+        path,
+        _storeErrorContextHandle(path, value, asyncHost),
+      );
   }
 }
 
@@ -2971,7 +3090,7 @@ void _storeFlatHandleMemoryLayout(
   if (layout.kind == WASIComponentCanonicalAdapterFlatValueKind.resource) {
     data.setUint32(
       pointer,
-      _flatResourceHandleToInt(layout, path, value),
+      _storeResourceHandle(layout, path, value, asyncHost),
       Endian.little,
     );
     return;
@@ -2979,7 +3098,7 @@ void _storeFlatHandleMemoryLayout(
   if (layout.kind == WASIComponentCanonicalAdapterFlatValueKind.errorContext) {
     data.setUint32(
       pointer,
-      _flatErrorContextHandleToInt(path, value),
+      _storeErrorContextHandle(path, value, asyncHost),
       Endian.little,
     );
     return;
@@ -3084,10 +3203,10 @@ List<Object?> _storeFlatLayout(
         asyncHost,
       ),
       WASIComponentCanonicalAdapterFlatValueKind.resource => <Object?>[
-        _flatResourceHandleToInt(layout, path, value),
+        _storeResourceHandle(layout, path, value, asyncHost),
       ],
       WASIComponentCanonicalAdapterFlatValueKind.errorContext => <Object?>[
-        _flatErrorContextHandleToInt(path, value),
+        _storeErrorContextHandle(path, value, asyncHost),
       ],
       WASIComponentCanonicalAdapterFlatValueKind.stream ||
       WASIComponentCanonicalAdapterFlatValueKind.future => <Object?>[
@@ -3757,7 +3876,7 @@ List<Object?> _storeFlatList(
   WASIComponentAsyncEndpointBindings? asyncHost,
 ) {
   final memoryRef = _requireMemory(memory, path);
-  final memoryValue = _flatLayoutContainsAsyncHandle(layout)
+  final memoryValue = _flatLayoutContainsHandle(layout)
       ? _lowerAsyncHandlesForMemory(layout, path, value, asyncHost)
       : value;
   final flat = _requireListMemoryCodec(layout, path).storeFlatList(
@@ -4163,4 +4282,84 @@ void _checkDirectValue(
       'value ${value.path} does not have a supported direct value codec.',
     );
   }
+}
+
+int _storeResourceHandle(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  Object? value,
+  WASIComponentAsyncEndpointBindings? host,
+) {
+  final handle = _flatResourceHandleToInt(layout, path, value);
+  return host is WASIComponentCanonicalHandleBindings
+      ? host.lowerResourceHandle(
+          layout.resourceTypeIndex!,
+          handle,
+          owned: layout.handleKind == WASIComponentResourceHandleKind.own,
+          path: path,
+        )
+      : handle;
+}
+
+int _storeErrorContextHandle(
+  String path,
+  Object? value,
+  WASIComponentAsyncEndpointBindings? host,
+) {
+  final handle = _flatErrorContextHandleToInt(path, value);
+  return host is WASIComponentCanonicalHandleBindings
+      ? host.lowerErrorContextHandle(handle)
+      : handle;
+}
+
+/// Converts one decoded value through the runtime's typed handle boundary.
+Object? liftWASIComponentCanonicalMemoryHandles(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  Object? value,
+  WASIComponentAsyncEndpointBindings bindings,
+) => _liftAsyncHandlesFromMemory(layout, 'async payload', value, bindings);
+
+/// Converts one host value through the runtime's typed handle boundary.
+Object? lowerWASIComponentCanonicalMemoryHandles(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  Object? value,
+  WASIComponentAsyncEndpointBindings bindings,
+) => _lowerAsyncHandlesForMemory(layout, 'async payload', value, bindings);
+
+/// Deferred caller loans are released when the subtask state is delivered.
+extension WASIComponentCanonicalAsyncLowerLifetime
+    on WASIComponentCanonicalAsyncLowerCall {
+  /// Releases the retained call scope exactly once.
+  void releaseCanonicalBorrows() => _releaseBorrows?.call();
+
+  /// Whether cancellation must wait for the callback to stop using loans.
+  bool get requiresCanonicalCallbackSettlement =>
+      _operation.plan.params.any(
+        (param) => param.resourceUses.any(
+          (use) => use.handleKind == WASIComponentResourceHandleKind.borrow,
+        ),
+      ) ||
+      (_operation.plan.result?.flatLayout != null &&
+          _flatLayoutContainsHandle(_operation.plan.result!.flatLayout!));
+
+  /// Releases ownership returned after cancellation won the call.
+  void discardCanonicalResult(Object? value) {
+    final layout = _operation.plan.result?.flatLayout;
+    final bindings = _operation._asyncHost;
+    if (layout != null && bindings is WASIComponentCanonicalValueDiscard) {
+      (bindings as WASIComponentCanonicalValueDiscard).discardCanonicalValue(
+        layout,
+        value,
+      );
+    }
+  }
+}
+
+/// Internal ownership cleanup when an async callback result is abandoned.
+abstract interface class WASIComponentCanonicalValueDiscard {
+  /// Releases every owned leaf, preserving the first cleanup failure.
+  void discardCanonicalValue(
+    WASIComponentCanonicalAdapterFlatValuePlan layout,
+    Object? value,
+  );
 }

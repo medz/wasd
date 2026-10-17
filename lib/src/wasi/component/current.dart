@@ -41,6 +41,10 @@ final class WASIComponentCurrent<T extends Object> {
     }
   }
 
+  /// Binds a value for synchronous work and any continuations it creates.
+  R runWithLifetime<R>(T value, R Function() callback) =>
+      runZoned<R>(callback, zoneValues: <Object?, Object?>{_zoneKey: value});
+
   /// Runs [callback] with [value] as the current value until it completes.
   Future<R> runAsync<R>(T value, Future<R> Function() callback) async {
     return await runZoned<Future<R>>(

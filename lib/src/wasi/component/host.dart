@@ -106,6 +106,11 @@ final class WASIComponentHostBindingPlan {
   final WASIComponentHost _host;
   bool _isBound = false;
   WASIComponentAsyncValueBindingSet? _instanceAsyncBindings;
+  WASIComponentAsyncEndpointBindings? _runtimeEndpointBindings;
+  WASIComponentAsyncEndpointBindings Function(
+    WASIComponentAsyncEndpointBindings,
+  )?
+  _runtimeBindings;
 
   /// Prepared canonical binding plan for the same component.
   final WASIComponentCanonicalBindingPlan canonicalPlan;
@@ -152,9 +157,10 @@ final class WASIComponentHostBindingPlan {
     if (validationErrors.isNotEmpty) {
       throw WASIComponentCanonicalHostValidationException(validationErrors);
     }
-    return _host.canonicalHost.adapterHost.bindAdapterPlans(
+    return _host.canonicalHost.adapterHost.bindCanonicalAdapterPlans(
       adapterPlans,
       asyncValueBindingSet: _instanceAsyncBindings,
+      endpointBindings: _runtimeEndpointBindings,
       coreFunctions: coreFunctions,
       componentFunctions: componentFunctions,
     );
@@ -210,12 +216,17 @@ final class WASIComponentHostBindingPlan {
             onDrop: onAsyncValueDrop,
           )
         : null;
-    final adapterProgram = _host.canonicalHost.adapterHost.bindAdapterPlans(
-      adapterPlans,
-      asyncValueBindingSet: asyncValueBindingSet,
-      coreFunctions: coreFunctions,
-      componentFunctions: componentFunctions,
+    final endpointBindings = _runtimeBindings?.call(
+      asyncValueBindingSet ?? asyncHost,
     );
+    final adapterProgram = _host.canonicalHost.adapterHost
+        .bindCanonicalAdapterPlans(
+          adapterPlans,
+          asyncValueBindingSet: asyncValueBindingSet,
+          endpointBindings: endpointBindings,
+          coreFunctions: coreFunctions,
+          componentFunctions: componentFunctions,
+        );
     if (!instanceLocalAsyncValues) {
       asyncHost.checkAsyncValueBindingsAvailable(asyncValueBindings);
     }
@@ -239,9 +250,11 @@ final class WASIComponentHostBindingPlan {
       asyncValueBindingSet: asyncValueBindingSet,
     );
     _instanceAsyncBindings = asyncValueBindingSet;
+    _runtimeEndpointBindings = endpointBindings;
     return WASIComponentHostBinding._(
       host: _host,
       resourceTypes: resourceBindingSet.resourceTypes,
+      resourceBindingSet: resourceBindingSet,
       asyncValueBindings: asyncValueBindings,
       program: program,
     );
@@ -302,9 +315,10 @@ final class WASIComponentHostBinding {
   const WASIComponentHostBinding._({
     required this.host,
     required this.resourceTypes,
+    required WASIComponentResourceBindingSet<Object> resourceBindingSet,
     required this.asyncValueBindings,
     required this.program,
-  });
+  }) : _resourceBindingSet = resourceBindingSet;
 
   /// Component host that owns this binding.
   final WASIComponentHost host;
@@ -312,11 +326,35 @@ final class WASIComponentHostBinding {
   /// Resource types defined for this component binding.
   final List<WASIComponentResourceType<Object>> resourceTypes;
 
+  final WASIComponentResourceBindingSet<Object> _resourceBindingSet;
+
   /// Async value bindings defined for this component binding.
   final List<WASIComponentAsyncValueBinding> asyncValueBindings;
 
   /// Canonical-indexed builtin program for this component.
   final WASIComponentCanonicalProgram program;
+}
+
+/// Installs an internal boundary before the plan creates its adapter operations.
+extension WASIComponentCanonicalHostPlanBindings
+    on WASIComponentHostBindingPlan {
+  /// Uses the existing local registry as the host backing of this instance.
+  void bindCanonicalHandles(
+    WASIComponentAsyncEndpointBindings Function(
+      WASIComponentAsyncEndpointBindings,
+    )
+    create,
+  ) {
+    if (_isBound) throw StateError('Component binding plan is already bound.');
+    _runtimeBindings = create;
+  }
+}
+
+/// Internal lookup of a concrete definition's runtime nominal token.
+extension WASIComponentCanonicalHostBindingAccess on WASIComponentHostBinding {
+  /// Resolves a local definition without exposing its mutable binding registry.
+  WASIComponentResourceType<Object> canonicalResourceTypeAt(int index) =>
+      _resourceBindingSet.canonicalResourceTypeAt(index);
 }
 
 List<WASIComponentHostBindingError> _componentHostBindingErrors(
