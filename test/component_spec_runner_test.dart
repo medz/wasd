@@ -517,6 +517,90 @@ void main() {
     expect(commands[2]['error'], contains('No initialized component'));
   });
 
+  test('void assertions invoke exactly once and retain state', () async {
+    final report = await runner.executeComponentSpecScript({
+      'commands': [
+        {'type': 'module', 'filename': 'stateful_void.wasm'},
+        _bump(3, []),
+        _count(3),
+        _bump(4, []),
+        _count(7),
+      ],
+    }, directory: Directory('test/fixtures/component_spec/regression'));
+    expect(report['status'], 'passed');
+    expect((report['totals'] as Map)['returns_passed'], 4);
+    final records = report['commands'] as List;
+    expect(records[1]['actual'], null);
+    expect(records[3]['actual'], null);
+  });
+
+  for (final expected in <Object?>[
+    null,
+    <String, Object>{},
+    [
+      {'type': 'u32', 'value': '0'},
+    ],
+    [
+      {'type': 'u32', 'value': '0'},
+      {'type': 'u32', 'value': '0'},
+    ],
+  ]) {
+    test(
+      'incompatible void expectation $expected cannot mutate state',
+      () async {
+        final report = await runner.executeComponentSpecScript({
+          'commands': [
+            {'type': 'module', 'filename': 'stateful_void.wasm'},
+            _bump(3, expected),
+            _count(0),
+          ],
+        }, directory: Directory('test/fixtures/component_spec/regression'));
+        final records = report['commands'] as List;
+        expect(report['status'], 'failed');
+        expect(records[0]['passed'], true);
+        expect(records[1]['passed'], false);
+        expect(records[2]['passed'], true);
+      },
+    );
+  }
+
+  test('empty expectation rejects a value result before invoking it', () async {
+    final report = await runner.executeComponentSpecScript({
+      'commands': [
+        {'type': 'module', 'filename': 'stateful_string.wasm'},
+        {
+          'type': 'assert_return',
+          'action': {'type': 'invoke', 'field': 'next', 'args': <Object>[]},
+          'expected': <Object>[],
+        },
+        _next('a'),
+      ],
+    }, directory: Directory('test/fixtures/component_spec/regression'));
+    final records = report['commands'] as List;
+    expect(report['status'], 'failed');
+    expect(records[1]['passed'], false);
+    expect(records[2]['passed'], true);
+  });
+
+  for (final filename in ['stateful_string.wasm', 'unlinked.wasm']) {
+    test('anonymous definition $filename validates without instantiating '
+        'or replacing the current instance', () async {
+      final report = await runner.executeComponentSpecScript({
+        'commands': [
+          {'type': 'module', 'filename': 'stateful_string.wasm'},
+          _next('a'),
+          {'type': 'module_definition', 'filename': filename},
+          _next('b'),
+        ],
+      }, directory: Directory('test/fixtures/component_spec/regression'));
+      expect(report['status'], 'passed');
+      final totals = report['totals'] as Map;
+      expect(totals['commands_passed'], 4);
+      expect(totals['instantiations_passed'], 1);
+      expect(totals['definitions_passed'], 1);
+    });
+  }
+
   for (final (field, args, message) in [
     ('absent', <Object>[], 'not found'),
     (
@@ -1223,6 +1307,34 @@ esac
     );
   }
 }
+
+Map<String, Object?> _bump(int amount, Object? expected) => {
+  'type': 'assert_return',
+  'action': {
+    'type': 'invoke',
+    'field': 'bump',
+    'args': [
+      {'type': 'u32', 'value': '$amount'},
+    ],
+  },
+  'expected': expected,
+};
+
+Map<String, Object?> _count(int value) => {
+  'type': 'assert_return',
+  'action': {'type': 'invoke', 'field': 'count', 'args': <Object>[]},
+  'expected': [
+    {'type': 'u32', 'value': '$value'},
+  ],
+};
+
+Map<String, Object?> _next(String value) => {
+  'type': 'assert_return',
+  'action': {'type': 'invoke', 'field': 'next', 'args': <Object>[]},
+  'expected': [
+    {'type': 'string', 'value': value},
+  ],
+};
 
 Future<Directory> _copyFixtures({
   bool stringsOnly = true,

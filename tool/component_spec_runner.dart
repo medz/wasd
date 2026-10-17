@@ -309,9 +309,10 @@ Future<Map<String, Object?>> executeComponentSpecScript(
             }
             final name = raw['name'];
             if (type == 'module_definition' &&
+                raw.containsKey('name') &&
                 (name is! String || name.isEmpty)) {
               throw const FormatException(
-                'Component definition requires a name.',
+                'Component definition name must be a non-empty string.',
               );
             }
             final file = _inputFile(directory, raw['filename']);
@@ -325,8 +326,10 @@ Future<Map<String, Object?>> executeComponentSpecScript(
                   'Component definition validation failed: ${errors.join(', ')}',
                 );
               }
-              definitions[name as String] = component;
-              record['definition'] = name;
+              if (name is String) {
+                definitions[name] = component;
+                record['definition'] = name;
+              }
             } else {
               final runtime = WASIComponentNativeRuntime.component(
                 component: component,
@@ -404,17 +407,20 @@ Future<Map<String, Object?>> executeComponentSpecScript(
               final expected = raw['expected'];
               final resultType = context.functionType.result;
               if (expected is! List ||
-                  expected.length != 1 ||
-                  resultType == null) {
+                  expected.length != (resultType == null ? 0 : 1)) {
                 throw UnsupportedError(
-                  'Expected exactly one Component result.',
+                  'Component result shape differs from expected values.',
                 );
               }
-              final value = _decodeValue(expected.single, resultType, context);
+              final value = resultType == null
+                  ? null
+                  : _decodeValue(expected.single, resultType, context);
               final actual = await runtime.invokeExport(name, args);
               record['expected'] = _reportValue(value);
               record['actual'] = _reportValue(actual);
-              if (!_sameValue(value, actual)) {
+              if (resultType == null
+                  ? actual != null
+                  : !_sameValue(value!, actual)) {
                 throw StateError(
                   'Component result differs from the expected value.',
                 );
