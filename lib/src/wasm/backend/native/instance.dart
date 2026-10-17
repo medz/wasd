@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../../errors.dart';
+import '../../host_control_flow.dart';
 import '../../instance.dart' as wasm;
 import '../../module.dart' as wasm;
 import 'interpreter/imports.dart' as ir_imports;
@@ -14,6 +15,24 @@ import 'global.dart' as native_global;
 import 'memory.dart' as native_memory;
 import 'module.dart' as native_module;
 import 'tag.dart' as native_tag;
+
+final class _UnexpectedAsyncHostResult extends UnsupportedError
+    implements WasmHostControlFlowException {
+  _UnexpectedAsyncHostResult(String key)
+    : super(
+        'Host import `$key` returned a Future without declaring a Future '
+        'return type. Adapt it with (_) async => await callback(...).',
+      );
+}
+
+final class _HostCallbackFailure implements WasmHostControlFlowException {
+  _HostCallbackFailure(this.error, this.stack);
+
+  final Object error;
+  final StackTrace stack;
+
+  Never rethrowOriginal() => Error.throwWithStackTrace(error, stack);
+}
 
 class Instance implements wasm.Instance {
   Instance(
@@ -31,6 +50,10 @@ class Instance implements wasm.Instance {
         profile: profile,
         predecodedFunctions: nativeModule.predecodedFunctions,
       );
+    } on _HostCallbackFailure catch (failure) {
+      failure.rethrowOriginal();
+    } on WasmHostControlFlowException {
+      rethrow;
     } on ir_vm.WasmGuestException catch (error, stackTrace) {
       Error.throwWithStackTrace(
         native_exception.Exception.fromRuntime(error),
@@ -107,29 +130,38 @@ class Instance implements wasm.Instance {
         final importValue = importEntry.value;
         switch (importValue) {
           case wasm.FunctionImportExportValue(:final ref):
-            final isAsyncTyped = ref.runtimeType.toString().contains('Future');
+            final isAsyncTyped =
+                ref is Future<Object?> Function(List<Object?>) &&
+                ref is! Never Function(List<Object?>);
             if (!isAsyncTyped) {
-              functions[key] = (List<Object?> args) {
+              Object? callback(List<Object?> args) {
                 try {
                   final result = ref(args);
                   if (result is Future) {
-                    throw UnsupportedError(
-                      'Async-only host import `$key` is not available in '
-                      'the synchronous VM pipeline. Use invokeAsync on direct '
-                      'exported host functions.',
-                    );
+                    result.ignore();
+                    throw _UnexpectedAsyncHostResult(key);
                   }
                   return result;
                 } on native_exception.Exception catch (error, stackTrace) {
                   Error.throwWithStackTrace(error.host, stackTrace);
+                } catch (error, stack) {
+                  if (error is WasmHostControlFlowException) rethrow;
+                  throw _HostCallbackFailure(error, stack);
                 }
-              };
+              }
+
+              functions[key] = callback;
+              asyncFunctions[key] = (args) async => callback(args);
+              continue;
             }
             asyncFunctions[key] = (List<Object?> args) async {
               try {
                 return await Future<Object?>.sync(() => ref(args));
               } on native_exception.Exception catch (error, stackTrace) {
                 Error.throwWithStackTrace(error.host, stackTrace);
+              } catch (error, stack) {
+                if (error is WasmHostControlFlowException) rethrow;
+                throw _HostCallbackFailure(error, stack);
               }
             };
           case wasm.MemoryImportExportValue(:final ref):
@@ -181,6 +213,8 @@ class Instance implements wasm.Instance {
   Future<Object?> _invokeAsync(String name, List<Object?> args) async {
     try {
       return await _runtime.invokeAsync(name, args);
+    } on _HostCallbackFailure catch (failure) {
+      failure.rethrowOriginal();
     } on ir_vm.WasmGuestException catch (error, stackTrace) {
       Error.throwWithStackTrace(
         native_exception.Exception.fromRuntime(error),
@@ -204,17 +238,13 @@ class Instance implements wasm.Instance {
           result[name] = wasm.ImportExportKind.function((List<Object?> args) {
             try {
               return _runtime.invoke(name, args);
+            } on _HostCallbackFailure catch (failure) {
+              failure.rethrowOriginal();
             } on ir_vm.WasmGuestException catch (error, stackTrace) {
               Error.throwWithStackTrace(
                 native_exception.Exception.fromRuntime(error),
                 stackTrace,
               );
-            } catch (error) {
-              final message = '$error';
-              if (message.contains('Async-only host import')) {
-                return _invokeAsync(name, args);
-              }
-              rethrow;
             }
           });
         case wasm.ImportExportKind.memory:

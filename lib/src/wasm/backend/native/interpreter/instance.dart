@@ -919,33 +919,7 @@ final class WasmInstance {
       );
       return _externalizeResults(results);
     }
-    try {
-      return invoke(exportName, args);
-    } on UnsupportedError catch (error) {
-      final message = error.message?.toString() ?? '';
-      if (message.contains('Async-only host import')) {
-        if (function is DefinedRuntimeFunction) {
-          try {
-            final results = await _invokeFunctionAsyncSubset(
-              prepared.functionIndex,
-              prepared.typedArgs,
-              depth: 0,
-            );
-            return _externalizeResults(results);
-          } on UnsupportedError {
-            throw UnsupportedError(
-              'invokeAsync for wasm-defined functions that call async-only '
-              'host imports is not implemented yet.',
-            );
-          }
-        }
-        throw UnsupportedError(
-          'invokeAsync for wasm-defined functions that call async-only host '
-          'imports is not implemented yet.',
-        );
-      }
-      rethrow;
-    }
+    return invoke(exportName, args);
   }
 
   /// Invokes [exportName] through the async interpreter even when static call

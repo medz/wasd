@@ -49,10 +49,12 @@ class Exception implements wasm.Exception {
 
 /// Throws the original JS exception without Dart's exception wrapper.
 Never throwToHost(Exception error) {
-  _throwValue(error.host);
+  throwValueToHost(error.host);
 }
 
-Never _throwValue(JSAny value) {
+bool get supportsHostThrow => _jsTag != null;
+
+Never throwValueToHost(JSAny value) {
   _throwJsValue.callAsFunction(null, value);
   throw StateError('The WebAssembly exception thrower returned.');
 }

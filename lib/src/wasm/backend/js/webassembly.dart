@@ -54,6 +54,10 @@ Future<wasm.WebAssembly> instantiate(
   ByteBuffer bytes, [
   wasm.Imports imports = const {},
 ]) async {
+  if (js_instance.hasAsyncBindings(imports)) {
+    final module = await compile(bytes);
+    return WebAssembly(module, await instantiateModule(module, imports));
+  }
   try {
     branch_hints.validateBranchHintCustomSections(bytes);
     final metadata = js_module.snapshotTagMetadata(bytes);
@@ -75,6 +79,10 @@ Future<wasm.WebAssembly> instantiateStreaming(
   Stream<List<int>> source, [
   wasm.Imports imports = const {},
 ]) async {
+  if (js_instance.hasAsyncBindings(imports)) {
+    final module = await compileStreaming(source);
+    return WebAssembly(module, await instantiateModule(module, imports));
+  }
   try {
     final metadata = TagMetadataCollector();
     final result = await _jsInstantiateStreaming(
@@ -96,13 +104,18 @@ Future<wasm.Instance> instantiateModule(
   wasm.Imports imports = const {},
 ]) async {
   try {
+    final asynchronous = js_instance.hasAsyncHostImports(module, imports);
     final jsInstance = await _jsInstantiateModule(
       (module as js_module.Module).host,
-      js_instance.createImportObject(imports),
+      js_instance.createImportObject(imports, asynchronous: asynchronous),
     ).toDart;
-    return js_instance.Instance.fromHost(module, jsInstance);
+    return js_instance.Instance.fromHost(
+      module,
+      jsInstance,
+      asynchronous: asynchronous,
+    );
   } catch (e, st) {
-    js_errors.translateJsError(e, st);
+    js_instance.translateAsyncError(e, st);
   }
 }
 
