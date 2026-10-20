@@ -165,6 +165,132 @@
           "sha256": "3ecdacc33e0f3688a8bedbcec88b52e95fd2820163f106f023334a5dff56e02c"
         }
       ]
+    },
+    {
+      "path": "test/async/cancel-and-exclusive-lock.wast",
+      "source": "cancel_and_exclusive_lock/cancel-and-exclusive-lock.wast",
+      "blob": "25063f11b8d4c47cc1cc61485bf9d82e57ef1312",
+      "sha256": "a6bef2fe693216c65239ba9bfde3eb2636280282cefef58808a8c58d98be9f27",
+      "prepared": "cancel_and_exclusive_lock/script.json",
+      "commands": 2,
+      "instantiations": 1,
+      "definitions": 0,
+      "returns": 1,
+      "traps": 0,
+      "inputs": [
+        {
+          "path": "cancel_and_exclusive_lock/script.0.wasm",
+          "sha256": "c6770a37bde0bcd16f8c7124bdb8631d54b3596355d0a1bf44d2dcb2e493b23c"
+        },
+        {
+          "path": "cancel_and_exclusive_lock/script.json",
+          "sha256": "0d19db9a168ed3e977e7888dd10a3ec356f8f53142c302b93af4350f66443c21"
+        }
+      ]
+    },
+    {
+      "path": "test/async/closed-stream.wast",
+      "source": "closed_stream/closed-stream.wast",
+      "blob": "071a05b96613c23d161a2be6804c9792cdf1cbd7",
+      "sha256": "5fddd95e1f7920f6a453e4f72bd4abc9d8a1615f8937f33ae06e0df31ca4d2a0",
+      "prepared": "closed_stream/script.json",
+      "commands": 3,
+      "instantiations": 1,
+      "definitions": 1,
+      "returns": 0,
+      "traps": 0,
+      "inputs": [
+        {
+          "path": "closed_stream/script.0.wasm",
+          "sha256": "314b45d537d4740e58f7519dc361ed7f70e25b601cdb4667bea357ee8622404c"
+        },
+        {
+          "path": "closed_stream/script.json",
+          "sha256": "d4475e023aa577e0c03fcd2299e537cc44b75f3659dd03a0472a0d62d1ae82ea"
+        }
+      ]
+    },
+    {
+      "path": "test/async/cross-task-future.wast",
+      "source": "cross_task_future/cross-task-future.wast",
+      "blob": "97849635de950d11443d1034a29b8983e2dd2bc5",
+      "sha256": "d962876ba33012ce0ff068a0d056b2d8b27f5a86749fc410ca1051bd26a50a14",
+      "prepared": "cross_task_future/script.json",
+      "commands": 2,
+      "instantiations": 1,
+      "definitions": 0,
+      "returns": 1,
+      "traps": 0,
+      "inputs": [
+        {
+          "path": "cross_task_future/script.0.wasm",
+          "sha256": "8131bbf2b3f60f0cd14b6bf02761bec6bb978640a148551d8844cf03b0cb4528"
+        },
+        {
+          "path": "cross_task_future/script.json",
+          "sha256": "11d42a49ef8901d68a517b6a71e18145609d42a141e3a7530fa5e7f0d2483bdb"
+        }
+      ]
+    },
+    {
+      "path": "test/resources/multiple-resources.wast",
+      "source": "multiple_resources/multiple-resources.wast",
+      "blob": "4a7bff17114135adbceca7104fb25c3bd6378a91",
+      "sha256": "e9e326df8a048b6843210e9eebe1cf2499a9d481a810ef04cc7a84b83b4f48b5",
+      "prepared": "multiple_resources/script.json",
+      "commands": 2,
+      "instantiations": 1,
+      "definitions": 0,
+      "returns": 1,
+      "traps": 0,
+      "inputs": [
+        {
+          "path": "multiple_resources/script.0.wasm",
+          "sha256": "3bc63e78ae89e427921b7d0668dd9edbadee7b4c264df77408f14f9e7f9a3cc9"
+        },
+        {
+          "path": "multiple_resources/script.json",
+          "sha256": "57eed6546672557065c5cd5738ae499c813feb7a1a6e04590359b073355c2bf8"
+        }
+      ]
+    },
+    {
+      "path": "test/values/transcode.wast",
+      "source": "transcode/transcode.wast",
+      "blob": "0ec72e09f7805a81dbc977d079ae8185f30251de",
+      "sha256": "4cb545c7816ceb106f5962a1dcf9ed4ad50112b9aff2fdbd785d6c7e53b1a4cb",
+      "prepared": "transcode/script.json",
+      "commands": 10,
+      "instantiations": 5,
+      "definitions": 0,
+      "returns": 5,
+      "traps": 0,
+      "inputs": [
+        {
+          "path": "transcode/script.0.wasm",
+          "sha256": "d64a81d26e6449069cd7aeb8df8448900d4dfbdd7370f81a5355343d57ef98ae"
+        },
+        {
+          "path": "transcode/script.1.wasm",
+          "sha256": "749ea2738b43b01f456703ff15687b10aca3766023f0fc9b77a0f96ec04afd30"
+        },
+        {
+          "path": "transcode/script.2.wasm",
+          "sha256": "b632349671aaf019258ffd646dd230ff009b45242a86b725092a19bf7a90e3c4"
+        },
+        {
+          "path": "transcode/script.3.wasm",
+          "sha256": "d4831957e6661105559a151c8b88a8145b4af1f41cd4492a58924cfa21818b93"
+        },
+        {
+          "path": "transcode/script.4.wasm",
+          "sha256": "d9e443c14216a11238ff6762c6836174913d3fecbf33ed22b9b4a0f5e6d5d6be"
+        },
+        {
+          "path": "transcode/script.json",
+          "sha256": "5c31f0125a81d406d35922172bc10621db0fad0d7f4b1493b04d37d7e42fa73e"
+        }
+      ]
     }
   ]
 }

@@ -73,6 +73,59 @@ List<(int, String)> _mapAdapterEntries(WasmComponentValueData value) => [
 
 void main() {
   group('WASI component canonical adapter plans', () {
+    for (final future in [false, true]) {
+      test(
+        'plans exported async aliases with their component scope future=$future',
+        () {
+          final bytes = exportedAsyncAliasComponentBytes(future: future);
+          final component = WasmComponent.decode(bytes);
+          final foreign = WasmComponent.decode(bytes);
+          expect(component.validate(), isEmpty);
+          final definitions = component.componentTypeIndexDefinitions;
+          for (var index = 0; index < 3; index++) {
+            expect(
+              wasiComponentAsyncValueTypeIndex(
+                component,
+                index,
+                definitions,
+                sourceTypeScope: component.componentTypeIndexScope,
+              ),
+              index,
+            );
+          }
+          expect(
+            wasiComponentAsyncValueTypeIndex(
+              component,
+              3,
+              definitions,
+              sourceTypeScope: component.componentTypeIndexScope,
+            ),
+            isNull,
+          );
+          expect(
+            wasiComponentAsyncValueTypeIndex(
+              component,
+              1,
+              foreign.componentTypeIndexDefinitions,
+              sourceTypeScope: foreign.componentTypeIndexScope,
+            ),
+            isNull,
+          );
+          final plan = componentCanonicalAdapterPlans(component).single;
+          final kind = future
+              ? WASIComponentCanonicalAdapterFlatValueKind.future
+              : WASIComponentCanonicalAdapterFlatValueKind.stream;
+          for (final value in [...plan.params, plan.result!]) {
+            expect(value.flatLayout?.kind, kind);
+            final index = value.flatLayout!.asyncTypeIndex!;
+            expect(
+              component.componentTypeIndexScope.definitionAt(index),
+              same(component.componentTypeIndexScope.definitionAt(0)),
+            );
+          }
+        },
+      );
+    }
     test('plans a decoded map as a typed pointer length pair', () {
       final component = WasmComponent.decode(_mapLiftLowerComponentBytes());
       expect(component.validate(), isEmpty);

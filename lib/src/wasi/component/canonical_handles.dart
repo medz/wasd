@@ -945,6 +945,11 @@ final class _PayloadHandleBindings
           'Readable endpoint is already owned by a component instance.',
         );
       }
+      final bindings = owner.asyncBindings;
+      if (bindings is! WASIComponentAsyncValueBindingSet) {
+        throw StateError('Missing instance-local async argument bindings.');
+      }
+      bindings.checkReadableEndpoint(index, readable);
       if (!(_seenReadableEndpoints ??= Set<Object>.identity()).add(readable)) {
         throw StateError(
           'Canonical arguments repeat an owned readable endpoint.',

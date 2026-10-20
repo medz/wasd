@@ -773,6 +773,15 @@ final class WASIComponentNativeRuntime {
         );
       case WasmComponentExternKind.componentType:
         final type = _typeExportDefinition(import.descriptor, _visibleTypes);
+        if (type != null &&
+            import.descriptor.boundKind ==
+                WasmComponentExternBoundKind.equality) {
+          final sourceIndex = import.descriptor.typeIndex!;
+          _visibleTypes.add(type);
+          _visibleResourceTypeNames.add(_visibleResourceTypeNames[sourceIndex]);
+          _addVisibleResourceIdentity(_visibleResources[sourceIndex]);
+          return;
+        }
         final registered = _componentHost.canonicalHost.resourceHost
             .canonicalRegisteredTypeAt(_visibleTypes.length);
         if (type?.resource == null || registered == null) {

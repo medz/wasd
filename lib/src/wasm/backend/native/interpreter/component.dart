@@ -2410,8 +2410,8 @@ final class _WasmComponentValidationContext {
   final List<WasmComponentValidationError> errors;
   final Map<int, bool> _valueTypeContainsBorrowMemo = <int, bool>{};
   final Set<int> _valueTypeContainsBorrowVisiting = <int>{};
-  final Map<int, bool> _valueTypeContainsListOrStringMemo = <int, bool>{};
-  final Set<int> _valueTypeContainsListOrStringVisiting = <int>{};
+  final Map<Object, bool> _valueTypeContainsListOrStringMemo = <Object, bool>{};
+  final Set<Object> _valueTypeContainsListOrStringVisiting = <Object>{};
   final Map<int, bool> _valueTypeContainsStreamOrFutureMemo = <int, bool>{};
   final Set<int> _valueTypeContainsStreamOrFutureVisiting = <int>{};
 
@@ -3903,13 +3903,15 @@ final class _WasmComponentValidationContext {
   bool valueTypeContainsListOrString(
     WasmComponentValueType? valueType, {
     List<WasmComponentTypeDefinition>? scopedTypeDefinitions,
+    WasmComponentTypeScope? typeScope,
   }) {
     if (scopedTypeDefinitions != null) {
       return valueTypeContainsListOrStringInDefinitions(
         valueType,
         scopedTypeDefinitions,
-        <int, bool>{},
-        <int>{},
+        <Object, bool>{},
+        <Object>{},
+        typeScope,
       );
     }
 
@@ -3918,14 +3920,16 @@ final class _WasmComponentValidationContext {
       typeDefinitions,
       _valueTypeContainsListOrStringMemo,
       _valueTypeContainsListOrStringVisiting,
+      typeScope,
     );
   }
 
   bool valueTypeContainsListOrStringInDefinitions(
     WasmComponentValueType? valueType,
     List<WasmComponentTypeDefinition> definitions,
-    Map<int, bool> memo,
-    Set<int> visiting,
+    Map<Object, bool> memo,
+    Set<Object> visiting,
+    WasmComponentTypeScope? typeScope,
   ) {
     if (valueType == null) {
       return false;
@@ -3936,24 +3940,29 @@ final class _WasmComponentValidationContext {
     }
 
     final typeIndex = valueType.typeIndex;
-    if (typeIndex == null || typeIndex < 0 || typeIndex >= definitions.length) {
+    if (typeIndex == null ||
+        typeIndex < 0 ||
+        typeIndex >= (typeScope?.length ?? definitions.length)) {
       return false;
     }
 
-    final cached = memo[typeIndex];
+    final context = typeScope?.definitionContextAt(typeIndex);
+    final key = context ?? (definitions, typeIndex);
+    final cached = memo[key];
     if (cached != null) {
       return cached;
     }
-    if (!visiting.add(typeIndex)) {
+    if (!visiting.add(key)) {
       return false;
     }
 
-    final definition = definitions[typeIndex];
+    final definition = context?.definition ?? definitions[typeIndex];
+    final referenceScope = context?.typeScope ?? typeScope;
     final definedValue = definition.definedValue;
     if (definition.kind != WasmComponentTypeKind.definedValue ||
         definedValue == null) {
-      visiting.remove(typeIndex);
-      memo[typeIndex] = false;
+      visiting.remove(key);
+      memo[key] = false;
       return false;
     }
 
@@ -3968,6 +3977,7 @@ final class _WasmComponentValidationContext {
           definitions,
           memo,
           visiting,
+          referenceScope,
         ),
       ),
       WasmComponentDefinedValueTypeKind.variant => definedValue.cases.any(
@@ -3976,6 +3986,7 @@ final class _WasmComponentValidationContext {
           definitions,
           memo,
           visiting,
+          referenceScope,
         ),
       ),
       WasmComponentDefinedValueTypeKind.fixedList ||
@@ -3985,6 +3996,7 @@ final class _WasmComponentValidationContext {
           definitions,
           memo,
           visiting,
+          referenceScope,
         ),
       WasmComponentDefinedValueTypeKind.tuple => definedValue.types.any(
         (type) => valueTypeContainsListOrStringInDefinitions(
@@ -3992,6 +4004,7 @@ final class _WasmComponentValidationContext {
           definitions,
           memo,
           visiting,
+          referenceScope,
         ),
       ),
       WasmComponentDefinedValueTypeKind.result =>
@@ -4000,12 +4013,14 @@ final class _WasmComponentValidationContext {
               definitions,
               memo,
               visiting,
+              referenceScope,
             ) ||
             valueTypeContainsListOrStringInDefinitions(
               definedValue.errorType,
               definitions,
               memo,
               visiting,
+              referenceScope,
             ),
       WasmComponentDefinedValueTypeKind.flags ||
       WasmComponentDefinedValueTypeKind.enumeration ||
@@ -4015,8 +4030,8 @@ final class _WasmComponentValidationContext {
       WasmComponentDefinedValueTypeKind.future => false,
     };
 
-    visiting.remove(typeIndex);
-    memo[typeIndex] = contains;
+    visiting.remove(key);
+    memo[key] = contains;
     return contains;
   }
 
@@ -4438,7 +4453,9 @@ final class _WasmComponentValidationContext {
     WasmComponentCanonicalDefinition definition,
     String path, {
     List<WasmComponentTypeDefinition>? visibleTypeDefinitions,
+    WasmComponentTypeScope? visibleTypeScope,
     List<WasmComponentFunctionType?>? functionTypes,
+    List<WasmComponentFunctionTypeContext?>? functionTypeContexts,
   }) {
     if (definition.kind == WasmComponentCanonicalKind.lift) {
       validateComponentTypeIndexInMaybeDefinitions(
@@ -4497,7 +4514,9 @@ final class _WasmComponentValidationContext {
       definition,
       path,
       visibleTypeDefinitions: visibleTypeDefinitions,
+      visibleTypeScope: visibleTypeScope,
       functionTypes: functionTypes,
+      functionTypeContexts: functionTypeContexts,
     );
     validateComponentValueType(
       definition.result?.valueType,
@@ -4616,6 +4635,7 @@ final class _WasmComponentValidationContext {
     WasmComponentCanonicalDefinition definition, {
     List<WasmComponentTypeDefinition>? visibleTypeDefinitions,
     List<WasmComponentFunctionType?>? functionTypes,
+    WasmComponentTypeScope? typeScope,
   }) {
     if (definition.kind != WasmComponentCanonicalKind.lower ||
         functionTypes == null) {
@@ -4634,6 +4654,7 @@ final class _WasmComponentValidationContext {
       (param) => valueTypeContainsListOrString(
         param.type,
         scopedTypeDefinitions: visibleTypeDefinitions,
+        typeScope: typeScope,
       ),
     );
   }
@@ -4642,6 +4663,7 @@ final class _WasmComponentValidationContext {
     WasmComponentCanonicalDefinition definition, {
     List<WasmComponentTypeDefinition>? visibleTypeDefinitions,
     List<WasmComponentFunctionType?>? functionTypes,
+    WasmComponentTypeScope? typeScope,
   }) {
     if (definition.kind != WasmComponentCanonicalKind.lower ||
         functionTypes == null) {
@@ -4659,12 +4681,14 @@ final class _WasmComponentValidationContext {
     return valueTypeContainsListOrString(
       functionType.result,
       scopedTypeDefinitions: visibleTypeDefinitions,
+      typeScope: typeScope,
     );
   }
 
   bool canonicalLiftParametersRequireRealloc(
     WasmComponentCanonicalDefinition definition, {
     List<WasmComponentTypeDefinition>? visibleTypeDefinitions,
+    WasmComponentTypeScope? typeScope,
   }) {
     if (definition.kind != WasmComponentCanonicalKind.lift) {
       return false;
@@ -4682,6 +4706,7 @@ final class _WasmComponentValidationContext {
       (param) => valueTypeContainsListOrString(
         param.type,
         scopedTypeDefinitions: visibleTypeDefinitions,
+        typeScope: typeScope,
       ),
     );
   }
@@ -4689,6 +4714,7 @@ final class _WasmComponentValidationContext {
   bool canonicalLiftResultRequiresMemory(
     WasmComponentCanonicalDefinition definition, {
     List<WasmComponentTypeDefinition>? visibleTypeDefinitions,
+    WasmComponentTypeScope? typeScope,
   }) {
     if (definition.kind != WasmComponentCanonicalKind.lift) {
       return false;
@@ -4705,12 +4731,14 @@ final class _WasmComponentValidationContext {
     return valueTypeContainsListOrString(
       functionType.result,
       scopedTypeDefinitions: visibleTypeDefinitions,
+      typeScope: typeScope,
     );
   }
 
   bool canonicalStreamOrFutureReadRequiresRealloc(
     WasmComponentCanonicalDefinition definition,
     List<WasmComponentTypeDefinition> visibleTypeDefinitions,
+    WasmComponentTypeScope? typeScope,
   ) {
     if (definition.kind != WasmComponentCanonicalKind.streamRead &&
         definition.kind != WasmComponentCanonicalKind.futureRead) {
@@ -4724,6 +4752,9 @@ final class _WasmComponentValidationContext {
     return valueTypeContainsListOrString(
       asyncType?.elementType,
       scopedTypeDefinitions: visibleTypeDefinitions,
+      typeScope:
+          typeScope?.definitionContextAt(definition.typeIndex)?.typeScope ??
+          typeScope,
     );
   }
 
@@ -4731,8 +4762,22 @@ final class _WasmComponentValidationContext {
     WasmComponentCanonicalDefinition definition,
     String path, {
     List<WasmComponentTypeDefinition>? visibleTypeDefinitions,
+    WasmComponentTypeScope? visibleTypeScope,
     List<WasmComponentFunctionType?>? functionTypes,
+    List<WasmComponentFunctionTypeContext?>? functionTypeContexts,
   }) {
+    final functionTypeScope =
+        definition.kind == WasmComponentCanonicalKind.lower
+        ? _entryAt(
+                functionTypeContexts ??
+                    const <WasmComponentFunctionTypeContext?>[],
+                definition.functionIndex,
+              )?.typeScope ??
+              visibleTypeScope
+        : visibleTypeScope
+                  ?.definitionContextAt(definition.typeIndex)
+                  ?.typeScope ??
+              visibleTypeScope;
     final hasMemory = canonicalOptionsContain(
       definition.options,
       WasmComponentCanonicalOptionKind.memory,
@@ -4766,6 +4811,7 @@ final class _WasmComponentValidationContext {
         valueTypeContainsListOrString(
           definition.result?.valueType,
           scopedTypeDefinitions: visibleTypeDefinitions,
+          typeScope: visibleTypeScope,
         )) {
       errors.add(
         WasmComponentValidationError(
@@ -4790,6 +4836,7 @@ final class _WasmComponentValidationContext {
         canonicalLiftResultRequiresMemory(
           definition,
           visibleTypeDefinitions: visibleTypeDefinitions,
+          typeScope: functionTypeScope,
         )) {
       errors.add(
         WasmComponentValidationError(
@@ -4805,6 +4852,7 @@ final class _WasmComponentValidationContext {
           definition,
           visibleTypeDefinitions: visibleTypeDefinitions,
           functionTypes: functionTypes,
+          typeScope: functionTypeScope,
         )) {
       errors.add(
         WasmComponentValidationError(
@@ -4819,6 +4867,7 @@ final class _WasmComponentValidationContext {
         canonicalLiftParametersRequireRealloc(
           definition,
           visibleTypeDefinitions: visibleTypeDefinitions,
+          typeScope: functionTypeScope,
         )) {
       errors.add(
         WasmComponentValidationError(
@@ -4834,6 +4883,7 @@ final class _WasmComponentValidationContext {
           definition,
           visibleTypeDefinitions: visibleTypeDefinitions,
           functionTypes: functionTypes,
+          typeScope: functionTypeScope,
         )) {
       errors.add(
         WasmComponentValidationError(
@@ -4849,6 +4899,7 @@ final class _WasmComponentValidationContext {
         canonicalStreamOrFutureReadRequiresRealloc(
           definition,
           visibleTypeDefinitions,
+          visibleTypeScope,
         )) {
       errors.add(
         WasmComponentValidationError(
@@ -5438,7 +5489,9 @@ final class _WasmComponentValidationContext {
             definition,
             'canonical[${event.index}]',
             visibleTypeDefinitions: visibleTypeDefinitions,
+            visibleTypeScope: visibleTypeScope,
             functionTypes: functionTypes,
+            functionTypeContexts: functionTypeContexts,
           );
           if (definition.kind == WasmComponentCanonicalKind.lift) {
             validateCoreSortIndex(

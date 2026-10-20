@@ -1,0 +1,1 @@
+{"source_filename":"/tmp/wasd-component-runner-negative-plan/upstream/test/async/cancel-and-exclusive-lock.wast","commands":[{"type":"module","line":10,"filename":"script.0.wasm","module_type":"binary"},{"type":"assert_return","line":196,"action":{"type":"invoke","field":"run","args":[]},"expected":[{"type":"u32","value":"42"}]}]}

@@ -63,6 +63,61 @@ const _frozenSources = {
     'returns': 1,
     'traps': 0,
   },
+  'test/async/cancel-and-exclusive-lock.wast': {
+    'path': 'test/async/cancel-and-exclusive-lock.wast',
+    'blob': '25063f11b8d4c47cc1cc61485bf9d82e57ef1312',
+    'sha256':
+        'a6bef2fe693216c65239ba9bfde3eb2636280282cefef58808a8c58d98be9f27',
+    'commands': 2,
+    'instantiations': 1,
+    'definitions': 0,
+    'returns': 1,
+    'traps': 0,
+  },
+  'test/async/closed-stream.wast': {
+    'path': 'test/async/closed-stream.wast',
+    'blob': '071a05b96613c23d161a2be6804c9792cdf1cbd7',
+    'sha256':
+        '5fddd95e1f7920f6a453e4f72bd4abc9d8a1615f8937f33ae06e0df31ca4d2a0',
+    'commands': 3,
+    'instantiations': 1,
+    'definitions': 1,
+    'returns': 0,
+    'traps': 0,
+  },
+  'test/async/cross-task-future.wast': {
+    'path': 'test/async/cross-task-future.wast',
+    'blob': '97849635de950d11443d1034a29b8983e2dd2bc5',
+    'sha256':
+        'd962876ba33012ce0ff068a0d056b2d8b27f5a86749fc410ca1051bd26a50a14',
+    'commands': 2,
+    'instantiations': 1,
+    'definitions': 0,
+    'returns': 1,
+    'traps': 0,
+  },
+  'test/resources/multiple-resources.wast': {
+    'path': 'test/resources/multiple-resources.wast',
+    'blob': '4a7bff17114135adbceca7104fb25c3bd6378a91',
+    'sha256':
+        'e9e326df8a048b6843210e9eebe1cf2499a9d481a810ef04cc7a84b83b4f48b5',
+    'commands': 2,
+    'instantiations': 1,
+    'definitions': 0,
+    'returns': 1,
+    'traps': 0,
+  },
+  'test/values/transcode.wast': {
+    'path': 'test/values/transcode.wast',
+    'blob': '0ec72e09f7805a81dbc977d079ae8185f30251de',
+    'sha256':
+        '4cb545c7816ceb106f5962a1dcf9ed4ad50112b9aff2fdbd785d6c7e53b1a4cb',
+    'commands': 10,
+    'instantiations': 5,
+    'definitions': 0,
+    'returns': 5,
+    'traps': 0,
+  },
 };
 
 /// Recognizes only the three string trap categories used by the frozen file.
