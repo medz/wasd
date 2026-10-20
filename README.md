@@ -78,9 +78,10 @@ or WASI conformance; see the [standards and acceptance plan](doc/standards.md).
 
 **Unreleased main:** Component callers can continue after `task.return`
 while the callee remains suspended in a synchronous stream copy. The
-complete frozen `async/sync-streams.wast` file extends the main-branch
-gate to four files / `61/61` commands. Released `0.6.1` retains the
-three-file gate and its blocking-copy guard.
+complete frozen Component gate covers nine files / `80/80` commands.
+Exported stream/future type aliases and equality-bound type imports retain
+their original type context and runtime resource identity. Released `0.6.1`
+retains the three-file gate and its blocking-copy guard.
 
 ## Quick Start
 

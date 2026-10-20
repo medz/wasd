@@ -14,8 +14,13 @@
 - Add `settle()` and `dispose()` to the Preview3 service runner so callers
   can observe and finish work after response delivery. Preview2 proxy
   calls automatically dispose their completed synchronous runtime.
-- Extend the complete frozen Component execution gate to four files /
-  61 commands with the unchanged `async/sync-streams.wast` file.
+- Resolve exported stream/future aliases and equality-bound type imports
+  in their original scopes, retaining runtime resource identity and destructor
+  ownership. Reject foreign endpoint arguments before guest entry.
+- Validate canonical memory/realloc requirements in the referenced type's
+  scope, including records whose local indexes shadow outer types.
+- Extend the complete frozen Component execution gate to nine files /
+  80 commands, keeping every official source and binary input unchanged.
 
 ## 0.6.1
 

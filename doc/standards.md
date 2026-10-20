@@ -3,7 +3,7 @@
 This implementation and acceptance plan retains the historical `0.5.0`
 (`528b2b828f979d08ba1798f7e8e955e892ab052d`) baseline checked on 2026-10-01.
 Current main retains the released `0.6.1` changes and adds Component
-caller-continuation scheduling. Its four-file execution gate is unreleased;
+caller-continuation scheduling. Its nine-file execution gate is unreleased;
 `0.6.1` retains its three-file gate. Historical results keep their original
 versions and scope.
 A target in this document is not a support claim. Release support must be backed
@@ -91,7 +91,7 @@ Linux/macOS gate still uses `0.3.0` guests; it is compatibility evidence for
 that version, not an official `0.3.1` suite. General Component/async assertion
 execution and full package/world/platform acceptance remain open.
 
-The unreleased main WASD Component execution gate covers four complete official
+The unreleased main WASD Component execution gate covers nine complete official
 files at source `0220da84209397d9067c19cac83dae969aa85a7b`:
 
 | File | Frozen Git blob | Commands |
@@ -100,10 +100,15 @@ files at source `0220da84209397d9067c19cac83dae969aa85a7b`:
 | `test/values/numerics.wast` | `99fcbc03b0b352b29db247c90085ad0febbd3fe5` | 26 |
 | `test/values/realloc.wast` | `7706e03b2a1e941d2785f580f399cd2b65b08beb` | 16 |
 | `test/async/sync-streams.wast` | `5eb1b7a02aaa0b8a94436c4fbc4573ae31530d7b` | 2 |
+| `test/async/cancel-and-exclusive-lock.wast` | `25063f11b8d4c47cc1cc61485bf9d82e57ef1312` | 2 |
+| `test/async/closed-stream.wast` | `071a05b96613c23d161a2be6804c9792cdf1cbd7` | 3 |
+| `test/async/cross-task-future.wast` | `97849635de950d11443d1034a29b8983e2dd2bc5` | 2 |
+| `test/resources/multiple-resources.wast` | `4a7bff17114135adbceca7104fb25c3bd6378a91` | 2 |
+| `test/values/transcode.wast` | `0ec72e09f7805a81dbc977d079ae8185f30251de` | 10 |
 
-The combined gate executes `61/61` commands: 24 actual component
-initializations, five definition registrations, 20 exact return assertions and
-12 invocation trap assertions. The new async file returns `u32 42` after its
+The combined gate executes `80/80` commands: 33 actual component
+initializations, six definition registrations, 28 exact return assertions,
+12 invocation trap assertions and one action. The new async file returns `u32 42` after its
 unchanged read/write rendezvous and subtask assertions. Released `0.6.1`
 retains the first three files / `59/59` commands. The earlier
 `0.6.0-dev.3` two-file gate remains
@@ -139,9 +144,10 @@ The `0.6.1` handle slice keeps canonical indexes local to each instance while
 sharing host backing. Typed own/borrow conversion, async accepted-prefix
 ownership and local resource destructors have focused regressions. Async
 borrowed-resource, error-context and nested stream/future payload codecs remain
-unsupported. The named exported stream-alias result shape tracked in
-[#162](https://github.com/medz/wasd/issues/162) remains unsupported; its inline
-stream equivalent has actual cross-instance controls. Unreleased main permits
+unsupported. Exported stream/future aliases retain their original type scopes and nominal
+resource identities across child instances. Foreign endpoint arguments are
+rejected before guest entry, preserving matching-instance calls and cleanup;
+see [#162](https://github.com/medz/wasd/issues/162). Unreleased main permits
 a synchronous stream copy after `task.return` to suspend while the caller
 continues. Typed results are captured at return; callee thread state and
 scopes survive until body exit. Real guest blocking, yield and exit control
@@ -150,15 +156,17 @@ cleanup runs guest destructors; aborted or trapped stores skip them.
 Session settlement preserves late WASI exit status and attributes
 delayed specification failures to the command that started the work. See
 [#156](https://github.com/medz/wasd/issues/156). Released `0.6.1` retains
-the blocking-copy guard. Top-level
-equality-bound component type imports remain unsupported and are tracked in
-[#163](https://github.com/medz/wasd/issues/163).
+the blocking-copy guard. Equality-bound value/resource type imports forward
+existing source contexts, nominal tokens and destructor provenance; new abstract
+host resources still require explicit source registration. Canonical memory and
+realloc checks use the referenced type's scope rather than an outer numeric index;
+see [#163](https://github.com/medz/wasd/issues/163).
 Shared canonical-memory regressions also run on Node and Chrome. This does not
 establish JavaScript u64 memory access or general Component execution there.
 
-The frozen Component source contains 74 WAST files. The four complete files
-above leave 70 without equivalent complete WASD acceptance: 44 async,
-13 validation, four linking, three resource, five other value and one binary
+The frozen Component source contains 74 WAST files. The nine complete files
+above leave 65 without equivalent complete WASD acceptance: 41 async,
+13 validation, four linking, two resource, four other value and one binary
 file. Existing implementation and focused tests do not replace those gates.
 These are file coverage counts, not a percentage of feature completion.
 
