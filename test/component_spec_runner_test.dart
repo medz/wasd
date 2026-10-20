@@ -707,22 +707,26 @@ void main() {
     expect(totals['traps_passed'], 5);
   });
 
-  test('four complete frozen files execute all 61 commands', () async {
+  test('nine complete frozen files execute all 80 commands', () async {
     final report = await runner.runComponentSpecManifest(
       File('test/fixtures/component_spec/manifest.json'),
       usePreparedInputs: true,
     );
     expect(report['status'], 'passed');
     final totals = report['totals'] as Map;
-    expect(totals['files_total'], 4);
-    expect(totals['files_passed'], 4);
-    expect(totals['commands_passed'], 61);
+    expect(totals['files_total'], 9);
+    expect(totals['files_passed'], 9);
+    expect(totals['commands_seen'], 80);
+    expect(totals['commands_passed'], 80);
     expect(totals['commands_failed'], 0);
+    expect(totals['commands_unsupported'], 0);
+    expect(totals['commands_not_executed'], 0);
     expect(totals['commands_skipped'], 0);
-    expect(totals['instantiations_passed'], 24);
-    expect(totals['definitions_passed'], 5);
-    expect(totals['returns_passed'], 20);
+    expect(totals['instantiations_passed'], 33);
+    expect(totals['definitions_passed'], 6);
+    expect(totals['returns_passed'], 28);
     expect(totals['traps_passed'], 12);
+    expect(totals['actions_passed'], 1);
   });
 
   for (final (name, argument) in <(String, Object?)>[
@@ -1988,6 +1992,16 @@ Future<Directory> _copyFixtures({
   }
   final manifest = File('${temp.path}/manifest.json');
   final inventory = jsonDecode(await manifest.readAsString()) as Map;
+  inventory['files'] = (inventory['files'] as List)
+      .where(
+        (entry) => const {
+          'test/values/strings.wast',
+          'test/values/numerics.wast',
+          'test/values/realloc.wast',
+          'test/async/sync-streams.wast',
+        }.contains(entry['path']),
+      )
+      .toList();
   if (stringsOnly) {
     inventory['files'] = (inventory['files'] as List)
         .where((entry) => entry['path'] == 'test/values/strings.wast')
