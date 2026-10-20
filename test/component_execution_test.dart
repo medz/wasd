@@ -14,6 +14,66 @@ import 'package:wasd/wasi.dart';
 import 'package:wasd/wasm.dart' hide Exception;
 
 void main() {
+  for (final kind in ['stream', 'future']) {
+    for (final namedAlias in [false, true]) {
+      test(
+        'canonical $kind exported alias=$namedAlias preserves instance identity',
+        () async {
+          var source = _exportedStreamAlias;
+          if (!namedAlias) {
+            source = source
+                .replaceAll(
+                  r'(result $public-stream)',
+                  r'(result (stream $owned))',
+                )
+                .replaceAll(
+                  r'(param "endpoint" $public-stream)',
+                  r'(param "endpoint" (stream $owned))',
+                );
+          }
+          if (kind == 'future') source = source.replaceAll('stream', 'future');
+          final component = await _encodeComponent(source, validate: true);
+          final host = WASIComponentHost();
+          await host.table.runScoped(() async {
+            final runtime = WASIComponentNativeRuntime.component(
+              component: component,
+              host: host,
+            );
+            try {
+              final a = await runtime.invokeExport('a-new', []);
+              final b = await runtime.invokeExport('b-new', []);
+              await expectLater(
+                runtime.invokeExport('a-accept', [b]),
+                throwsStateError,
+              );
+              await expectLater(
+                runtime.invokeExport('b-accept', [a]),
+                throwsStateError,
+              );
+              expect(await runtime.invokeExport('a-hits', []), 0);
+              expect(await runtime.invokeExport('b-hits', []), 0);
+              await runtime.invokeExport('a-accept', [a]);
+              await runtime.invokeExport('b-accept', [b]);
+              expect(await runtime.invokeExport('a-hits', []), 1);
+              expect(await runtime.invokeExport('b-hits', []), 1);
+              for (final prefix in ['a', 'b']) {
+                await runtime.invokeExport('$prefix-drop-r', []);
+                if (kind == 'stream') {
+                  await runtime.invokeExport('$prefix-drop-w', []);
+                }
+              }
+              await runtime.settle();
+              // Unwritten future writers are aborted by allocation-scope cleanup.
+              expect(host.table.activeCount, kind == 'stream' ? 0 : 2);
+            } finally {
+              await runtime.dispose();
+            }
+          });
+          expect(host.table.activeCount, 0);
+        },
+      );
+    }
+  }
   for (final dropBorrow in [false, true]) {
     test(
       'continuation callback WAIT cancellation checks real borrow drop=$dropBorrow',
@@ -5462,4 +5522,65 @@ String _callbackCancellation({required bool dropBorrow}) =>
  (func (export "poll") (result u32) (canon lift (core func \$m "poll")))
  (func (export "event-state") (result u32) (canon lift (core func \$m "state")))
  (func (export "finish") (canon lift (core func \$m "finish"))))
+''';
+
+const _exportedStreamAlias = r'''
+(component
+ (component $leaf
+  (type $r (resource (rep i32)))
+  (export $public-r "r" (type $r))
+  (type $owned (own $public-r))
+  (type $stream (stream $owned))
+  (export $public-stream "stream" (type $stream))
+  (core func $new (canon stream.new $public-stream))
+  (core func $dr (canon stream.drop-readable $public-stream))
+  (core func $dw (canon stream.drop-writable $public-stream))
+  (core module $m
+   (import "h" "new" (func $new (result i64)))
+   (import "h" "dr" (func $dr (param i32)))
+   (import "h" "dw" (func $dw (param i32)))
+   (global $writer (mut i32) (i32.const 0))
+   (global $reader (mut i32) (i32.const 0))
+   (global $hits (mut i32) (i32.const 0))
+   (func (export "new") (result i32) (local $pair i64)
+    call $new local.set $pair
+    local.get $pair i64.const 32 i64.shr_u i32.wrap_i64 global.set $writer
+    local.get $pair i32.wrap_i64)
+   (func (export "accept") (param i32)
+    local.get 0 global.set $reader
+    global.get $hits i32.const 1 i32.add global.set $hits)
+   (func (export "hits") (result i32) global.get $hits)
+   (func (export "drop-r") global.get $reader call $dr)
+   (func (export "drop-w") global.get $writer call $dw))
+  (core instance $h (export "new" (func $new)) (export "dr" (func $dr)) (export "dw" (func $dw)))
+  (core instance $m (instantiate $m (with "h" (instance $h))))
+  (func (export "new") (result $public-stream) (canon lift (core func $m "new")))
+  (func (export "accept") (param "endpoint" $public-stream) (canon lift (core func $m "accept")))
+  (func (export "hits") (result u32) (canon lift (core func $m "hits")))
+  (func (export "drop-r") (canon lift (core func $m "drop-r")))
+  (func (export "drop-w") (canon lift (core func $m "drop-w"))))
+ (instance $a (instantiate $leaf))
+ (instance $b (instantiate $leaf))
+ (export "a" (instance $a))
+ (export "b" (instance $b))
+ (alias export $a "new" (func $a-new))
+ (alias export $a "accept" (func $a-accept))
+ (alias export $a "hits" (func $a-hits))
+ (alias export $a "drop-r" (func $a-dr))
+ (alias export $a "drop-w" (func $a-dw))
+ (alias export $b "new" (func $b-new))
+ (alias export $b "accept" (func $b-accept))
+ (alias export $b "hits" (func $b-hits))
+ (alias export $b "drop-r" (func $b-dr))
+ (alias export $b "drop-w" (func $b-dw))
+ (export "a-new" (func $a-new))
+ (export "a-accept" (func $a-accept))
+ (export "a-hits" (func $a-hits))
+ (export "a-drop-r" (func $a-dr))
+ (export "a-drop-w" (func $a-dw))
+ (export "b-new" (func $b-new))
+ (export "b-accept" (func $b-accept))
+ (export "b-hits" (func $b-hits))
+ (export "b-drop-r" (func $b-dr))
+ (export "b-drop-w" (func $b-dw)))
 ''';

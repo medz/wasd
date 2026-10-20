@@ -108,6 +108,10 @@ final class WASIComponentAsyncValueBindingSet
 /// Internal typed value conversion over the existing instance binding registry.
 extension WASIComponentCanonicalAsyncValueBindings
     on WASIComponentAsyncValueBindingSet {
+  /// Checks an embedding argument without binding or transferring its endpoint.
+  void checkReadableEndpoint(int typeIndex, Object endpoint) =>
+      _type(typeIndex).checkReadableEndpoint(endpoint);
+
   /// Connects this registry to the executing instance's typed copy boundary.
   void bindCanonicalValues({
     required Object owner,
@@ -679,6 +683,9 @@ int? wasiComponentAsyncValueTypeIndex(
       (sourceValue.kind != WasmComponentDefinedValueTypeKind.stream &&
           sourceValue.kind != WasmComponentDefinedValueTypeKind.future)) {
     return null;
+  }
+  if (identical(sourceTypeScope, component.componentTypeIndexScope)) {
+    return sourceTypeIndex;
   }
   final referenceDefinitions =
       sourceContext?.typeScope.definitions ?? sourceDefinitions;
@@ -2572,6 +2579,11 @@ final class _WASIComponentEndpointWaitables {
   static final Expando<Object> _payloadTypes = Expando<Object>();
 
   void bindPayloadType(Object endpoint, Object? key) {
+    checkPayloadType(endpoint, key);
+    if (key != null) _payloadTypes[endpoint] = key;
+  }
+
+  void checkPayloadType(Object endpoint, Object? key) {
     if (key == null) return;
     final existing = _payloadTypes[endpoint];
     if (existing != null && existing != key) {
@@ -2579,7 +2591,6 @@ final class _WASIComponentEndpointWaitables {
         'Canonical endpoint payload has a different runtime type.',
       );
     }
-    _payloadTypes[endpoint] = key;
   }
 
   final Map<int, WASIComponentWaitable> _waitables =
@@ -2981,35 +2992,41 @@ final class _RegisteredAsyncValueType<T> {
     );
   }
 
+  Object _readableEndpoint(Object value) => switch (kind) {
+    _WASIComponentAsyncValueKind.stream => switch (value) {
+      WASIComponentStream<T>() => value.readable,
+      WASIComponentReadableStream<T>() => value,
+      _ => throw StateError(
+        'WASI component async type $name expected a readable stream.',
+      ),
+    },
+    _WASIComponentAsyncValueKind.future => switch (value) {
+      WASIComponentFuture<T>() => value.readable,
+      WASIComponentReadableFuture<T>() => value,
+      _ => throw StateError(
+        'WASI component async type $name expected a readable future.',
+      ),
+    },
+  };
+
+  void checkReadableEndpoint(Object value) => endpointWaitables
+      .checkPayloadType(_readableEndpoint(value), payloadTypeKey);
+
   int lowerReadableEndpoint(Object value) {
+    final endpoint = _readableEndpoint(value);
+    endpointWaitables.bindPayloadType(endpoint, payloadTypeKey);
     switch (kind) {
       case _WASIComponentAsyncValueKind.stream:
-        final endpoint = switch (value) {
-          WASIComponentStream<T>() => value.readable,
-          WASIComponentReadableStream<T>() => value,
-          _ => throw StateError(
-            'WASI component async type $name expected a readable stream.',
-          ),
-        };
-        endpointWaitables.bindPayloadType(endpoint, payloadTypeKey);
         final handle = table.insert<WASIComponentReadableStream<T>>(
           readableStreamType!,
-          endpoint,
+          endpoint as WASIComponentReadableStream<T>,
         );
         endpointWaitables.register(handle, endpoint, '$name.readable#$handle');
         return handle;
       case _WASIComponentAsyncValueKind.future:
-        final endpoint = switch (value) {
-          WASIComponentFuture<T>() => value.readable,
-          WASIComponentReadableFuture<T>() => value,
-          _ => throw StateError(
-            'WASI component async type $name expected a readable future.',
-          ),
-        };
-        endpointWaitables.bindPayloadType(endpoint, payloadTypeKey);
         final handle = table.insert<WASIComponentReadableFuture<T>>(
           readableFutureType!,
-          endpoint,
+          endpoint as WASIComponentReadableFuture<T>,
         );
         endpointWaitables.register(handle, endpoint, '$name.readable#$handle');
         return handle;

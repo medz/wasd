@@ -796,6 +796,7 @@ final class _FlatLayoutResolver {
                 definedValue,
                 memoryCodec,
                 definitionContext?.typeScope ?? scope,
+                indexScope: scope,
               )
             : null;
         _visiting.remove(cacheKey);
@@ -808,8 +809,9 @@ final class _FlatLayoutResolver {
     int componentTypeIndex,
     WasmComponentDefinedValueType type,
     WASIComponentCanonicalValueMemoryCodec? memoryCodec,
-    WasmComponentTypeScope? scope,
-  ) {
+    WasmComponentTypeScope? scope, {
+    required WasmComponentTypeScope? indexScope,
+  }) {
     switch (type.kind) {
       case WasmComponentDefinedValueTypeKind.primitive:
         final primitive = type.primitive;
@@ -995,7 +997,7 @@ final class _FlatLayoutResolver {
       case WasmComponentDefinedValueTypeKind.stream:
         final asyncTypeIndex = asyncTypeIndexFor?.call(
           componentTypeIndex,
-          scope,
+          indexScope,
         );
         if (asyncTypeIndexFor != null && asyncTypeIndex == null) {
           return null;
@@ -1007,7 +1009,7 @@ final class _FlatLayoutResolver {
       case WasmComponentDefinedValueTypeKind.future:
         final asyncTypeIndex = asyncTypeIndexFor?.call(
           componentTypeIndex,
-          scope,
+          indexScope,
         );
         if (asyncTypeIndexFor != null && asyncTypeIndex == null) {
           return null;
