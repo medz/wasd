@@ -108,8 +108,9 @@ files at source `0220da84209397d9067c19cac83dae969aa85a7b`:
 
 The combined gate executes `80/80` commands: 33 actual component
 initializations, six definition registrations, 28 exact return assertions,
-12 invocation trap assertions and one action. The new async file returns `u32 42` after its
-unchanged read/write rendezvous and subtask assertions. Released `0.6.1`
+12 invocation trap assertions and one action. `test/async/sync-streams.wast`
+returns `u32 42` after its unchanged read/write rendezvous and subtask
+assertions. Released `0.6.1`
 retains the first three files / `59/59` commands. The earlier
 `0.6.0-dev.3` two-file gate remains
 `43/43` historical evidence: 17 initializations, one definition, 18 returns and
