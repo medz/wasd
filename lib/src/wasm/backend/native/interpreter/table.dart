@@ -21,6 +21,18 @@ final class WasmTable {
   final bool isTable64;
   final String? refTypeSignature;
   final List<int?> _entries;
+  bool hostAccessible = false;
+  Set<int>? _functionReferences;
+
+  // Retain function origins when entries move or are cleared, without scanning
+  // table slots to discover asynchronous dependencies at every public call.
+  Iterable<int> get functionReferences => _functionReferences ?? const <int>{};
+
+  void _retainFunctionReference(int? reference) {
+    if (refType == WasmRefType.funcref && reference != null && reference >= 0) {
+      (_functionReferences ??= <int>{}).add(reference);
+    }
+  }
 
   int get length => _entries.length;
 
@@ -32,6 +44,7 @@ final class WasmTable {
   void operator []=(int index, int? functionIndex) {
     _checkIndex(index);
     _entries[index] = functionIndex;
+    _retainFunctionReference(functionIndex);
   }
 
   int grow(int delta, [int? fill]) {
@@ -49,6 +62,7 @@ final class WasmTable {
     }
 
     _entries.length = newLength;
+    if (delta > 0) _retainFunctionReference(fill);
     for (var i = oldLength; i < newLength; i++) {
       _entries[i] = fill;
     }
@@ -87,6 +101,7 @@ final class WasmTable {
 
     for (var i = 0; i < writeLength; i++) {
       _entries[offset + i] = functionIndices[sourceOffset + i];
+      _retainFunctionReference(functionIndices[sourceOffset + i]);
     }
   }
 
@@ -120,6 +135,11 @@ final class WasmTable {
       source._entries,
       sourceOffset,
     );
+    if (!identical(this, source) &&
+        refType == WasmRefType.funcref &&
+        source._functionReferences != null) {
+      (_functionReferences ??= <int>{}).addAll(source._functionReferences!);
+    }
   }
 
   void fillRange(int offset, int length, int? value) {
@@ -133,6 +153,7 @@ final class WasmTable {
       );
     }
     _entries.fillRange(offset, offset + length, value);
+    if (length > 0) _retainFunctionReference(value);
   }
 
   List<int?> snapshot() => List<int?>.unmodifiable(_entries);

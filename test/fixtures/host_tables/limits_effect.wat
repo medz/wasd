@@ -1,0 +1,10 @@
+(module
+  (table $values (import "host" "table") 2 4 funcref)
+  (import "host" "started" (func $started))
+  (memory (import "host" "memory") 1)
+  (func $increment (param i32) (result i32) local.get 0 i32.const 1 i32.add)
+  (elem (i32.const 0) $increment)
+  (data (i32.const 0) "t")
+  (func $start call $started)
+  (start $start)
+)

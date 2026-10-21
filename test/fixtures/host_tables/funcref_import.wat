@@ -1,0 +1,11 @@
+(module
+  (table $values (import "host" "table") 1 4 funcref)
+  (export "values" (table $values))
+  (export "alias" (table $values))
+  (func (export "get") (param i32) (result funcref) local.get 0 table.get $values)
+  (func (export "set") (param i32 funcref) local.get 0 local.get 1 table.set $values)
+  (func (export "grow") (param i32 funcref) (result i32) local.get 1 local.get 0 table.grow $values)
+  (func (export "size") (result i32) table.size $values)
+  (type $unary (func (param i32) (result i32)))
+  (func (export "call") (param i32 i32) (result i32) local.get 1 local.get 0 call_indirect (type $unary))
+)

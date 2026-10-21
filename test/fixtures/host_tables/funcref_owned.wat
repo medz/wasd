@@ -1,0 +1,17 @@
+(module
+  (type $unary (func (param i32) (result i32)))
+  (table $values 1 4 funcref)
+  (global $calls (mut i32) (i32.const 0))
+  (func $increment (export "increment") (type $unary)
+    global.get $calls i32.const 1 i32.add global.set $calls
+    local.get 0 i32.const 1 i32.add)
+  (func $wrong (export "wrong") (result f64) f64.const 9)
+  (elem (i32.const 0) $increment)
+  (elem declare func $wrong)
+  (export "values" (table $values))
+  (export "alias" (table $values))
+  (func (export "get") (param i32) (result funcref) local.get 0 table.get $values)
+  (func (export "calls") (result i32) global.get $calls)
+  (func (export "call") (param i32 i32) (result i32)
+    local.get 1 local.get 0 call_indirect (type $unary))
+)

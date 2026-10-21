@@ -48,6 +48,19 @@ final class ReferenceValues {
   static int? functionReference(Function function) =>
       _functionOwners[function]?.id;
 
+  static _FunctionReference? _checkedFunction(Object? value) {
+    if (value == null) return null;
+    final reference = value is Function ? _functionOwners[value] : null;
+    if (reference == null) {
+      throw ArgumentError('funcref requires a function from this backend.');
+    }
+    return reference;
+  }
+
+  static void validateFunction(Object? value) {
+    _checkedFunction(value);
+  }
+
   static bool functionNeedsAsync(Function function) {
     final reference = _functionOwners[function];
     return reference != null &&
@@ -157,11 +170,8 @@ final class ReferenceValues {
       return entry.id;
     }
     if (isFunction(signature)) {
-      if (value == null) return -1;
-      final reference = value is Function ? _functionOwners[value] : null;
-      if (reference == null) {
-        throw ArgumentError('funcref requires a function from this backend.');
-      }
+      final reference = _checkedFunction(value);
+      if (reference == null) return -1;
       connect(reference.owner);
       return reference.id;
     }

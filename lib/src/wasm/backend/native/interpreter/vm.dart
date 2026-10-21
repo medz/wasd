@@ -320,6 +320,14 @@ final class WasmVm {
             (global.valueTypeSignature == '70' ||
                 global.valueTypeSignature == '6370'),
       );
+      mutableReferenceState |= vm._tables.any(
+        (table) =>
+            table.hostAccessible &&
+            table.refType == WasmRefType.funcref &&
+            (table.refTypeSignature == null ||
+                table.refTypeSignature == '70' ||
+                table.refTypeSignature == '6370'),
+      );
       for (var i = 0; i < vm._functions.length; i++) {
         final function = vm._functions[i];
         mutableReferenceState |= function.type.paramTypeSignatures.any(
@@ -352,6 +360,16 @@ final class WasmVm {
           // A guest may move this reference into a table and clear the global.
           // Retain async capability without scanning table entries on each call.
           return vm._hasAsyncFunctionReferenceDependency = true;
+        }
+      }
+      for (final table in vm._tables) {
+        for (final reference in table.functionReferences) {
+          final target = _functionRefTargets[reference];
+          if (target == null || identical(vm, target.vm)) continue;
+          (vm._functionReferenceDependencies ??= <WasmVm>{}).add(target.vm);
+          if (visit(target.vm)) {
+            return vm._hasAsyncFunctionReferenceDependency = true;
+          }
         }
       }
       final dependencies = vm._functionReferenceDependencies;

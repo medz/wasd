@@ -29,6 +29,15 @@
   store owners retain historical external values for their shared lifetime.
 - Preserve the underlying JavaScript global when re-importing an exported
   binding. Existing JS external-reference and function-reference limits remain.
+- Bind native public nullable `externref` and `funcref` tables to the actual
+  interpreter storage. Preserve shared mutation/growth, aliases, cross-instance
+  function identity, indirect-call checks and asynchronous reference origins.
+  Validate import limits before committing the host binding, and preserve
+  standalone table behavior after a failed link. Reject unsupported public
+  reference types and table64 before guest initialization.
+- Preserve exported JS tables when re-importing them; decode primitive values
+  consistently, including BigInt, and explicitly reject object/function reads
+  that cannot preserve the supported embedding contract.
 
 ## 0.6.1
 

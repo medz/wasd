@@ -8,6 +8,7 @@ import 'interpreter/imports.dart' as ir_imports;
 import 'interpreter/instance.dart' as ir_instance;
 import 'interpreter/memory.dart' as ir_memory;
 import 'interpreter/runtime_global.dart' as ir_global;
+import 'interpreter/table.dart' as ir_table;
 import 'interpreter/module.dart' as ir_module;
 import 'interpreter/vm.dart' as ir_vm;
 import 'exception.dart' as native_exception;
@@ -15,6 +16,7 @@ import 'global.dart' as native_global;
 import 'memory.dart' as native_memory;
 import 'module.dart' as native_module;
 import 'tag.dart' as native_tag;
+import 'table.dart' as native_table;
 import 'reference_values.dart';
 
 String _canonicalSignature(String signature) =>
@@ -48,6 +50,7 @@ class Instance implements wasm.Instance {
         validate: false,
         profile: profile,
         predecodedFunctions: nativeModule.predecodedFunctions,
+        onImportsValidated: _bindTableImports,
       );
     } on HostCallbackFailure catch (failure) {
       failure.rethrowOriginal();
@@ -76,6 +79,8 @@ class Instance implements wasm.Instance {
   late final ir_instance.WasmInstance _runtime;
   late final wasm.Exports _exports;
   Map<String, native_tag.Tag>? _tagBindings;
+  Map<ir_table.WasmTable, native_table.Table>? _tableBindings;
+  Map<native_table.Table, ir_table.WasmTable>? _tableImports;
   final _references = ReferenceValues();
   bool _hasFunctionReferences = false;
   bool _hasFunctionReturningHostImports = false;
@@ -93,6 +98,7 @@ class Instance implements wasm.Instance {
     final importedFunctionTypes = <String, ir_module.WasmFunctionType>{};
     final functionReferences = <String, int>{};
     final memories = <String, ir_memory.WasmMemory>{};
+    final tables = <String, ir_table.WasmTable>{};
     final globalBindings = <String, ir_global.RuntimeGlobal>{};
     final tags = <String, ir_imports.WasmTagImport>{};
     final decoded = (module as native_module.Module).decoded;
@@ -131,6 +137,11 @@ class Instance implements wasm.Instance {
         if (import.kind == ir_module.WasmImportKind.global) import.globalType!,
       for (final global in decoded.globals) global.type,
     ];
+    final tableTypes = [
+      for (final import in decoded.imports)
+        if (import.kind == ir_module.WasmImportKind.table) import.tableType!,
+      ...decoded.tables,
+    ];
     _hasFunctionReferences =
         globalTypes.any(
           (type) => ReferenceValues.isFunction(type.valueTypeSignature),
@@ -143,12 +154,22 @@ class Instance implements wasm.Instance {
     for (final import in decoded.imports) {
       if (import.kind == ir_module.WasmImportKind.global) {
         ReferenceValues.checkSignature(import.globalType!.valueTypeSignature);
+      } else if (import.kind == ir_module.WasmImportKind.table) {
+        native_table.checkSupportedType(import.tableType!);
+        _hasFunctionReferences |= ReferenceValues.isFunction(
+          import.tableType!.refTypeSignature,
+        );
       }
     }
     for (final export in decoded.exports) {
       if (export.kind == ir_module.WasmExportKind.global) {
         ReferenceValues.checkSignature(
           globalTypes[export.index].valueTypeSignature,
+        );
+      } else if (export.kind == ir_module.WasmExportKind.table) {
+        native_table.checkSupportedType(tableTypes[export.index]);
+        _hasFunctionReferences |= ReferenceValues.isFunction(
+          tableTypes[export.index].refTypeSignature,
         );
       }
     }
@@ -180,6 +201,11 @@ class Instance implements wasm.Instance {
       for (final descriptor in wasm.Module.imports(module))
         if (descriptor.kind == wasm.ImportExportKind.global)
           (descriptor.module, descriptor.name),
+    };
+    final declaredTables = {
+      for (final import in decoded.imports)
+        if (import.kind == ir_module.WasmImportKind.table)
+          (import.module, import.name),
     };
 
     for (final moduleEntry in imports.entries) {
@@ -294,6 +320,21 @@ class Instance implements wasm.Instance {
             final binding = ref.host;
             tags[key] = binding;
             (_tagBindings ??= {})[binding.nominalTypeKey] = ref;
+          case wasm.TableImportExportValue(:final ref):
+            if (!declaredTables.contains((moduleEntry.key, importEntry.key))) {
+              continue;
+            }
+            if (ref is! native_table.Table) {
+              throw LinkError(
+                'Table import `$key` must be created by native backend.',
+              );
+            }
+            final binding = (_tableImports ??= {}).putIfAbsent(
+              ref,
+              () => ref.prepareBinding(_references),
+            );
+            tables[key] = binding;
+            (_tableBindings ??= {})[binding] = ref;
           default:
             throw LinkError(
               'Unsupported native import value `${importValue.runtimeType}` for `$key`.',
@@ -308,9 +349,19 @@ class Instance implements wasm.Instance {
       functionTypes: importedFunctionTypes,
       functionReferences: functionReferences,
       memories: memories,
+      tables: tables,
       globalBindings: globalBindings,
       tags: tags,
     );
+  }
+
+  void _bindTableImports() {
+    final tables = _tableImports;
+    if (tables == null) return;
+    for (final entry in tables.entries) {
+      entry.key.bind(entry.value, _references);
+    }
+    _tableImports = null;
   }
 
   List<Object?> _encodePublicArguments(
@@ -448,7 +499,12 @@ class Instance implements wasm.Instance {
           );
           result[name] = wasm.ImportExportKind.tag(tag);
         case wasm.ImportExportKind.table:
-          break;
+          final binding = _runtime.exportedTable(name);
+          final table = (_tableBindings ??= {}).putIfAbsent(
+            binding,
+            () => native_table.fromRuntime(binding, _references),
+          );
+          result[name] = wasm.ImportExportKind.table(table);
       }
     }
     return result;

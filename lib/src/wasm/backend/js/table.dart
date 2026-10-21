@@ -23,13 +23,7 @@ class Table<T extends Value<T, V>, V extends Object?>
   int get length => host.length;
 
   @override
-  V? get(int index) {
-    final raw = host.get(index);
-    if (raw == null) {
-      return null;
-    }
-    return codec.decodeRef(descriptor.element.value, raw);
-  }
+  V? get(int index) => decodeReference(host.get(index)) as V?;
 
   @override
   void set(int index, V? value) {
@@ -47,6 +41,22 @@ class Table<T extends Value<T, V>, V extends Object?>
     }
     return host.grow(delta, codec.encodeRef(descriptor.element.value, value));
   }
+}
+
+Object? decodeReference(JSAny? value) {
+  if (value == null) return null;
+  if (value.typeofEquals('bigint')) {
+    return BigInt.parse(codec.jsString(value).toDart);
+  }
+  if (value.typeofEquals('number') ||
+      value.typeofEquals('boolean') ||
+      value.typeofEquals('string')) {
+    return value.dartify();
+  }
+  throw UnsupportedError(
+    'JS table references support primitive externrefs only; '
+    'object and function references cannot be decoded.',
+  );
 }
 
 JSTable createHost<T extends Value<T, V>, V extends Object?>(
