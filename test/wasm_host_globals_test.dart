@@ -903,6 +903,75 @@ void _referenceGlobalTests() {
       },
     );
 
+    for (final route in ['global', 'import']) {
+      test(
+        'VM awaits a funcref replaced by a synchronous host callback during a call route=$route',
+        () async {
+          var settled = 0;
+          final synchronous = Instance(
+            Module(hostGlobalFixture('funcref_owned').buffer),
+          );
+          final asynchronous = Instance(
+            Module(hostGlobalFixture('reference_host_callbacks').buffer),
+            {
+              'host': {
+                'tick': ImportExportKind.function((List<Object?> _) async {
+                  await Future<void>.delayed(Duration.zero);
+                  settled++;
+                  return null;
+                }),
+                'echo': ImportExportKind.function((args) => args.single),
+                'fail': ImportExportKind.function((_) => null),
+              },
+            },
+          );
+          final function =
+              (asynchronous.exports['increment']! as FunctionImportExportValue)
+                  .ref;
+          final value = Global<FuncRef, Function?>(
+            const GlobalDescriptor<FuncRef, Function?>(
+              value: ValueKind.funcref,
+              mutable: true,
+            ),
+            (synchronous.exports['increment']! as FunctionImportExportValue)
+                .ref,
+          );
+          Object? tick(List<Object?> _) {
+            value.value = function;
+            return null;
+          }
+
+          final relay = Instance(
+            Module(hostGlobalFixture('reference_relay').buffer),
+            {
+              'host': {'value': ImportExportKind.global(value)},
+            },
+          );
+          final consumer = route == 'global'
+              ? Instance(Module(hostGlobalFixture('funcref_mutable').buffer), {
+                  'host': {
+                    'value': ImportExportKind.global(value),
+                    'tick': ImportExportKind.function(tick),
+                  },
+                })
+              : Instance(
+                  Module(hostGlobalFixture('reference_import_mutation').buffer),
+                  {
+                    'host': {
+                      'relay':
+                          relay.exports['call']! as FunctionImportExportValue,
+                      'tick': ImportExportKind.function(tick),
+                    },
+                  },
+                );
+          expect(await _callAsync(consumer, 'call', [41]), 42);
+          expect(settled, 1);
+          expect(value.value, same(function));
+          expect(_call(synchronous, 'calls'), 0);
+        },
+      );
+    }
+
     for (final duringStart in [false, true]) {
       test(
         'VM async funcref remains callable after table copy and global clear start=$duringStart',
@@ -1097,7 +1166,12 @@ void _referenceGlobalTests() {
             (synchronous.exports['increment']! as FunctionImportExportValue)
                 .ref,
           );
-          final relay = _referenceInstance('funcref_mutable', value);
+          final relay = Instance(
+            Module(hostGlobalFixture('reference_relay').buffer),
+            {
+              'host': {'value': ImportExportKind.global(value)},
+            },
+          );
           final relayFunction =
               (relay.exports['call']! as FunctionImportExportValue).ref;
           final copied = Global<FuncRef, Function?>(
@@ -1299,9 +1373,9 @@ void _referenceGlobalTests() {
         expect(exported.value, same(increment));
         expect(_call(source, 'get'), same(increment));
         expect((exported.value as WasmFunction)([9]), 10);
-        final first = _referenceInstance('funcref_mutable', exported);
+        final first = _referenceInstance('reference_relay', exported);
         final second = _referenceInstance(
-          'funcref_mutable',
+          'reference_relay',
           _exportGlobal(first),
         );
         expect(_call(first, 'call', [21]), 22);
@@ -1375,7 +1449,7 @@ void _referenceGlobalTests() {
         fake,
       );
       expect(
-        () => _referenceInstance('funcref_mutable', standalone),
+        () => _referenceInstance('reference_relay', standalone),
         throwsA(isA<LinkError>()),
       );
       expect(standalone.value, same(fake));
@@ -1386,7 +1460,7 @@ void _referenceGlobalTests() {
         ),
         increment,
       );
-      final instance = _referenceInstance('funcref_mutable', value);
+      final instance = _referenceInstance('reference_relay', value);
       expect(
         () => value.value = fake,
         throwsA(

@@ -74,7 +74,10 @@ and originating instance. Guest indirect calls still check the real function
 signature. Calls that reach an asynchronous guest target return a `Future`,
 including when the importing instance has only synchronous host imports.
 Modules with function-returning host imports use awaitable exports so that a
-returned function can be called indirectly in the same guest invocation. Once
+returned function can be called indirectly in the same guest invocation.
+Exports involving function references also use awaitable execution when a
+reachable host callback can replace a target during the call, including through
+an imported function's reference state. Once
 an instance has observed an asynchronous function dependency, its function
 exports continue returning futures if that reference later moves into a table.
 Imports sharing a module and field name must have equivalent signatures when

@@ -309,18 +309,35 @@ final class WasmVm {
     final owner = _functionReferenceTarget(reference).vm;
     if (owner._hasAsyncFunctionReferenceDependency) return true;
     final visited = <WasmVm>{};
+    var mutableReferenceState = false;
+    var hostCallback = false;
     bool visit(WasmVm vm) {
       if (!visited.add(vm)) return false;
       if (vm._hasAsyncFunctionReferenceDependency) return true;
-      if (vm._functions.any(
-        (function) =>
-            function is HostRuntimeFunction &&
-            (!function.supportsSync ||
-                function.type.resultTypeSignatures.any(
-                  (signature) => signature == '70' || signature == '6370',
-                )),
-      )) {
-        return vm._hasAsyncFunctionReferenceDependency = true;
+      mutableReferenceState |= vm._globals.any(
+        (global) =>
+            global.mutable &&
+            (global.valueTypeSignature == '70' ||
+                global.valueTypeSignature == '6370'),
+      );
+      for (var i = 0; i < vm._functions.length; i++) {
+        final function = vm._functions[i];
+        mutableReferenceState |= function.type.paramTypeSignatures.any(
+          (signature) => signature == '70' || signature == '6370',
+        );
+        if (function is! HostRuntimeFunction) continue;
+        final target =
+            _functionRefTargets[functionRefIdFor(
+              namespace: vm._functionRefNamespace,
+              functionIndex: i,
+            )];
+        hostCallback |= identical(target?.vm, vm);
+        if (!function.supportsSync ||
+            function.type.resultTypeSignatures.any(
+              (signature) => signature == '70' || signature == '6370',
+            )) {
+          return vm._hasAsyncFunctionReferenceDependency = true;
+        }
       }
       for (final global in vm._globals) {
         if (global.valueTypeSignature != '70' &&
@@ -348,7 +365,9 @@ final class WasmVm {
       return false;
     }
 
-    return visit(owner);
+    final needsAsync = visit(owner) || (mutableReferenceState && hostCallback);
+    if (needsAsync) owner._hasAsyncFunctionReferenceDependency = true;
+    return needsAsync;
   }
 
   static List<WasmValue> invokePublicFunctionReference(

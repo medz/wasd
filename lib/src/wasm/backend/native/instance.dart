@@ -131,9 +131,15 @@ class Instance implements wasm.Instance {
         if (import.kind == ir_module.WasmImportKind.global) import.globalType!,
       for (final global in decoded.globals) global.type,
     ];
-    _hasFunctionReferences = globalTypes.any(
-      (type) => ReferenceValues.isFunction(type.valueTypeSignature),
-    );
+    _hasFunctionReferences =
+        globalTypes.any(
+          (type) => ReferenceValues.isFunction(type.valueTypeSignature),
+        ) ||
+        functionTypes.values.any(
+          (type) =>
+              type.paramTypeSignatures.any(ReferenceValues.isFunction) ||
+              type.resultTypeSignatures.any(ReferenceValues.isFunction),
+        );
     for (final import in decoded.imports) {
       if (import.kind == ir_module.WasmImportKind.global) {
         ReferenceValues.checkSignature(import.globalType!.valueTypeSignature);
@@ -367,6 +373,7 @@ class Instance implements wasm.Instance {
           if (convert) {
             for (var i = 0; i < type.paramTypeSignatures.length; i++) {
               if (ReferenceValues.isFunction(type.paramTypeSignatures[i])) {
+                _hasFunctionReferences = true;
                 (functionParameters ??= <int>[]).add(i);
               }
             }
