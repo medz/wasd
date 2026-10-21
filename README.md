@@ -89,6 +89,15 @@ functions or `null`, with shared storage across imports and instances.
 Typed, nonnullable and GC global boundaries remain unsupported. JavaScript
 adapter reference limits and store-lifetime retention are documented separately.
 
+Native public `Table` imports and exports also share the interpreter's storage:
+host and guest reads, writes and growth see the same nullable `externref` or
+`funcref` entries. Function tables accept genuine guest functions when bound,
+preserve cross-instance identity and retain indirect-call signature checks.
+Calls that can reach asynchronous table functions return a `Future`.
+Typed, nonnullable, GC and table64 public bindings remain unsupported; existing
+module feature gates are unchanged. JS tables retain primitive-only externref
+conversion and the explicit Dart function-reference limitation.
+
 ## Quick Start
 
 Run included examples:

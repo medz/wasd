@@ -3,7 +3,7 @@
 This implementation and acceptance plan retains the historical `0.5.0`
 (`528b2b828f979d08ba1798f7e8e955e892ab052d`) baseline checked on 2026-10-01.
 Current main retains the released `0.6.1` changes and adds Component
-caller-continuation scheduling and nullable VM reference globals. These changes
+caller-continuation scheduling and nullable VM reference globals and tables. These changes
 and its nine-file execution gate are unreleased;
 `0.6.1` retains its three-file gate. Historical results keep their original
 versions and scope.
@@ -70,8 +70,20 @@ initialization. Connected store owners retain historical external values for
 their shared lifetime; this does not establish per-value garbage collection.
 The JS adapter retains its numeric and primitive-`externref` limits; public JS
 `funcref` remains unsupported. These public regressions are separate from the
-internal Core gate and do not complete table/tag embedding or cross-platform
+internal Core gate and do not complete reference-tag embedding or cross-platform
 interpreter acceptance. See [host globals](host_globals.md).
+
+Unreleased native public tables share the actual interpreter backing for basic
+nullable `externref` / `funcref` imports and exports. Host and guest mutation,
+growth and reexports preserve reference identity and limits. Genuine guest
+functions retain indirect-call type checks and asynchronous dependencies after
+table mutation or copying. Standalone tables can hold ordinary Dart functions;
+successful binding requires backend-owned functions. Failed link validation
+does not commit an unbound table. Typed, nonnullable, GC and table64 public
+bindings are explicitly unsupported. Existing public module feature gates,
+including the multi-table restriction, remain unchanged. JS tables preserve
+their host backing on reimport and support primitive externref conversion;
+object and function values remain outside that conversion contract.
 
 The `0.6.0` Component `map` type and synchronous Canonical ABI adapter slice
 uses source `0220da84209397d9067c19cac83dae969aa85a7b`. Its binary validation,

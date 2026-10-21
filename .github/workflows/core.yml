@@ -80,6 +80,8 @@ jobs:
       - run: dart test -p chrome test/wasm_core_features_test.dart
       - run: dart test -p node test/wasm_host_globals_test.dart
       - run: dart test -p chrome test/wasm_host_globals_test.dart
+      - run: dart test -p node test/wasm_table_test.dart
+      - run: dart test -p chrome test/wasm_table_test.dart
       - run: dart test -p node test/wasm_exception_test.dart
       - run: dart test -p chrome test/wasm_exception_test.dart
       - run: dart test -p node test/component_test.dart

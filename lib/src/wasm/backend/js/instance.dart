@@ -151,7 +151,8 @@ JSAny? _encodeImport(wasm.ImportValue value, bool asynchronous) =>
         ref is _ExportGlobal ? ref._host : (ref as js_global.Global).host,
       wasm.MemoryImportExportValue(:final ref) =>
         (ref as js_memory.Memory).host,
-      wasm.TableImportExportValue(:final ref) => (ref as js_table.Table).host,
+      wasm.TableImportExportValue(:final ref) =>
+        ref is _ExportTable ? ref._host : (ref as js_table.Table).host,
       wasm.TagImportExportValue(:final ref) => (ref as js_tag.Tag).host,
     };
 
@@ -362,15 +363,16 @@ class _ExportTable implements wasm.Table<ExternRef, Object?> {
   int get length => _host.length;
 
   @override
-  Object? get(int index) => _host.get(index)?.dartify();
+  Object? get(int index) => js_table.decodeReference(_host.get(index));
 
   @override
-  void set(int index, Object? value) => _host.set(index, value.jsify());
+  void set(int index, Object? value) =>
+      _host.set(index, codec.encodeExternRef(value));
 
   @override
   int grow(int delta, [Object? value]) {
     if (value == null) return _host.grow(delta);
-    return _host.grow(delta, value.jsify());
+    return _host.grow(delta, codec.encodeExternRef(value));
   }
 }
 

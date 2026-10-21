@@ -175,6 +175,7 @@ final class WasmInstance {
     bool validate = true,
     WasmInstantiationPhaseMeasure? profile,
     List<PredecodedFunction>? predecodedFunctions,
+    void Function()? onImportsValidated,
   }) {
     T phase<T>(String name, T Function() action) {
       final recorder = profile;
@@ -457,6 +458,7 @@ final class WasmInstance {
         }
       }
     });
+    onImportsValidated?.call();
     final importedGlobals = List<RuntimeGlobal>.unmodifiable(globals);
 
     phase('create_memories', () {
