@@ -70,7 +70,8 @@ class Instance implements wasm.Instance {
   late final wasm.Exports _exports;
   Map<String, native_tag.Tag>? _tagBindings;
   final _references = ReferenceValues();
-  bool _hasFunctionReferenceGlobals = false;
+  bool _hasFunctionReferences = false;
+  bool _hasFunctionReturningHostImports = false;
 
   @override
   wasm.Exports get exports => _exports;
@@ -87,9 +88,11 @@ class Instance implements wasm.Instance {
     final decoded = (module as native_module.Module).decoded;
     final functionTypes = <(String, String), ir_module.WasmFunctionType>{};
     for (final import in decoded.imports) {
-      if (import.kind != ir_module.WasmImportKind.function) continue;
+      if (import.kind != ir_module.WasmImportKind.function &&
+          import.kind != ir_module.WasmImportKind.exactFunction) {
+        continue;
+      }
       final type = decoded.types[import.functionTypeIndex!];
-      ReferenceValues.checkFunctionSignature(type);
       final key = (import.module, import.name);
       final previous = functionTypes[key];
       if (previous != null &&
@@ -105,24 +108,16 @@ class Instance implements wasm.Instance {
       }
       functionTypes[key] = type;
     }
-    final allFunctionTypes = [
-      for (final import in decoded.imports)
-        if (import.kind == ir_module.WasmImportKind.function)
-          decoded.types[import.functionTypeIndex!],
-      for (final index in decoded.functionTypeIndices) decoded.types[index],
-    ];
-    for (final export in decoded.exports) {
-      if (export.kind == ir_module.WasmExportKind.function) {
-        ReferenceValues.checkFunctionSignature(allFunctionTypes[export.index]);
-      }
-    }
+    _hasFunctionReturningHostImports = functionTypes.values.any(
+      (type) => type.resultTypeSignatures.any(ReferenceValues.isFunction),
+    );
     final referenceValues = WeakReference(_references);
     final globalTypes = [
       for (final import in decoded.imports)
         if (import.kind == ir_module.WasmImportKind.global) import.globalType!,
       for (final global in decoded.globals) global.type,
     ];
-    _hasFunctionReferenceGlobals = globalTypes.any(
+    _hasFunctionReferences = globalTypes.any(
       (type) => ReferenceValues.isFunction(type.valueTypeSignature),
     );
     for (final import in decoded.imports) {
@@ -283,15 +278,33 @@ class Instance implements wasm.Instance {
     );
   }
 
+  List<Object?> _encodePublicArguments(
+    int reference,
+    ir_module.WasmFunctionType type,
+    List<Object?> args,
+    List<int>? functionParameters,
+  ) {
+    ReferenceValues.checkFunctionSignature(type);
+    final encoded = _references.encodeArguments(type, args);
+    if (functionParameters != null && encoded.length == type.params.length) {
+      for (final index in functionParameters) {
+        final dependency = encoded[index]! as int;
+        if (dependency == -1) continue;
+        _hasFunctionReferences = true;
+        ir_vm.WasmVm.retainFunctionReferenceDependency(reference, dependency);
+      }
+    }
+    return encoded;
+  }
+
   Future<Object?> _invokeAsync(
     String name,
-    List<Object?> args,
+    List<Object?> encoded,
     ir_module.WasmFunctionType type,
     bool convert,
   ) async {
     try {
-      final encoded = convert ? _references.encodeArguments(type, args) : args;
-      final result = _hasFunctionReferenceGlobals
+      final result = _hasFunctionReferences || _hasFunctionReturningHostImports
           ? await _runtime.invokeAsyncForced(name, encoded)
           : await _runtime.invokeAsync(name, encoded);
       if (!convert) return result;
@@ -315,12 +328,34 @@ class Instance implements wasm.Instance {
           final reference = _runtime.exportedFunctionReference(name);
           final type = _runtime.exportedFunctionType(name);
           final convert = ReferenceValues.needsConversion(type);
+          if (type.resultTypeSignatures.any(ReferenceValues.isFunction)) {
+            _hasFunctionReferences = true;
+          }
+          List<int>? functionParameters;
+          if (convert) {
+            for (var i = 0; i < type.paramTypeSignatures.length; i++) {
+              if (ReferenceValues.isFunction(type.paramTypeSignatures[i])) {
+                (functionParameters ??= <int>[]).add(i);
+              }
+            }
+          }
           if (_runtime.hasAsyncOnlyHostImports) {
             result[name] = wasm.ImportExportKind.function(
               _references.registerFunction(
                 reference,
-                (List<Object?> args) async =>
-                    _invokeAsync(name, args, type, convert),
+                (List<Object?> args) async => _invokeAsync(
+                  name,
+                  convert
+                      ? _encodePublicArguments(
+                          reference,
+                          type,
+                          args,
+                          functionParameters,
+                        )
+                      : args,
+                  type,
+                  convert,
+                ),
               ),
             );
             continue;
@@ -328,17 +363,23 @@ class Instance implements wasm.Instance {
           result[name] = wasm.ImportExportKind.function(
             _references.registerFunction(reference, (List<Object?> args) {
               try {
-                if (_hasFunctionReferenceGlobals &&
-                    ir_vm.WasmVm.functionReferenceNeedsAsync(reference)) {
-                  return _invokeAsync(name, args, type, convert);
+                final encoded = convert
+                    ? _encodePublicArguments(
+                        reference,
+                        type,
+                        args,
+                        functionParameters,
+                      )
+                    : args;
+                if (_hasFunctionReturningHostImports ||
+                    (_hasFunctionReferences &&
+                        ir_vm.WasmVm.functionReferenceNeedsAsync(reference))) {
+                  return _invokeAsync(name, encoded, type, convert);
                 }
-                if (!convert) return _runtime.invoke(name, args);
+                if (!convert) return _runtime.invoke(name, encoded);
                 return _references.decodeResults(
                   type,
-                  _runtime.invoke(
-                    name,
-                    _references.encodeArguments(type, args),
-                  ),
+                  _runtime.invoke(name, encoded),
                 );
               } on HostCallbackFailure catch (failure) {
                 failure.rethrowOriginal();

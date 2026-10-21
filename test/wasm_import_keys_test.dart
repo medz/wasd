@@ -14,6 +14,7 @@ import 'package:wasd/src/wasm/backend/native/interpreter/table.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/value.dart';
 import 'package:wasd/wasi.dart';
 import 'package:wasd/wasm.dart' show WasmComponent;
+import 'package:wasd/wasm.dart' as public_api;
 
 final _features = WasmFeatureSet.layeredDefaults(
   profile: WasmFeatureProfile.full,
@@ -107,6 +108,47 @@ WasmImports _imports(
 }
 
 void main() {
+  for (final names in ['colon', 'empty', 'unicode']) {
+    for (final asynchronous in [false, true]) {
+      test(
+        'public exact $names function imports retain export types async=$asynchronous',
+        () async {
+          final decoded = _module('exact_$names');
+          final imports = <String, public_api.ModuleImports>{};
+          for (var i = 0; i < decoded.imports.length; i++) {
+            final import = decoded.imports[i];
+            final Object result = i == 0 ? 11 : BigInt.from(22);
+            (imports[import.module] ??=
+                {})[import.name] = public_api.ImportExportKind.function(
+              asynchronous
+                  ? (List<Object?> _) async => result
+                  : (List<Object?> _) => result,
+            );
+          }
+          final instance = public_api.Instance(
+            public_api.Module(
+              File(
+                'test/fixtures/import_keys/exact_$names.wasm',
+              ).readAsBytesSync().buffer,
+            ),
+            imports,
+          );
+          final first =
+              instance.exports['first']!
+                  as public_api.FunctionImportExportValue;
+          final second =
+              instance.exports['second']!
+                  as public_api.FunctionImportExportValue;
+          expect(await Future<Object?>.sync(() => first.ref([])), 11);
+          expect(
+            _integer(await Future<Object?>.sync(() => second.ref([]))),
+            BigInt.from(22),
+          );
+        },
+      );
+    }
+  }
+
   for (final side in ['first', 'second']) {
     test(
       'Component Core $side connections preserve import identities',

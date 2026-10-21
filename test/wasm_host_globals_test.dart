@@ -952,6 +952,210 @@ void _referenceGlobalTests() {
       );
     }
 
+    for (final privateStash in [false, true]) {
+      for (final ownAsync in [false, true]) {
+        test(
+          'VM funcref parameters survive table storage private=$privateStash ownAsync=$ownAsync',
+          () async {
+            var ticks = 0;
+            final source = Instance(
+              Module(hostGlobalFixture('reference_host_callbacks').buffer),
+              {
+                'host': {
+                  'tick': ImportExportKind.function((List<Object?> _) async {
+                    await Future<void>.delayed(Duration.zero);
+                    ticks++;
+                    return null;
+                  }),
+                  'echo': ImportExportKind.function((args) => args.single),
+                  'fail': ImportExportKind.function((_) => null),
+                },
+              },
+            );
+            final function =
+                (source.exports['increment']! as FunctionImportExportValue).ref;
+            final consumer = Instance(
+              Module(
+                hostGlobalFixture(
+                  ownAsync
+                      ? 'reference_parameter_own_async'
+                      : 'reference_parameter_async',
+                ).buffer,
+              ),
+              {
+                if (ownAsync)
+                  'host': {
+                    'tick': ImportExportKind.function(
+                      (List<Object?> _) async => null,
+                    ),
+                  },
+              },
+            );
+            if (privateStash) {
+              final stash =
+                  (consumer.exports['reference']! as GlobalImportExportValue)
+                          .ref
+                          .value
+                      as WasmFunction;
+              await Future<Object?>.sync(() => stash([function]));
+            } else {
+              await _callAsync(consumer, 'stash', [function]);
+            }
+            expect(ticks, 0);
+            expect(await _callAsync(consumer, 'call', [41]), 42);
+            expect(ticks, 1);
+          },
+        );
+      }
+    }
+
+    for (final route in ['getter', 'host result']) {
+      test(
+        'VM async function ingress remains awaitable through $route',
+        () async {
+          var ticks = 0;
+          final source = Instance(
+            Module(hostGlobalFixture('reference_host_callbacks').buffer),
+            {
+              'host': {
+                'tick': ImportExportKind.function((List<Object?> _) async {
+                  await Future<void>.delayed(Duration.zero);
+                  ticks++;
+                  return null;
+                }),
+                'echo': ImportExportKind.function((args) => args.single),
+                'fail': ImportExportKind.function((_) => null),
+              },
+            },
+          );
+          final function =
+              (source.exports['increment']! as FunctionImportExportValue).ref;
+          final consumer = Instance(
+            Module(
+              hostGlobalFixture(
+                route == 'getter'
+                    ? 'reference_parameter_getter'
+                    : 'reference_host_function_result',
+              ).buffer,
+            ),
+            {
+              if (route == 'host result')
+                'host': {'provide': ImportExportKind.function((_) => function)},
+            },
+          );
+          if (route == 'getter') {
+            final stash = _call(consumer, 'reference') as WasmFunction;
+            await Future<Object?>.sync(() => stash([function]));
+          } else {
+            await _callAsync(consumer, 'stash');
+          }
+          expect(ticks, 0);
+          expect(await _callAsync(consumer, 'call', [41]), 42);
+          expect(ticks, 1);
+          if (route == 'host result') {
+            expect(await _callAsync(consumer, 'direct', [41]), 42);
+            expect(ticks, 2);
+            final hidden =
+                (consumer.exports['reference']! as GlobalImportExportValue)
+                        .ref
+                        .value
+                    as WasmFunction;
+            expect(await Future<Object?>.sync(() => hidden([41])), 42);
+            expect(ticks, 3);
+          }
+        },
+      );
+    }
+
+    for (final duringStart in [false, true]) {
+      test(
+        'VM stored functions observe a source becoming asynchronous start=$duringStart',
+        () async {
+          var ticks = 0;
+          final synchronous = Instance(
+            Module(hostGlobalFixture('funcref_owned').buffer),
+          );
+          final asynchronous = Instance(
+            Module(hostGlobalFixture('reference_host_callbacks').buffer),
+            {
+              'host': {
+                'tick': ImportExportKind.function((List<Object?> _) async {
+                  await Future<void>.delayed(Duration.zero);
+                  ticks++;
+                  return null;
+                }),
+                'echo': ImportExportKind.function((args) => args.single),
+                'fail': ImportExportKind.function((_) => null),
+              },
+            },
+          );
+          final value = Global<FuncRef, Function?>(
+            const GlobalDescriptor<FuncRef, Function?>(
+              value: ValueKind.funcref,
+              mutable: true,
+            ),
+            (synchronous.exports['increment']! as FunctionImportExportValue)
+                .ref,
+          );
+          final relay = _referenceInstance('funcref_mutable', value);
+          final relayFunction =
+              (relay.exports['call']! as FunctionImportExportValue).ref;
+          final copied = Global<FuncRef, Function?>(
+            const GlobalDescriptor<FuncRef, Function?>(
+              value: ValueKind.funcref,
+              mutable: true,
+            ),
+            relayFunction,
+          );
+          final consumer = duringStart
+              ? Instance(
+                  Module(
+                    hostGlobalFixture('reference_table_async_start').buffer,
+                  ),
+                  {
+                    'host': {'value': ImportExportKind.global(copied)},
+                  },
+                )
+              : Instance(
+                  Module(hostGlobalFixture('reference_parameter_async').buffer),
+                );
+          if (duringStart) {
+            expect(copied.value, isNull);
+          } else {
+            expect(
+              _call(consumer, 'stash', [relayFunction]),
+              isNot(isA<Future>()),
+            );
+          }
+          expect(_call(consumer, 'call', [41]), 42);
+          value.value =
+              (asynchronous.exports['increment']! as FunctionImportExportValue)
+                  .ref;
+          expect(await _callAsync(consumer, 'call', [41]), 42);
+          expect(ticks, 1);
+        },
+      );
+    }
+
+    test(
+      'VM unsupported private function rejects before guest side effects',
+      () {
+        final instance = Instance(
+          Module(hostGlobalFixture('reference_hidden_signature').buffer),
+        );
+        final hidden =
+            (instance.exports['reference']! as GlobalImportExportValue)
+                    .ref
+                    .value
+                as WasmFunction;
+        expect(() => hidden([]), throwsUnsupportedError);
+        expect(
+          (instance.exports['calls']! as GlobalImportExportValue).ref.value,
+          0,
+        );
+      },
+    );
+
     test(
       'VM reference host callbacks preserve externref argument and result identity',
       () {
@@ -1200,6 +1404,20 @@ void _referenceGlobalTests() {
         );
         expect(starts, 0);
         expect(memory.buffer.asUint8List()[0], 0);
+      },
+    );
+
+    test(
+      'VM unused unsupported function signatures do not block numeric exports',
+      () {
+        final instance = Instance(
+          Module(hostGlobalFixture('reference_unsupported_function').buffer),
+        );
+        expect(_call(instance, 'answer'), 42);
+        expect(
+          () => _call(instance, 'unused', [Object()]),
+          throwsUnsupportedError,
+        );
       },
     );
 

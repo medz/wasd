@@ -244,6 +244,7 @@ final class WasmVm {
   final int maxCallDepth;
   WasmAsyncFunctionRefInvoker? _asyncFunctionRefInvoker;
   bool _hasAsyncFunctionReferenceDependency = false;
+  Set<WasmVm>? _functionReferenceDependencies;
 
   static const int _nullRef = -1;
   static const int _heapAny = -18;
@@ -289,13 +290,29 @@ final class WasmVm {
       _functionRefTargets[reference] ??
       (throw ArgumentError('Unknown function reference.'));
 
+  static void retainFunctionReferenceDependency(int reference, int dependency) {
+    if (dependency == _nullRef) return;
+    final vm = _functionReferenceTarget(reference).vm;
+    final source = _functionReferenceTarget(dependency).vm;
+    if (!identical(vm, source)) {
+      (vm._functionReferenceDependencies ??= <WasmVm>{}).add(source);
+    }
+  }
+
   static bool functionReferenceNeedsAsync(int reference) {
+    final owner = _functionReferenceTarget(reference).vm;
+    if (owner._hasAsyncFunctionReferenceDependency) return true;
     final visited = <WasmVm>{};
     bool visit(WasmVm vm) {
       if (!visited.add(vm)) return false;
       if (vm._hasAsyncFunctionReferenceDependency) return true;
       if (vm._functions.any(
-        (function) => function is HostRuntimeFunction && !function.supportsSync,
+        (function) =>
+            function is HostRuntimeFunction &&
+            (!function.supportsSync ||
+                function.type.resultTypeSignatures.any(
+                  (signature) => signature == '70' || signature == '6370',
+                )),
       )) {
         return vm._hasAsyncFunctionReferenceDependency = true;
       }
@@ -305,16 +322,27 @@ final class WasmVm {
           continue;
         }
         final target = _functionRefTargets[global.value.asI32()];
+        if (target != null && !identical(vm, target.vm)) {
+          (vm._functionReferenceDependencies ??= <WasmVm>{}).add(target.vm);
+        }
         if (target != null && visit(target.vm)) {
           // A guest may move this reference into a table and clear the global.
           // Retain async capability without scanning table entries on each call.
           return vm._hasAsyncFunctionReferenceDependency = true;
         }
       }
+      final dependencies = vm._functionReferenceDependencies;
+      if (dependencies != null) {
+        for (final dependency in dependencies) {
+          if (visit(dependency)) {
+            return vm._hasAsyncFunctionReferenceDependency = true;
+          }
+        }
+      }
       return false;
     }
 
-    return visit(_functionReferenceTarget(reference).vm);
+    return visit(owner);
   }
 
   static List<WasmValue> invokePublicFunctionReference(

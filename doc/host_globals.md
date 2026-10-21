@@ -72,12 +72,16 @@ must be a genuine Wasm function from this backend; an arbitrary Dart
 closure is rejected. Re-exporting a function reference preserves its identity
 and originating instance. Guest indirect calls still check the real function
 signature. Calls that reach an asynchronous guest target return a `Future`,
-including when the importing instance has only synchronous host imports. Once
+including when the importing instance has only synchronous host imports.
+Modules with function-returning host imports use awaitable exports so that a
+returned function can be called indirectly in the same guest invocation. Once
 an instance has observed an asynchronous function dependency, its function
 exports continue returning futures if that reference later moves into a table.
 Imports sharing a module and field name must have matching encoded signatures when
 reference conversion is required; conflicting signatures are rejected before
-data initialization or start functions run.
+data initialization or start functions run. An unused function export with an
+unsupported reference signature does not prevent instantiation; calling that
+export is rejected before guest execution.
 
 Connected instances, globals and exported functions share a reference-store
 lifetime. The store retains distinct external values previously passed through

@@ -69,6 +69,21 @@ final class ReferenceValues {
     other._peers.add(this);
   }
 
+  _ExternalReference? _record(Object value) {
+    final existing = _records[value];
+    if (existing != null) return existing;
+    final visited = <ReferenceValues>{this};
+    final pending = _peers.toList();
+    while (pending.isNotEmpty) {
+      final peer = pending.removeLast();
+      if (!visited.add(peer)) continue;
+      final entry = peer._records[value];
+      if (entry != null) return _records[value] = entry;
+      pending.addAll(peer._peers);
+    }
+    return null;
+  }
+
   static bool isExtern(String? signature) =>
       signature == '6f' || signature == '636f';
 
@@ -112,7 +127,7 @@ final class ReferenceValues {
           value is num || value is bool || value is String || value is Record;
       final record = value is Record;
       var entry = record
-          ? _records[value]
+          ? _record(value)
           : primitive
           ? _primitives[value]?.target
           : _objects[value];
@@ -157,6 +172,7 @@ final class ReferenceValues {
       final entry = _externals[value]?.target;
       if (entry == null) throw StateError('Unknown external reference.');
       _values[entry.id] = entry;
+      if (entry.value is Record) _records[entry.value] = entry;
       return entry.value;
     }
     if (isFunction(signature)) {
@@ -185,25 +201,13 @@ final class ReferenceValues {
       return existing;
     }
     final type = WasmVm.functionReferenceType(reference);
-    if (WasmVm.functionReferenceNeedsAsync(reference)) {
-      return registerFunction(reference, (List<Object?> args) async {
-        try {
-          final results = await WasmVm.invokePublicFunctionReferenceAsync(
-            reference,
-            _typedArguments(type, args),
-          );
-          return _publicResults(type, results);
-        } catch (error, stack) {
-          rethrowPublicError(error, stack);
-        }
-      });
-    }
     return registerFunction(reference, (List<Object?> args) {
       try {
+        final encoded = _typedArguments(reference, type, args);
         if (WasmVm.functionReferenceNeedsAsync(reference)) {
           return WasmVm.invokePublicFunctionReferenceAsync(
             reference,
-            _typedArguments(type, args),
+            encoded,
           ).then(
             (results) => _publicResults(type, results),
             onError: (Object error, StackTrace stack) =>
@@ -212,10 +216,7 @@ final class ReferenceValues {
         }
         return _publicResults(
           type,
-          WasmVm.invokePublicFunctionReference(
-            reference,
-            _typedArguments(type, args),
-          ),
+          WasmVm.invokePublicFunctionReference(reference, encoded),
         );
       } catch (error, stack) {
         rethrowPublicError(error, stack);
@@ -223,11 +224,21 @@ final class ReferenceValues {
     });
   }
 
-  List<WasmValue> _typedArguments(WasmFunctionType type, List<Object?> args) {
+  List<WasmValue> _typedArguments(
+    int reference,
+    WasmFunctionType type,
+    List<Object?> args,
+  ) {
+    checkFunctionSignature(type);
     if (args.length != type.params.length) {
       throw ArgumentError('Function expects ${type.params.length} arguments.');
     }
     final encoded = encodeArguments(type, args);
+    for (var i = 0; i < encoded.length; i++) {
+      if (isFunction(type.paramTypeSignatures[i])) {
+        WasmVm.retainFunctionReferenceDependency(reference, encoded[i]! as int);
+      }
+    }
     return [
       for (var i = 0; i < encoded.length; i++)
         WasmValue.fromExternal(type.params[i], encoded[i]),
