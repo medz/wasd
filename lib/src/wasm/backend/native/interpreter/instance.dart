@@ -11487,6 +11487,21 @@ final class WasmInstance {
       throw FormatException('Start function must have signature [] -> [].');
     }
 
+    if (globals.any(
+      (global) =>
+          global.valueTypeSignature == '70' ||
+          global.valueTypeSignature == '6370',
+    )) {
+      // Start may move an imported async reference into a table and clear its
+      // global before any exported function can observe that dependency.
+      WasmVm.functionReferenceNeedsAsync(
+        WasmVm.functionRefIdFor(
+          namespace: _functionRefNamespace,
+          functionIndex: startIndex,
+        ),
+      );
+    }
+
     final results = _vm.invokeFunction(startIndex, const []);
     if (results.isNotEmpty) {
       throw StateError('Start function must not produce a value.');

@@ -903,46 +903,54 @@ void _referenceGlobalTests() {
       },
     );
 
-    test(
-      'VM async funcref remains callable after table copy and global clear',
-      () async {
-        var ticks = 0;
-        final source = Instance(
-          Module(hostGlobalFixture('reference_host_callbacks').buffer),
-          {
-            'host': {
-              'tick': ImportExportKind.function((List<Object?> _) async {
-                await Future<void>.delayed(Duration.zero);
-                ticks++;
-                return null;
-              }),
-              'echo': ImportExportKind.function((args) => args.single),
-              'fail': ImportExportKind.function((_) => null),
+    for (final duringStart in [false, true]) {
+      test(
+        'VM async funcref remains callable after table copy and global clear start=$duringStart',
+        () async {
+          var ticks = 0;
+          final source = Instance(
+            Module(hostGlobalFixture('reference_host_callbacks').buffer),
+            {
+              'host': {
+                'tick': ImportExportKind.function((List<Object?> _) async {
+                  await Future<void>.delayed(Duration.zero);
+                  ticks++;
+                  return null;
+                }),
+                'echo': ImportExportKind.function((args) => args.single),
+                'fail': ImportExportKind.function((_) => null),
+              },
             },
-          },
-        );
-        final value = Global<FuncRef, Function?>(
-          const GlobalDescriptor<FuncRef, Function?>(
-            value: ValueKind.funcref,
-            mutable: true,
-          ),
-          (source.exports['increment']! as FunctionImportExportValue).ref,
-        );
-        final consumer = Instance(
-          Module(hostGlobalFixture('reference_table_async').buffer),
-          {
-            'host': {'value': ImportExportKind.global(value)},
-          },
-        );
-        await _callAsync(consumer, 'stash');
-        expect(value.value, isNull);
-        expect(ticks, 0);
-        expect(await _callAsync(consumer, 'call', [41]), 42);
-        expect(ticks, 1);
-        expect(value.value, isNull);
-        expect(await _callAsync(source, 'calls'), 1);
-      },
-    );
+          );
+          final value = Global<FuncRef, Function?>(
+            const GlobalDescriptor<FuncRef, Function?>(
+              value: ValueKind.funcref,
+              mutable: true,
+            ),
+            (source.exports['increment']! as FunctionImportExportValue).ref,
+          );
+          final consumer = Instance(
+            Module(
+              hostGlobalFixture(
+                duringStart
+                    ? 'reference_table_async_start'
+                    : 'reference_table_async',
+              ).buffer,
+            ),
+            {
+              'host': {'value': ImportExportKind.global(value)},
+            },
+          );
+          if (!duringStart) await _callAsync(consumer, 'stash');
+          expect(value.value, isNull);
+          expect(ticks, 0);
+          expect(await _callAsync(consumer, 'call', [41]), 42);
+          expect(ticks, 1);
+          expect(value.value, isNull);
+          expect(await _callAsync(source, 'calls'), 1);
+        },
+      );
+    }
 
     test(
       'VM reference host callbacks preserve externref argument and result identity',
