@@ -4697,6 +4697,11 @@ final class WasmVm {
   }
 
   bool _functionTypeEquals(WasmFunctionType a, WasmFunctionType b) {
+    String canonical(String signature) => switch (signature) {
+      '636f' => '6f',
+      '6370' => '70',
+      _ => signature,
+    };
     if (!a.isFunctionType || !b.isFunctionType) {
       return false;
     }
@@ -4713,12 +4718,14 @@ final class WasmVm {
       return false;
     }
     for (var i = 0; i < a.paramTypeSignatures.length; i++) {
-      if (a.paramTypeSignatures[i] != b.paramTypeSignatures[i]) {
+      if (canonical(a.paramTypeSignatures[i]) !=
+          canonical(b.paramTypeSignatures[i])) {
         return false;
       }
     }
     for (var i = 0; i < a.resultTypeSignatures.length; i++) {
-      if (a.resultTypeSignatures[i] != b.resultTypeSignatures[i]) {
+      if (canonical(a.resultTypeSignatures[i]) !=
+          canonical(b.resultTypeSignatures[i])) {
         return false;
       }
     }

@@ -1,5 +1,9 @@
 import 'package:test/test.dart';
 import 'package:wasd/wasm.dart';
+import 'package:wasd/src/wasm/backend/native/global.dart' as native_global;
+import 'package:wasd/src/wasm/backend/native/interpreter/vm.dart' show WasmVm;
+import 'package:wasd/src/wasm/backend/native/reference_values.dart'
+    show ReferenceValues;
 
 import 'support/host_global_fixtures.dart';
 import 'support/runtime_environment.dart';
@@ -687,6 +691,75 @@ void _referenceGlobalTests() {
         );
       });
       return;
+    }
+
+    for (final kind in ['extern', 'func']) {
+      for (final sourceEncoding in ['short', 'explicit']) {
+        for (final operation in ['ref', 'indirect']) {
+          test(
+            'VM foreign nullable $kind $sourceEncoding call_$operation',
+            () async {
+              final provider = Instance(
+                Module(hostGlobalFixture('reference_nullable_provider').buffer),
+              );
+              final consumer = Instance(
+                Module(hostGlobalFixture('reference_nullable_foreign').buffer),
+                {
+                  'provider': {
+                    for (final name in [
+                      'extern_short',
+                      'extern_explicit',
+                      'func_short',
+                      'func_explicit',
+                    ])
+                      name:
+                          provider.exports[name]! as FunctionImportExportValue,
+                  },
+                },
+              );
+              final payload = kind == 'extern'
+                  ? Object()
+                  : (provider.exports['func_short']!
+                            as FunctionImportExportValue)
+                        .ref;
+              final name = '${kind}_${sourceEncoding}_$operation';
+              expect(
+                await _callAsync(consumer, name, [payload]),
+                same(payload),
+              );
+              final function =
+                  (consumer.exports[name]! as FunctionImportExportValue).ref;
+              final reference = ReferenceValues.functionReference(function)!;
+              for (final value in [payload, null]) {
+                final box =
+                    (kind == 'extern'
+                            ? _externGlobal(value)
+                            : Global<FuncRef, Function?>(
+                                const GlobalDescriptor<FuncRef, Function?>(
+                                  value: ValueKind.funcref,
+                                ),
+                                value as Function?,
+                              ))
+                        as native_global.Global;
+                // Exercise the synchronous VM path using a genuine function
+                // reference and a carrier produced by the public Global API.
+                final results = WasmVm.invokePublicFunctionReference(
+                  reference,
+                  [box.host.value],
+                );
+                expect(results, hasLength(1));
+                expect(
+                  box.references.decode(
+                    kind == 'extern' ? '6f' : '70',
+                    results.single.toExternal(),
+                  ),
+                  same(value),
+                );
+              }
+            },
+          );
+        }
+      }
     }
 
     for (final asyncHost in [false, true]) {

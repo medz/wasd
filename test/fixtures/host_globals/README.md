@@ -22,3 +22,10 @@ not rewrite the underlying signaling NaN bits in the Dart VM.
 The name-boundary fixtures use valid `::`-containing names. One verifies unused
 colliding host pairs cannot satisfy an import. The other checks distinct declared
 pairs retain independent bindings under the shared unambiguous import encoding.
+
+`reference_nullable_provider` and `reference_nullable_foreign` deliberately
+retain explicit nullable reference bytes (`63 6f` and `63 70`) in their second
+and fourth function types, for both parameters and results. `wasm-tools parse`
+canonicalizes those WAT types to the short forms; regenerating these binaries
+must restore the explicit bytes and validate the result to preserve the
+cross-instance synchronous signature regression.
