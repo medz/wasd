@@ -45,6 +45,9 @@ final class ReferenceValues {
     }
   });
   static final _functionOwners = Expando<_FunctionReference>();
+  static int? functionReference(Function function) =>
+      _functionOwners[function]?.id;
+
   static bool functionNeedsAsync(Function function) {
     final reference = _functionOwners[function];
     return reference != null &&

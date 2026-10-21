@@ -17,6 +17,13 @@ import 'module.dart' as native_module;
 import 'tag.dart' as native_tag;
 import 'reference_values.dart';
 
+String _canonicalSignature(String signature) =>
+    ReferenceValues.isExtern(signature)
+    ? '6f'
+    : ReferenceValues.isFunction(signature)
+    ? '70'
+    : signature;
+
 final class _UnexpectedAsyncHostResult extends UnsupportedError
     implements WasmHostControlFlowException {
   _UnexpectedAsyncHostResult(String key)
@@ -72,6 +79,7 @@ class Instance implements wasm.Instance {
   final _references = ReferenceValues();
   bool _hasFunctionReferences = false;
   bool _hasFunctionReturningHostImports = false;
+  bool _hasBackendFunctionImports = false;
 
   @override
   wasm.Exports get exports => _exports;
@@ -82,6 +90,8 @@ class Instance implements wasm.Instance {
   ) {
     final functions = <String, ir_imports.WasmHostFunction>{};
     final asyncFunctions = <String, ir_imports.WasmAsyncHostFunction>{};
+    final importedFunctionTypes = <String, ir_module.WasmFunctionType>{};
+    final functionReferences = <String, int>{};
     final memories = <String, ir_memory.WasmMemory>{};
     final globalBindings = <String, ir_global.RuntimeGlobal>{};
     final tags = <String, ir_imports.WasmTagImport>{};
@@ -98,10 +108,14 @@ class Instance implements wasm.Instance {
       if (previous != null &&
           (ReferenceValues.needsConversion(previous) ||
               ReferenceValues.needsConversion(type)) &&
-          (previous.paramTypeSignatures.join(',') !=
-                  type.paramTypeSignatures.join(',') ||
-              previous.resultTypeSignatures.join(',') !=
-                  type.resultTypeSignatures.join(','))) {
+          (previous.paramTypeSignatures.map(_canonicalSignature).join(',') !=
+                  type.paramTypeSignatures.map(_canonicalSignature).join(',') ||
+              previous.resultTypeSignatures
+                      .map(_canonicalSignature)
+                      .join(',') !=
+                  type.resultTypeSignatures
+                      .map(_canonicalSignature)
+                      .join(','))) {
         throw UnsupportedError(
           'Reference function imports with the same name require matching signatures.',
         );
@@ -171,8 +185,18 @@ class Instance implements wasm.Instance {
         final importValue = importEntry.value;
         switch (importValue) {
           case wasm.FunctionImportExportValue(:final ref):
+            final reference = ReferenceValues.functionReference(ref);
+            if (reference != null) {
+              importedFunctionTypes[key] = ir_vm.WasmVm.functionReferenceType(
+                reference,
+              );
+              functionReferences[key] = reference;
+            }
             final declaredType =
                 functionTypes[(moduleEntry.key, importEntry.key)];
+            if (reference != null && declaredType != null) {
+              _hasBackendFunctionImports = true;
+            }
             final type =
                 declaredType != null &&
                     ReferenceValues.needsConversion(declaredType)
@@ -181,7 +205,7 @@ class Instance implements wasm.Instance {
             final isAsyncTyped =
                 (ref is Future<Object?> Function(List<Object?>) &&
                     ref is! Never Function(List<Object?>)) ||
-                ReferenceValues.functionNeedsAsync(ref);
+                (reference != null && ReferenceValues.functionNeedsAsync(ref));
             if (!isAsyncTyped) {
               Object? callback(List<Object?> args) {
                 try {
@@ -206,8 +230,10 @@ class Instance implements wasm.Instance {
               }
 
               functions[key] = callback;
-              asyncFunctions[key] = (args) async => callback(args);
-              continue;
+              if (reference == null) {
+                asyncFunctions[key] = (args) async => callback(args);
+                continue;
+              }
             }
             asyncFunctions[key] = (List<Object?> args) async {
               try {
@@ -272,6 +298,8 @@ class Instance implements wasm.Instance {
     return ir_imports.WasmImports(
       functions: functions,
       asyncFunctions: asyncFunctions,
+      functionTypes: importedFunctionTypes,
+      functionReferences: functionReferences,
       memories: memories,
       globalBindings: globalBindings,
       tags: tags,
@@ -304,7 +332,10 @@ class Instance implements wasm.Instance {
     bool convert,
   ) async {
     try {
-      final result = _hasFunctionReferences || _hasFunctionReturningHostImports
+      final result =
+          _hasFunctionReferences ||
+              _hasFunctionReturningHostImports ||
+              _hasBackendFunctionImports
           ? await _runtime.invokeAsyncForced(name, encoded)
           : await _runtime.invokeAsync(name, encoded);
       if (!convert) return result;
@@ -372,7 +403,7 @@ class Instance implements wasm.Instance {
                       )
                     : args;
                 if (_hasFunctionReturningHostImports ||
-                    (_hasFunctionReferences &&
+                    ((_hasFunctionReferences || _hasBackendFunctionImports) &&
                         ir_vm.WasmVm.functionReferenceNeedsAsync(reference))) {
                   return _invokeAsync(name, encoded, type, convert);
                 }

@@ -77,7 +77,7 @@ Modules with function-returning host imports use awaitable exports so that a
 returned function can be called indirectly in the same guest invocation. Once
 an instance has observed an asynchronous function dependency, its function
 exports continue returning futures if that reference later moves into a table.
-Imports sharing a module and field name must have matching encoded signatures when
+Imports sharing a module and field name must have equivalent signatures when
 reference conversion is required; conflicting signatures are rejected before
 data initialization or start functions run. An unused function export with an
 unsupported reference signature does not prevent instantiation; calling that

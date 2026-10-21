@@ -240,6 +240,14 @@ final class WasmInstance {
                 );
               }
             }
+            final importedReference = imports.functionReferences[import.key];
+            if (importedReference != null) {
+              WasmVm.bindFunctionReference(
+                namespace: functionRefNamespace,
+                functionIndex: functions.length,
+                reference: importedReference,
+              );
+            }
             final syncCallback =
                 callback ??
                 (List<Object?> _) => throw UnsupportedError(

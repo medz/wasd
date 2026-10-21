@@ -1067,9 +1067,9 @@ void _referenceGlobalTests() {
       );
     }
 
-    for (final duringStart in [false, true]) {
+    for (final route in ['parameter', 'start', 'function import']) {
       test(
-        'VM stored functions observe a source becoming asynchronous start=$duringStart',
+        'VM stored functions observe a source becoming asynchronous route=$route',
         () async {
           var ticks = 0;
           final synchronous = Instance(
@@ -1107,7 +1107,7 @@ void _referenceGlobalTests() {
             ),
             relayFunction,
           );
-          final consumer = duringStart
+          final consumer = route == 'start'
               ? Instance(
                   Module(
                     hostGlobalFixture('reference_table_async_start').buffer,
@@ -1116,12 +1116,19 @@ void _referenceGlobalTests() {
                     'host': {'value': ImportExportKind.global(copied)},
                   },
                 )
+              : route == 'function import'
+              ? Instance(
+                  Module(hostGlobalFixture('reference_import_call').buffer),
+                  {
+                    'host': {'relay': ImportExportKind.function(relayFunction)},
+                  },
+                )
               : Instance(
                   Module(hostGlobalFixture('reference_parameter_async').buffer),
                 );
-          if (duringStart) {
+          if (route == 'start') {
             expect(copied.value, isNull);
-          } else {
+          } else if (route == 'parameter') {
             expect(
               _call(consumer, 'stash', [relayFunction]),
               isNot(isA<Future>()),
@@ -1136,6 +1143,86 @@ void _referenceGlobalTests() {
         },
       );
     }
+
+    test(
+      'VM imported guest ref.func globals preserve the originating function',
+      () async {
+        final source = Instance(
+          Module(hostGlobalFixture('funcref_owned').buffer),
+        );
+        final function =
+            (source.exports['increment']! as FunctionImportExportValue).ref;
+        final module = Module(
+          hostGlobalFixture('reference_import_alias').buffer,
+        );
+        final alias = Instance(module, {
+          'host': {'f': ImportExportKind.function(function)},
+        });
+        final global =
+            (alias.exports['reference']! as GlobalImportExportValue).ref;
+        expect(global.value, same(function));
+        expect(
+          (alias.exports['direct']! as FunctionImportExportValue).ref,
+          same(function),
+        );
+        expect(await _callAsync(alias, 'get'), same(function));
+        final rebound = Instance(module, {
+          'host': {
+            'f': ImportExportKind.function(global.value as WasmFunction),
+          },
+        });
+        expect(
+          (rebound.exports['reference']! as GlobalImportExportValue).ref.value,
+          same(function),
+        );
+        expect(await _callAsync(rebound, 'call', [41]), 42);
+      },
+    );
+
+    test('VM imported guest function types reject before start', () {
+      final source = Instance(
+        Module(hostGlobalFixture('funcref_owned').buffer),
+      );
+      final function =
+          (source.exports['increment']! as FunctionImportExportValue).ref;
+      var starts = 0;
+      expect(
+        () => Instance(
+          Module(hostGlobalFixture('reference_import_signature').buffer),
+          {
+            'host': {
+              'f': ImportExportKind.function(function),
+              'started': ImportExportKind.function((_) {
+                starts++;
+                return null;
+              }),
+            },
+          },
+        ),
+        throwsA(isA<LinkError>()),
+      );
+      expect(starts, 0);
+    });
+
+    test(
+      'VM synchronous guest function imports remain callable from start',
+      () {
+        final source = Instance(
+          Module(hostGlobalFixture('funcref_owned').buffer),
+        );
+        final function =
+            (source.exports['increment']! as FunctionImportExportValue).ref;
+        final instance = Instance(
+          Module(hostGlobalFixture('reference_import_start').buffer),
+          {
+            'host': {'relay': ImportExportKind.function(function)},
+          },
+        );
+        expect(_call(source, 'calls'), 1);
+        expect(_call(instance, 'call', [41]), 42);
+        expect(_call(source, 'calls'), 2);
+      },
+    );
 
     test(
       'VM unsupported private function rejects before guest side effects',
@@ -1374,6 +1461,30 @@ void _referenceGlobalTests() {
         }
       },
     );
+
+    for (final kind in ['externref', 'funcref']) {
+      test(
+        'VM duplicate $kind imports accept equivalent nullable encodings',
+        () async {
+          final instance = Instance(
+            Module(hostGlobalFixture('reference_equivalent_$kind').buffer),
+            {
+              'host': {
+                'echo': ImportExportKind.function((args) => args.single),
+              },
+            },
+          );
+          final source = Instance(
+            Module(hostGlobalFixture('funcref_owned').buffer),
+          );
+          final Object value = kind == 'externref'
+              ? Object()
+              : (source.exports['increment']! as FunctionImportExportValue).ref;
+          expect(await _callAsync(instance, 'run', [value]), same(value));
+          expect(await _callAsync(instance, 'run', [null]), isNull);
+        },
+      );
+    }
 
     test(
       'VM conflicting reference function imports fail before data or start effects',

@@ -224,7 +224,13 @@ final class WasmVm {
         namespace: _functionRefNamespace,
         functionIndex: i,
       );
-      _functionRefTargets[ref] = _FunctionRefTarget(vm: this, functionIndex: i);
+      final target = _functionRefTargets.putIfAbsent(
+        ref,
+        () => _FunctionRefTarget(vm: this, functionIndex: i),
+      );
+      if (!identical(target.vm, this)) {
+        (_functionReferenceDependencies ??= <WasmVm>{}).add(target.vm);
+      }
     }
   }
 
@@ -364,6 +370,23 @@ final class WasmVm {
       depth: 0,
       force: true,
     );
+  }
+
+  static void bindFunctionReference({
+    required int namespace,
+    required int functionIndex,
+    required int reference,
+  }) {
+    _functionReferenceTarget(reference);
+    if (namespace <= 0 || functionIndex < 0) {
+      throw ArgumentError('Invalid function reference location.');
+    }
+    final key = '$namespace:$functionIndex';
+    final existing = _functionRefIdsByKey[key];
+    if (existing != null && existing != reference) {
+      throw StateError('Function reference location is already bound.');
+    }
+    _functionRefIdsByKey[key] = reference;
   }
 
   static int functionRefIdFor({
