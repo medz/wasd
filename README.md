@@ -83,6 +83,12 @@ Exported stream/future type aliases and equality-bound type imports retain
 their original type context and runtime resource identity. Released `0.6.1`
 retains the three-file gate and its blocking-copy guard.
 
+The Dart VM also supports [nullable reference globals](doc/host_globals.md):
+`externref` preserves Dart value identity, and `funcref` accepts genuine guest
+functions or `null`, with shared storage across imports and instances.
+Typed, nonnullable and GC global boundaries remain unsupported. JavaScript
+adapter reference limits and store-lifetime retention are documented separately.
+
 ## Quick Start
 
 Run included examples:

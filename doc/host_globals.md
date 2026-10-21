@@ -1,9 +1,10 @@
-# Numeric host globals
+# Host globals
 
 Version `0.6.0` includes numeric host-global bindings, first published in
-`0.6.0-dev.1`. The Dart VM adapter accepts the existing
-`GlobalImportExportValue` wrapper for numeric globals; it adds no public type
-or import-map format.
+`0.6.0-dev.1`. Released `0.6.1` retains that numeric support. Unreleased main
+also binds nullable `externref` and `funcref` globals on the Dart VM through the
+existing `GlobalImportExportValue` wrapper, without a new public type or
+import-map format.
 
 ```dart
 import 'package:wasd/wasm.dart';
@@ -23,7 +24,12 @@ matching value kinds and mutability: an `f32` global cannot satisfy an `i32`
 import, and a mutable global cannot satisfy an immutable declaration or vice
 versa. Mismatches throw `LinkError` before active data initialization and the
 start function. Missing globals, foreign implementations with no checkable
-descriptor, and unsupported reference/vector host kinds also fail explicitly.
+descriptor, and unsupported global kinds also fail explicitly. Unreleased VM
+reference bindings accept only the abstract nullable `externref` and `funcref`
+types, including their equivalent explicit `(ref null extern)` and
+`(ref null func)` encodings. Typed, nonnullable, GC and vector global boundaries
+are rejected before data initialization or the start function; they are not
+silently omitted from exports.
 
 | Kind | Dart value | Binding behavior |
 | --- | --- | --- |
@@ -31,9 +37,11 @@ descriptor, and unsupported reference/vector host kinds also fail explicitly.
 | `ValueKind.i64` | `BigInt` | Signed 64-bit wrapping; the host property stays `BigInt` |
 | `ValueKind.f32` | `double` | Rounded to binary32 |
 | `ValueKind.f64` | `double` | Binary64 |
+| `ValueKind.externref` | `Object?` | Unreleased VM: retain the original host value, including `null` |
+| `ValueKind.funcref` | `Function?` | Unreleased VM: a genuine function from this backend, or `null` |
 
 Existing standalone VM globals retain their value-box behavior. On first use
-as a Wasm import, the numeric value is converted into one typed runtime binding;
+as a Wasm import, the value is converted into one typed runtime binding;
 subsequent host reads/writes use that binding. Immutable setters still fail.
 Unused global entries in a superset imports map remain standalone and are not
 checked or converted, including entries whose name declares another import kind.
@@ -47,17 +55,60 @@ state rollback after a later linking or initialization failure.
 The same host `Global` passed to multiple imports or instances shares its
 storage: host setters are visible to Wasm, and `global.set` is visible to the
 host and other importing instances. Distinct host objects remain independent.
-VM numeric global exports retain the same binding when re-imported. Globals
-defined by a module remain owned by each instance, even when compiled once.
-Reference globals, GC initializer redesign, table/tag host imports and general
-Component execution are outside this addition.
+VM global exports retain the same binding when re-imported. Globals defined by
+a module remain owned by each instance, even when compiled once. This addition
+does not extend table/tag host imports, GC initializers or Component execution.
 
-The existing JS adapter already accepts typed numeric host globals. Cross-target
-tests check those bindings on Node and Chrome using scalar exports. The current
-JS function bridge may return a JavaScript bigint wrapper for an `i64` result;
-these tests inspect all 64 bits through two `i32` exports rather than changing
-that function ABI. VM re-export/instance-owned isolation checks are separate
-from these JS adapter checks, and no portable pure Dart interpreter claim is made.
+## Reference identity and lifetime
+
+For an external reference, the VM returns the original Dart value rather than
+an integer handle or a copy. Distinct host objects remain distinct even when
+their `==` operators compare equal. Integers such as `-1` are ordinary external
+values and cannot forge a null or function reference.
+
+A nullable function global can use `Global<FuncRef, Function?>` with
+`GlobalDescriptor<FuncRef, Function?>(value: ValueKind.funcref)`. A non-null value
+must be a genuine Wasm function from this backend; an arbitrary Dart
+closure is rejected. Re-exporting a function reference preserves its identity
+and originating instance. Guest indirect calls still check the real function
+signature. Calls that reach an asynchronous guest target return a `Future`,
+including when the importing instance has only synchronous host imports.
+Modules with function-returning host imports use awaitable exports so that a
+returned function can be called indirectly in the same guest invocation.
+Exports involving function references also use awaitable execution when a
+reachable host callback can replace a target during the call, including through
+an imported function's reference state. Once
+an instance has observed an asynchronous function dependency, its function
+exports continue returning futures if that reference later moves into a table.
+Imports sharing a module and field name must have equivalent signatures when
+reference conversion is required; conflicting signatures are rejected before
+data initialization or start functions run. An unused function export with an
+unsupported reference signature does not prevent instantiation; calling that
+export is rejected before guest execution.
+
+Connected instances, globals and exported functions share a reference-store
+lifetime. The store retains distinct external values previously passed through
+it, including values copied into guest locals or tables after a global changes.
+Those values remain retained while any connected store owner is alive; they are
+not collected individually when a global is overwritten. The process-wide
+reference directories use weak entries and finalizers rather than permanent
+strong object roots. This is a store-lifetime retention boundary, not a general
+Wasm GC guarantee.
+
+## JavaScript adapter
+
+The existing JS adapter accepts typed numeric host globals and its supported
+`externref` primitives: `null`, `int`, `double`, `bool`, `String` and `BigInt`.
+Arbitrary Dart objects and Functions as external references remain unsupported,
+as do public JS `funcref` values. The unreleased re-import path retains the
+underlying JavaScript global instead of copying its value. Node and Chrome
+regressions cover these adapter bindings separately from VM reference support;
+they do not execute the pure Dart interpreter.
+
+The current JS function bridge may return a JavaScript bigint wrapper for an
+`i64` result. Numeric cross-target tests inspect all 64 bits through two `i32`
+exports rather than changing that function ABI. These global bindings do not
+establish complete JSPI or cross-platform reference support.
 
 ## Official data-segment gap
 

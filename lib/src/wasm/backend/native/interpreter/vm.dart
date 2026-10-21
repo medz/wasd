@@ -224,7 +224,13 @@ final class WasmVm {
         namespace: _functionRefNamespace,
         functionIndex: i,
       );
-      _functionRefTargets[ref] = _FunctionRefTarget(vm: this, functionIndex: i);
+      final target = _functionRefTargets.putIfAbsent(
+        ref,
+        () => _FunctionRefTarget(vm: this, functionIndex: i),
+      );
+      if (!identical(target.vm, this)) {
+        (_functionReferenceDependencies ??= <WasmVm>{}).add(target.vm);
+      }
     }
   }
 
@@ -243,6 +249,8 @@ final class WasmVm {
   final List<int> _elementSegmentRefTypeCodes;
   final int maxCallDepth;
   WasmAsyncFunctionRefInvoker? _asyncFunctionRefInvoker;
+  bool _hasAsyncFunctionReferenceDependency = false;
+  Set<WasmVm>? _functionReferenceDependencies;
 
   static const int _nullRef = -1;
   static const int _heapAny = -18;
@@ -280,6 +288,125 @@ final class WasmVm {
   static final BigInt _u64MaskBigInt = (BigInt.one << 64) - BigInt.one;
 
   static int allocateFunctionRefNamespace() => _nextFunctionRefNamespace++;
+
+  static WasmFunctionType functionReferenceType(int reference) =>
+      _functionReferenceTarget(reference).function.type;
+
+  static _FunctionRefTarget _functionReferenceTarget(int reference) =>
+      _functionRefTargets[reference] ??
+      (throw ArgumentError('Unknown function reference.'));
+
+  static void retainFunctionReferenceDependency(int reference, int dependency) {
+    if (dependency == _nullRef) return;
+    final vm = _functionReferenceTarget(reference).vm;
+    final source = _functionReferenceTarget(dependency).vm;
+    if (!identical(vm, source)) {
+      (vm._functionReferenceDependencies ??= <WasmVm>{}).add(source);
+    }
+  }
+
+  static bool functionReferenceNeedsAsync(int reference) {
+    final owner = _functionReferenceTarget(reference).vm;
+    if (owner._hasAsyncFunctionReferenceDependency) return true;
+    final visited = <WasmVm>{};
+    var mutableReferenceState = false;
+    var hostCallback = false;
+    bool visit(WasmVm vm) {
+      if (!visited.add(vm)) return false;
+      if (vm._hasAsyncFunctionReferenceDependency) return true;
+      mutableReferenceState |= vm._globals.any(
+        (global) =>
+            global.mutable &&
+            (global.valueTypeSignature == '70' ||
+                global.valueTypeSignature == '6370'),
+      );
+      for (var i = 0; i < vm._functions.length; i++) {
+        final function = vm._functions[i];
+        mutableReferenceState |= function.type.paramTypeSignatures.any(
+          (signature) => signature == '70' || signature == '6370',
+        );
+        if (function is! HostRuntimeFunction) continue;
+        final target =
+            _functionRefTargets[functionRefIdFor(
+              namespace: vm._functionRefNamespace,
+              functionIndex: i,
+            )];
+        hostCallback |= identical(target?.vm, vm);
+        if (!function.supportsSync ||
+            function.type.resultTypeSignatures.any(
+              (signature) => signature == '70' || signature == '6370',
+            )) {
+          return vm._hasAsyncFunctionReferenceDependency = true;
+        }
+      }
+      for (final global in vm._globals) {
+        if (global.valueTypeSignature != '70' &&
+            global.valueTypeSignature != '6370') {
+          continue;
+        }
+        final target = _functionRefTargets[global.value.asI32()];
+        if (target != null && !identical(vm, target.vm)) {
+          (vm._functionReferenceDependencies ??= <WasmVm>{}).add(target.vm);
+        }
+        if (target != null && visit(target.vm)) {
+          // A guest may move this reference into a table and clear the global.
+          // Retain async capability without scanning table entries on each call.
+          return vm._hasAsyncFunctionReferenceDependency = true;
+        }
+      }
+      final dependencies = vm._functionReferenceDependencies;
+      if (dependencies != null) {
+        for (final dependency in dependencies) {
+          if (visit(dependency)) {
+            return vm._hasAsyncFunctionReferenceDependency = true;
+          }
+        }
+      }
+      return false;
+    }
+
+    final needsAsync = visit(owner) || (mutableReferenceState && hostCallback);
+    if (needsAsync) owner._hasAsyncFunctionReferenceDependency = true;
+    return needsAsync;
+  }
+
+  static List<WasmValue> invokePublicFunctionReference(
+    int reference,
+    List<WasmValue> args,
+  ) {
+    final target = _functionReferenceTarget(reference);
+    return target.vm.invokeFunction(target.functionIndex, args);
+  }
+
+  static Future<List<WasmValue>> invokePublicFunctionReferenceAsync(
+    int reference,
+    List<WasmValue> args,
+  ) {
+    final target = _functionReferenceTarget(reference);
+    return target.vm.invokeFunctionRefAsync(
+      reference,
+      args,
+      depth: 0,
+      force: true,
+    );
+  }
+
+  static void bindFunctionReference({
+    required int namespace,
+    required int functionIndex,
+    required int reference,
+  }) {
+    _functionReferenceTarget(reference);
+    if (namespace <= 0 || functionIndex < 0) {
+      throw ArgumentError('Invalid function reference location.');
+    }
+    final key = '$namespace:$functionIndex';
+    final existing = _functionRefIdsByKey[key];
+    if (existing != null && existing != reference) {
+      throw StateError('Function reference location is already bound.');
+    }
+    _functionRefIdsByKey[key] = reference;
+  }
 
   static int functionRefIdFor({
     required int namespace,
@@ -4570,6 +4697,11 @@ final class WasmVm {
   }
 
   bool _functionTypeEquals(WasmFunctionType a, WasmFunctionType b) {
+    String canonical(String signature) => switch (signature) {
+      '636f' => '6f',
+      '6370' => '70',
+      _ => signature,
+    };
     if (!a.isFunctionType || !b.isFunctionType) {
       return false;
     }
@@ -4586,12 +4718,14 @@ final class WasmVm {
       return false;
     }
     for (var i = 0; i < a.paramTypeSignatures.length; i++) {
-      if (a.paramTypeSignatures[i] != b.paramTypeSignatures[i]) {
+      if (canonical(a.paramTypeSignatures[i]) !=
+          canonical(b.paramTypeSignatures[i])) {
         return false;
       }
     }
     for (var i = 0; i < a.resultTypeSignatures.length; i++) {
-      if (a.resultTypeSignatures[i] != b.resultTypeSignatures[i]) {
+      if (canonical(a.resultTypeSignatures[i]) !=
+          canonical(b.resultTypeSignatures[i])) {
         return false;
       }
     }

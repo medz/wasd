@@ -29,6 +29,7 @@ final class WasmImports {
     this.asyncFunctions = const {},
     this.functionTypes = const {},
     this.functionTypeDepths = const {},
+    this.functionReferences = const {},
     this.memories = const {},
     this.tables = const {},
     this.globals = const {},
@@ -41,6 +42,7 @@ final class WasmImports {
   final Map<String, WasmAsyncHostFunction> asyncFunctions;
   final Map<String, WasmFunctionType> functionTypes;
   final Map<String, int> functionTypeDepths;
+  final Map<String, int> functionReferences;
   final Map<String, WasmMemory> memories;
   final Map<String, WasmTable> tables;
   final Map<String, Object?> globals;

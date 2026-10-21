@@ -240,6 +240,14 @@ final class WasmInstance {
                 );
               }
             }
+            final importedReference = imports.functionReferences[import.key];
+            if (importedReference != null) {
+              WasmVm.bindFunctionReference(
+                namespace: functionRefNamespace,
+                functionIndex: functions.length,
+                reference: importedReference,
+              );
+            }
             final syncCallback =
                 callback ??
                 (List<Object?> _) => throw UnsupportedError(
@@ -782,6 +790,11 @@ final class WasmInstance {
   List<String> get exportedTags => _tagExports.keys.toList(growable: false);
 
   bool get hasAsyncOnlyHostImports => _hasAsyncOnlyHostImports;
+
+  int exportedFunctionReference(String exportName) => WasmVm.functionRefIdFor(
+    namespace: _functionRefNamespace,
+    functionIndex: _functionExports[exportName]!,
+  );
 
   WasmFunctionType exportedFunctionType(String exportName) {
     final functionIndex = _functionExports[exportName];
@@ -11482,6 +11495,21 @@ final class WasmInstance {
       throw FormatException('Start function must have signature [] -> [].');
     }
 
+    if (globals.any(
+      (global) =>
+          global.valueTypeSignature == '70' ||
+          global.valueTypeSignature == '6370',
+    )) {
+      // Start may move an imported async reference into a table and clear its
+      // global before any exported function can observe that dependency.
+      WasmVm.functionReferenceNeedsAsync(
+        WasmVm.functionRefIdFor(
+          namespace: _functionRefNamespace,
+          functionIndex: startIndex,
+        ),
+      );
+    }
+
     final results = _vm.invokeFunction(startIndex, const []);
     if (results.isNotEmpty) {
       throw StateError('Start function must not produce a value.');
@@ -12338,7 +12366,15 @@ final class WasmInstance {
     required List<String> signatures,
   }) {
     if (signatures.length == valueTypes.length) {
-      return List<String>.from(signatures, growable: false);
+      return signatures
+          .map(
+            (signature) => switch (signature) {
+              '636f' => '6f',
+              '6370' => '70',
+              _ => signature,
+            },
+          )
+          .toList(growable: false);
     }
     return valueTypes
         .map(

@@ -3,7 +3,8 @@
 This implementation and acceptance plan retains the historical `0.5.0`
 (`528b2b828f979d08ba1798f7e8e955e892ab052d`) baseline checked on 2026-10-01.
 Current main retains the released `0.6.1` changes and adds Component
-caller-continuation scheduling. Its nine-file execution gate is unreleased;
+caller-continuation scheduling and nullable VM reference globals. These changes
+and its nine-file execution gate are unreleased;
 `0.6.1` retains its three-file gate. Historical results keep their original
 versions and scope.
 A target in this document is not a support claim. Release support must be backed
@@ -59,6 +60,18 @@ interpreter. This gate does not establish equivalent coverage through the
 public API, its feature selection, or other runtimes. The historical Component
 Model async gate retains its recorded `wasm-tools` `1.254.0` validator; the
 newer Core converter rejects the frozen draft's removed `cancellable` option.
+
+Unreleased public VM host globals now cover numeric kinds and abstract nullable
+`externref` / `funcref`, including equivalent explicit nullable encodings.
+They preserve shared storage, external-value identity and genuine guest function
+targets across instances while retaining indirect-call signature checks. Typed,
+nonnullable, GC and vector global boundaries fail explicitly before guest
+initialization. Connected store owners retain historical external values for
+their shared lifetime; this does not establish per-value garbage collection.
+The JS adapter retains its numeric and primitive-`externref` limits; public JS
+`funcref` remains unsupported. These public regressions are separate from the
+internal Core gate and do not complete table/tag embedding or cross-platform
+interpreter acceptance. See [host globals](host_globals.md).
 
 The `0.6.0` Component `map` type and synchronous Canonical ABI adapter slice
 uses source `0220da84209397d9067c19cac83dae969aa85a7b`. Its binary validation,

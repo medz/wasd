@@ -1,0 +1,11 @@
+(module
+  (import "host" "f" (func $number (param i32) (result i32)))
+  (import "host" "f" (func $reference (param externref) (result externref)))
+  (import "host" "started" (func $started))
+  (memory (import "host" "memory") 1)
+  (data (i32.const 0) "x")
+  (func $start call $started)
+  (start $start)
+  (func (export "number") (result i32) i32.const 7 call $number)
+  (func (export "reference") (param externref) (result externref)
+    local.get 0 call $reference))
