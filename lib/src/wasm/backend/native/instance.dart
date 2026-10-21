@@ -187,6 +187,7 @@ class Instance implements wasm.Instance {
           case wasm.FunctionImportExportValue(:final ref):
             final reference = ReferenceValues.functionReference(ref);
             if (reference != null) {
+              _references.encode('70', ref);
               importedFunctionTypes[key] = ir_vm.WasmVm.functionReferenceType(
                 reference,
               );

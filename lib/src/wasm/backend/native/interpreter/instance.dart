@@ -12366,7 +12366,15 @@ final class WasmInstance {
     required List<String> signatures,
   }) {
     if (signatures.length == valueTypes.length) {
-      return List<String>.from(signatures, growable: false);
+      return signatures
+          .map(
+            (signature) => switch (signature) {
+              '636f' => '6f',
+              '6370' => '70',
+              _ => signature,
+            },
+          )
+          .toList(growable: false);
     }
     return valueTypes
         .map(

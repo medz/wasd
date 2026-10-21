@@ -63,4 +63,30 @@ void main() {
     expect(other.encode('6f', null), -1);
     expect(other.decode('6f', -1), isNull);
   });
+  test(
+    'imported guest functions connect source and importing reference stores',
+    () {
+      final source = Instance(
+        Module(hostGlobalFixture('funcref_owned').buffer),
+      );
+      final function =
+          (source.exports['increment']! as FunctionImportExportValue).ref;
+      final importer = Instance(
+        Module(hostGlobalFixture('reference_import_call').buffer),
+        {
+          'host': {'relay': ImportExportKind.function(function)},
+        },
+      );
+      final global =
+          (importer.exports['value']! as GlobalImportExportValue).ref
+              as native.Global;
+      final record = (value: Object());
+      global.value = record;
+      final sourceStore =
+          ((source.exports['value']! as GlobalImportExportValue).ref
+                  as native.Global)
+              .references;
+      expect(sourceStore.encode('6f', record), global.host.value.asI32());
+    },
+  );
 }

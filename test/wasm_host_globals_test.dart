@@ -1463,27 +1463,44 @@ void _referenceGlobalTests() {
     );
 
     for (final kind in ['externref', 'funcref']) {
-      test(
-        'VM duplicate $kind imports accept equivalent nullable encodings',
-        () async {
-          final instance = Instance(
-            Module(hostGlobalFixture('reference_equivalent_$kind').buffer),
-            {
-              'host': {
-                'echo': ImportExportKind.function((args) => args.single),
+      for (final guestImport in [false, true]) {
+        test(
+          'VM duplicate $kind imports accept equivalent nullable encodings guest=$guestImport',
+          () async {
+            final instance = Instance(
+              Module(hostGlobalFixture('reference_equivalent_$kind').buffer),
+              {
+                'host': {
+                  'echo': ImportExportKind.function((args) => args.single),
+                },
               },
-            },
-          );
-          final source = Instance(
-            Module(hostGlobalFixture('funcref_owned').buffer),
-          );
-          final Object value = kind == 'externref'
-              ? Object()
-              : (source.exports['increment']! as FunctionImportExportValue).ref;
-          expect(await _callAsync(instance, 'run', [value]), same(value));
-          expect(await _callAsync(instance, 'run', [null]), isNull);
-        },
-      );
+            );
+            final consumer = guestImport
+                ? Instance(
+                    Module(
+                      hostGlobalFixture('reference_equivalent_$kind').buffer,
+                    ),
+                    {
+                      'host': {
+                        'echo':
+                            instance.exports['run']!
+                                as FunctionImportExportValue,
+                      },
+                    },
+                  )
+                : instance;
+            final source = Instance(
+              Module(hostGlobalFixture('funcref_owned').buffer),
+            );
+            final Object value = kind == 'externref'
+                ? Object()
+                : (source.exports['increment']! as FunctionImportExportValue)
+                      .ref;
+            expect(await _callAsync(consumer, 'run', [value]), same(value));
+            expect(await _callAsync(consumer, 'run', [null]), isNull);
+          },
+        );
+      }
     }
 
     test(
