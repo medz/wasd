@@ -1,0 +1,11 @@
+(module
+ (type $unary (func (param i32) (result i32)))
+ (import "host" "started" (func $started))
+ (memory (import "host" "memory") 1)
+ (func $increment (type $unary) local.get 0 i32.const 1 i32.add)
+ (elem declare func $increment)
+ (global $value (mut (ref $unary)) (ref.func $increment))
+ (export "value" (global $value))
+ (data (i32.const 0) "x")
+ (func $start call $started) (start $start)
+)

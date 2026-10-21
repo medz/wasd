@@ -783,6 +783,11 @@ final class WasmInstance {
 
   bool get hasAsyncOnlyHostImports => _hasAsyncOnlyHostImports;
 
+  int exportedFunctionReference(String exportName) => WasmVm.functionRefIdFor(
+    namespace: _functionRefNamespace,
+    functionIndex: _functionExports[exportName]!,
+  );
+
   WasmFunctionType exportedFunctionType(String exportName) {
     final functionIndex = _functionExports[exportName];
     if (functionIndex == null) {

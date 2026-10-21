@@ -243,6 +243,7 @@ final class WasmVm {
   final List<int> _elementSegmentRefTypeCodes;
   final int maxCallDepth;
   WasmAsyncFunctionRefInvoker? _asyncFunctionRefInvoker;
+  bool _hasAsyncFunctionReferenceDependency = false;
 
   static const int _nullRef = -1;
   static const int _heapAny = -18;
@@ -280,6 +281,62 @@ final class WasmVm {
   static final BigInt _u64MaskBigInt = (BigInt.one << 64) - BigInt.one;
 
   static int allocateFunctionRefNamespace() => _nextFunctionRefNamespace++;
+
+  static WasmFunctionType functionReferenceType(int reference) =>
+      _functionReferenceTarget(reference).function.type;
+
+  static _FunctionRefTarget _functionReferenceTarget(int reference) =>
+      _functionRefTargets[reference] ??
+      (throw ArgumentError('Unknown function reference.'));
+
+  static bool functionReferenceNeedsAsync(int reference) {
+    final visited = <WasmVm>{};
+    bool visit(WasmVm vm) {
+      if (!visited.add(vm)) return false;
+      if (vm._hasAsyncFunctionReferenceDependency) return true;
+      if (vm._functions.any(
+        (function) => function is HostRuntimeFunction && !function.supportsSync,
+      )) {
+        return vm._hasAsyncFunctionReferenceDependency = true;
+      }
+      for (final global in vm._globals) {
+        if (global.valueTypeSignature != '70' &&
+            global.valueTypeSignature != '6370') {
+          continue;
+        }
+        final target = _functionRefTargets[global.value.asI32()];
+        if (target != null && visit(target.vm)) {
+          // A guest may move this reference into a table and clear the global.
+          // Retain async capability without scanning table entries on each call.
+          return vm._hasAsyncFunctionReferenceDependency = true;
+        }
+      }
+      return false;
+    }
+
+    return visit(_functionReferenceTarget(reference).vm);
+  }
+
+  static List<WasmValue> invokePublicFunctionReference(
+    int reference,
+    List<WasmValue> args,
+  ) {
+    final target = _functionReferenceTarget(reference);
+    return target.vm.invokeFunction(target.functionIndex, args);
+  }
+
+  static Future<List<WasmValue>> invokePublicFunctionReferenceAsync(
+    int reference,
+    List<WasmValue> args,
+  ) {
+    final target = _functionReferenceTarget(reference);
+    return target.vm.invokeFunctionRefAsync(
+      reference,
+      args,
+      depth: 0,
+      force: true,
+    );
+  }
 
   static int functionRefIdFor({
     required int namespace,

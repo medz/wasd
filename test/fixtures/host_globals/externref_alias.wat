@@ -1,0 +1,11 @@
+(module
+ (import "host" "tick" (func $tick))
+ (import "host" "first" (global $first (mut externref)))
+ (import "host" "second" (global $second (mut externref)))
+ (global $owned (mut externref) (ref.null extern))
+ (export "first" (global $first)) (export "second" (global $second))
+ (export "owned" (global $owned))
+ (func (export "get") (result externref) call $tick global.get $second)
+ (func (export "set") (param externref) call $tick local.get 0 global.set $first)
+ (func (export "setOwned") (param externref) call $tick local.get 0 global.set $owned)
+)

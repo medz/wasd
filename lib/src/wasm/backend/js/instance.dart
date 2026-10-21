@@ -140,20 +140,20 @@ JSObject createImportObject(wasm.Imports imports, {bool asynchronous = false}) {
   return root;
 }
 
-JSAny? _encodeImport(
-  wasm.ImportValue value,
-  bool asynchronous,
-) => switch (value) {
-  wasm.IntImportValue(:final ref) => ref.toJS,
-  wasm.FunctionImportExportValue(:final ref) => _hostFuncToJS(
-    ref,
-    asynchronous,
-  ),
-  wasm.GlobalImportExportValue(:final ref) => (ref as js_global.Global).host,
-  wasm.MemoryImportExportValue(:final ref) => (ref as js_memory.Memory).host,
-  wasm.TableImportExportValue(:final ref) => (ref as js_table.Table).host,
-  wasm.TagImportExportValue(:final ref) => (ref as js_tag.Tag).host,
-};
+JSAny? _encodeImport(wasm.ImportValue value, bool asynchronous) =>
+    switch (value) {
+      wasm.IntImportValue(:final ref) => ref.toJS,
+      wasm.FunctionImportExportValue(:final ref) => _hostFuncToJS(
+        ref,
+        asynchronous,
+      ),
+      wasm.GlobalImportExportValue(:final ref) =>
+        ref is _ExportGlobal ? ref._host : (ref as js_global.Global).host,
+      wasm.MemoryImportExportValue(:final ref) =>
+        (ref as js_memory.Memory).host,
+      wasm.TableImportExportValue(:final ref) => (ref as js_table.Table).host,
+      wasm.TagImportExportValue(:final ref) => (ref as js_tag.Tag).host,
+    };
 
 wasm.WasmFunction _wrapAsyncFunction(JSFunction raw) {
   // promising only accepts a raw Wasm function. Cache one wrapper per export.

@@ -15,6 +15,7 @@ import 'global.dart' as native_global;
 import 'memory.dart' as native_memory;
 import 'module.dart' as native_module;
 import 'tag.dart' as native_tag;
+import 'reference_values.dart';
 
 final class _UnexpectedAsyncHostResult extends UnsupportedError
     implements WasmHostControlFlowException {
@@ -23,15 +24,6 @@ final class _UnexpectedAsyncHostResult extends UnsupportedError
         'Host import `$key` returned a Future without declaring a Future '
         'return type. Adapt it with (_) async => await callback(...).',
       );
-}
-
-final class _HostCallbackFailure implements WasmHostControlFlowException {
-  _HostCallbackFailure(this.error, this.stack);
-
-  final Object error;
-  final StackTrace stack;
-
-  Never rethrowOriginal() => Error.throwWithStackTrace(error, stack);
 }
 
 class Instance implements wasm.Instance {
@@ -50,7 +42,7 @@ class Instance implements wasm.Instance {
         profile: profile,
         predecodedFunctions: nativeModule.predecodedFunctions,
       );
-    } on _HostCallbackFailure catch (failure) {
+    } on HostCallbackFailure catch (failure) {
       failure.rethrowOriginal();
     } on WasmHostControlFlowException {
       rethrow;
@@ -77,6 +69,8 @@ class Instance implements wasm.Instance {
   late final ir_instance.WasmInstance _runtime;
   late final wasm.Exports _exports;
   Map<String, native_tag.Tag>? _tagBindings;
+  final _references = ReferenceValues();
+  bool _hasFunctionReferenceGlobals = false;
 
   @override
   wasm.Exports get exports => _exports;
@@ -91,6 +85,58 @@ class Instance implements wasm.Instance {
     final globalBindings = <String, ir_global.RuntimeGlobal>{};
     final tags = <String, ir_imports.WasmTagImport>{};
     final decoded = (module as native_module.Module).decoded;
+    final functionTypes = <(String, String), ir_module.WasmFunctionType>{};
+    for (final import in decoded.imports) {
+      if (import.kind != ir_module.WasmImportKind.function) continue;
+      final type = decoded.types[import.functionTypeIndex!];
+      ReferenceValues.checkFunctionSignature(type);
+      final key = (import.module, import.name);
+      final previous = functionTypes[key];
+      if (previous != null &&
+          (ReferenceValues.needsConversion(previous) ||
+              ReferenceValues.needsConversion(type)) &&
+          (previous.paramTypeSignatures.join(',') !=
+                  type.paramTypeSignatures.join(',') ||
+              previous.resultTypeSignatures.join(',') !=
+                  type.resultTypeSignatures.join(','))) {
+        throw UnsupportedError(
+          'Reference function imports with the same name require matching signatures.',
+        );
+      }
+      functionTypes[key] = type;
+    }
+    final allFunctionTypes = [
+      for (final import in decoded.imports)
+        if (import.kind == ir_module.WasmImportKind.function)
+          decoded.types[import.functionTypeIndex!],
+      for (final index in decoded.functionTypeIndices) decoded.types[index],
+    ];
+    for (final export in decoded.exports) {
+      if (export.kind == ir_module.WasmExportKind.function) {
+        ReferenceValues.checkFunctionSignature(allFunctionTypes[export.index]);
+      }
+    }
+    final referenceValues = WeakReference(_references);
+    final globalTypes = [
+      for (final import in decoded.imports)
+        if (import.kind == ir_module.WasmImportKind.global) import.globalType!,
+      for (final global in decoded.globals) global.type,
+    ];
+    _hasFunctionReferenceGlobals = globalTypes.any(
+      (type) => ReferenceValues.isFunction(type.valueTypeSignature),
+    );
+    for (final import in decoded.imports) {
+      if (import.kind == ir_module.WasmImportKind.global) {
+        ReferenceValues.checkSignature(import.globalType!.valueTypeSignature);
+      }
+    }
+    for (final export in decoded.exports) {
+      if (export.kind == ir_module.WasmExportKind.global) {
+        ReferenceValues.checkSignature(
+          globalTypes[export.index].valueTypeSignature,
+        );
+      }
+    }
     final declaredTags = <(String, String)>{};
     for (final import in decoded.imports) {
       if (import.kind == ir_module.WasmImportKind.tag) {
@@ -130,23 +176,37 @@ class Instance implements wasm.Instance {
         final importValue = importEntry.value;
         switch (importValue) {
           case wasm.FunctionImportExportValue(:final ref):
+            final declaredType =
+                functionTypes[(moduleEntry.key, importEntry.key)];
+            final type =
+                declaredType != null &&
+                    ReferenceValues.needsConversion(declaredType)
+                ? declaredType
+                : null;
             final isAsyncTyped =
-                ref is Future<Object?> Function(List<Object?>) &&
-                ref is! Never Function(List<Object?>);
+                (ref is Future<Object?> Function(List<Object?>) &&
+                    ref is! Never Function(List<Object?>)) ||
+                ReferenceValues.functionNeedsAsync(ref);
             if (!isAsyncTyped) {
               Object? callback(List<Object?> args) {
                 try {
-                  final result = ref(args);
+                  final result = ref(
+                    type == null
+                        ? args
+                        : referenceValues.target!.decodeArguments(type, args),
+                  );
                   if (result is Future) {
                     result.ignore();
                     throw _UnexpectedAsyncHostResult(key);
                   }
-                  return result;
+                  return type == null
+                      ? result
+                      : referenceValues.target!.encodeResults(type, result);
                 } on native_exception.Exception catch (error, stackTrace) {
                   Error.throwWithStackTrace(error.host, stackTrace);
                 } catch (error, stack) {
                   if (error is WasmHostControlFlowException) rethrow;
-                  throw _HostCallbackFailure(error, stack);
+                  throw HostCallbackFailure(error, stack);
                 }
               }
 
@@ -156,12 +216,21 @@ class Instance implements wasm.Instance {
             }
             asyncFunctions[key] = (List<Object?> args) async {
               try {
-                return await Future<Object?>.sync(() => ref(args));
+                final result = await Future<Object?>.sync(
+                  () => ref(
+                    type == null
+                        ? args
+                        : referenceValues.target!.decodeArguments(type, args),
+                  ),
+                );
+                return type == null
+                    ? result
+                    : referenceValues.target!.encodeResults(type, result);
               } on native_exception.Exception catch (error, stackTrace) {
                 Error.throwWithStackTrace(error.host, stackTrace);
               } catch (error, stack) {
                 if (error is WasmHostControlFlowException) rethrow;
-                throw _HostCallbackFailure(error, stack);
+                throw HostCallbackFailure(error, stack);
               }
             };
           case wasm.MemoryImportExportValue(:final ref):
@@ -181,6 +250,10 @@ class Instance implements wasm.Instance {
               );
             }
             globalBindings[key] = ref.host;
+            if (ReferenceValues.isExtern(ref.host.valueTypeSignature) ||
+                ReferenceValues.isFunction(ref.host.valueTypeSignature)) {
+              _references.connect(ref.references);
+            }
           case wasm.TagImportExportValue(:final ref):
             if (!declaredTags.contains((moduleEntry.key, importEntry.key))) {
               continue;
@@ -210,10 +283,20 @@ class Instance implements wasm.Instance {
     );
   }
 
-  Future<Object?> _invokeAsync(String name, List<Object?> args) async {
+  Future<Object?> _invokeAsync(
+    String name,
+    List<Object?> args,
+    ir_module.WasmFunctionType type,
+    bool convert,
+  ) async {
     try {
-      return await _runtime.invokeAsync(name, args);
-    } on _HostCallbackFailure catch (failure) {
+      final encoded = convert ? _references.encodeArguments(type, args) : args;
+      final result = _hasFunctionReferenceGlobals
+          ? await _runtime.invokeAsyncForced(name, encoded)
+          : await _runtime.invokeAsync(name, encoded);
+      if (!convert) return result;
+      return _references.decodeResults(type, result);
+    } on HostCallbackFailure catch (failure) {
       failure.rethrowOriginal();
     } on ir_vm.WasmGuestException catch (error, stackTrace) {
       Error.throwWithStackTrace(
@@ -229,24 +312,44 @@ class Instance implements wasm.Instance {
       final name = descriptor.name;
       switch (descriptor.kind) {
         case wasm.ImportExportKind.function:
+          final reference = _runtime.exportedFunctionReference(name);
+          final type = _runtime.exportedFunctionType(name);
+          final convert = ReferenceValues.needsConversion(type);
           if (_runtime.hasAsyncOnlyHostImports) {
             result[name] = wasm.ImportExportKind.function(
-              (List<Object?> args) => _invokeAsync(name, args),
+              _references.registerFunction(
+                reference,
+                (List<Object?> args) async =>
+                    _invokeAsync(name, args, type, convert),
+              ),
             );
             continue;
           }
-          result[name] = wasm.ImportExportKind.function((List<Object?> args) {
-            try {
-              return _runtime.invoke(name, args);
-            } on _HostCallbackFailure catch (failure) {
-              failure.rethrowOriginal();
-            } on ir_vm.WasmGuestException catch (error, stackTrace) {
-              Error.throwWithStackTrace(
-                native_exception.Exception.fromRuntime(error),
-                stackTrace,
-              );
-            }
-          });
+          result[name] = wasm.ImportExportKind.function(
+            _references.registerFunction(reference, (List<Object?> args) {
+              try {
+                if (_hasFunctionReferenceGlobals &&
+                    ir_vm.WasmVm.functionReferenceNeedsAsync(reference)) {
+                  return _invokeAsync(name, args, type, convert);
+                }
+                if (!convert) return _runtime.invoke(name, args);
+                return _references.decodeResults(
+                  type,
+                  _runtime.invoke(
+                    name,
+                    _references.encodeArguments(type, args),
+                  ),
+                );
+              } on HostCallbackFailure catch (failure) {
+                failure.rethrowOriginal();
+              } on ir_vm.WasmGuestException catch (error, stackTrace) {
+                Error.throwWithStackTrace(
+                  native_exception.Exception.fromRuntime(error),
+                  stackTrace,
+                );
+              }
+            }),
+          );
         case wasm.ImportExportKind.memory:
           final memory = _runtime.exportedMemory(name);
           result[name] = wasm.ImportExportKind.memory(
@@ -254,11 +357,9 @@ class Instance implements wasm.Instance {
           );
         case wasm.ImportExportKind.global:
           final binding = _runtime.exportedGlobalBinding(name);
-          if (native_global.isNumericBinding(binding)) {
-            result[name] = wasm.ImportExportKind.global(
-              native_global.fromRuntime(binding),
-            );
-          }
+          result[name] = wasm.ImportExportKind.global(
+            native_global.fromRuntime(binding, _references),
+          );
         case wasm.ImportExportKind.tag:
           final binding = _runtime.exportedTagImport(name);
           final tag = (_tagBindings ??= {}).putIfAbsent(

@@ -21,6 +21,14 @@
   scope, including records whose local indexes shadow outer types.
 - Extend the complete frozen Component execution gate to nine files /
   80 commands, keeping every official source and binary input unchanged.
+- Bind nullable `externref` and `funcref` globals on the Dart VM using the
+  existing public wrappers. Preserve host value and guest function identity,
+  shared mutable storage and cross-instance function targets; retain indirect
+  signature checks and asynchronous calls. Reject unsupported typed,
+  nonnullable and GC global boundaries before guest initialization. Connected
+  store owners retain historical external values for their shared lifetime.
+- Preserve the underlying JavaScript global when re-importing an exported
+  binding. Existing JS external-reference and function-reference limits remain.
 
 ## 0.6.1
 
