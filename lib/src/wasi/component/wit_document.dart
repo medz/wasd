@@ -441,6 +441,7 @@ final class WASIComponentWitFunction {
     required this.signature,
     required this.span,
     this.externalId,
+    this.isConstructor = false,
   });
 
   /// Function name before `:`.
@@ -448,6 +449,15 @@ final class WASIComponentWitFunction {
 
   /// Compact signature text after `:` and before `;`.
   final String signature;
+
+  /// Whether this is resource constructor syntax rather than a named function.
+  final bool isConstructor;
+
+  /// Callback name, retaining the historical spelling of a resource method
+  /// named `constructor` so it cannot alias the resource's constructor.
+  String get callbackName => !isConstructor && name.endsWith('.constructor')
+      ? '${name.substring(0, name.length - 'constructor'.length)}%constructor'
+      : name;
 
   /// Source span for the function name.
   final WASIComponentWitSpan span;
@@ -726,8 +736,8 @@ final class _WitParser {
     }
     _expectSymbol(';');
     return WASIComponentWitPackage(
-      namespace: namespace.lexeme,
-      name: name.lexeme,
+      namespace: namespace.identifier,
+      name: name.identifier,
       version: version,
       span: namespace.span,
     );
@@ -757,7 +767,7 @@ final class _WitParser {
       receiverResource: null,
     );
     return WASIComponentWitInterface(
-      name: name.lexeme,
+      name: name.identifier,
       functions: functions,
       records: records,
       variants: variants,
@@ -904,12 +914,14 @@ final class _WitParser {
             item.lexeme == 'constructor' &&
             _checkSymbol('(')) {
           final params = _parseConstructorParams(item.span);
-          functions.add(
+          _addInterfaceFunction(
+            functions,
             WASIComponentWitFunction(
-              name: '$prefix${item.lexeme}',
+              name: '$prefix${item.identifier}',
               signature: 'func($params)->$receiverResource',
               span: item.span,
               externalId: externalId,
+              isConstructor: true,
             ),
           );
           continue;
@@ -921,9 +933,10 @@ final class _WitParser {
             receiverResource,
           );
           if (_isFunctionSignature(signature)) {
-            functions.add(
+            _addInterfaceFunction(
+              functions,
               WASIComponentWitFunction(
-                name: '$prefix${item.lexeme}',
+                name: '$prefix${item.identifier}',
                 signature: signature,
                 span: item.span,
                 externalId: externalId,
@@ -943,7 +956,7 @@ final class _WitParser {
             resourceTypes,
             typeAliases: typeAliases,
             uses: uses,
-            prefix: '$prefix${item.lexeme}.',
+            prefix: '$prefix${item.identifier}.',
             receiverResource: receiverResource,
           );
           continue;
@@ -969,6 +982,23 @@ final class _WitParser {
       _advance();
     }
     _expectSymbol('}');
+  }
+
+  void _addInterfaceFunction(
+    List<WASIComponentWitFunction> functions,
+    WASIComponentWitFunction function,
+  ) {
+    for (final first in functions) {
+      if (first.name == function.name &&
+          first.isConstructor == function.isConstructor) {
+        _fail(
+          function.span,
+          "duplicate function '${function.name}'; first declared at "
+          '${first.span.location}',
+        );
+      }
+    }
+    functions.add(function);
   }
 
   String _parseConstructorParams(WASIComponentWitSpan start) {
@@ -1013,7 +1043,7 @@ final class _WitParser {
       if (_checkSymbol(';') || _checkSymbol('}')) {
         _fail(targetStart, 'unterminated WIT use declaration');
       }
-      targetText.write(_current.lexeme);
+      targetText.write(_current.identifier);
       _advance();
     }
     if (targetText.isEmpty) {
@@ -1027,9 +1057,9 @@ final class _WitParser {
     final items = <WASIComponentWitUseItem>[];
     while (!_checkSymbol('}') && !_checkKind(_WitTokenKind.eof)) {
       final item = _expectWord('use item name');
-      var alias = item.lexeme;
+      var alias = item.identifier;
       if (_matchWord('as')) {
-        alias = _expectWord('use item alias').lexeme;
+        alias = _expectWord('use item alias').identifier;
       }
       final first = _useItemNamed(items, alias);
       if (first != null) {
@@ -1041,7 +1071,7 @@ final class _WitParser {
       }
       items.add(
         WASIComponentWitUseItem(
-          name: item.lexeme,
+          name: item.identifier,
           alias: alias,
           target: target,
           span: item.span,
@@ -1065,7 +1095,7 @@ final class _WitParser {
       _fail(name.span, "type alias '${name.lexeme}' has empty target");
     }
     return WASIComponentWitTypeAlias(
-      name: name.lexeme,
+      name: name.identifier,
       target: target,
       span: name.span,
       externalId: externalId,
@@ -1086,7 +1116,7 @@ final class _WitParser {
   }) {
     final name = _expectWord('resource name');
     _failDuplicateInterfaceType(
-      name.lexeme,
+      name.identifier,
       name.span,
       records,
       variantTypes,
@@ -1098,7 +1128,7 @@ final class _WitParser {
     );
     resourceTypes.add(
       WASIComponentWitResource(
-        name: name.lexeme,
+        name: name.identifier,
         span: name.span,
         externalId: externalId,
       ),
@@ -1116,7 +1146,7 @@ final class _WitParser {
       resourceTypes,
       typeAliases: typeAliases,
       uses: uses,
-      prefix: '$prefix${name.lexeme}.',
+      prefix: '$prefix${name.identifier}.',
       receiverResource: name.lexeme,
     );
   }
@@ -1138,7 +1168,7 @@ final class _WitParser {
       }
       fields.add(
         WASIComponentWitRecordField(
-          name: field.lexeme,
+          name: field.identifier,
           type: type,
           span: field.span,
         ),
@@ -1146,7 +1176,7 @@ final class _WitParser {
     }
     _expectSymbol('}');
     return WASIComponentWitRecord(
-      name: name.lexeme,
+      name: name.identifier,
       fields: fields,
       span: name.span,
       externalId: externalId,
@@ -1163,7 +1193,7 @@ final class _WitParser {
         continue;
       }
       final case_ = _expectWord('variant case name');
-      final first = _variantCaseNamed(cases, case_.lexeme);
+      final first = _variantCaseNamed(cases, case_.identifier);
       if (first != null) {
         _fail(
           case_.span,
@@ -1176,7 +1206,7 @@ final class _WitParser {
           : null;
       cases.add(
         WASIComponentWitVariantCase(
-          name: case_.lexeme,
+          name: case_.identifier,
           type: type,
           span: case_.span,
         ),
@@ -1185,7 +1215,7 @@ final class _WitParser {
     }
     _expectSymbol('}');
     return WASIComponentWitVariant(
-      name: name.lexeme,
+      name: name.identifier,
       cases: cases,
       span: name.span,
       externalId: externalId,
@@ -1225,7 +1255,7 @@ final class _WitParser {
     _expectSymbol('{');
     final labels = _parseLabels('flag');
     return WASIComponentWitFlags(
-      name: name.lexeme,
+      name: name.identifier,
       labels: labels,
       span: name.span,
       externalId: externalId,
@@ -1237,7 +1267,7 @@ final class _WitParser {
     _expectSymbol('{');
     final cases = _parseLabels('enum case');
     return WASIComponentWitEnum(
-      name: name.lexeme,
+      name: name.identifier,
       cases: cases,
       span: name.span,
       externalId: externalId,
@@ -1252,7 +1282,7 @@ final class _WitParser {
         continue;
       }
       final label = _expectWord(labelKind);
-      final first = _labelNamed(labels, label.lexeme);
+      final first = _labelNamed(labels, label.identifier);
       if (first != null) {
         _fail(
           label.span,
@@ -1260,7 +1290,9 @@ final class _WitParser {
           '${first.span.location}',
         );
       }
-      labels.add(WASIComponentWitLabel(name: label.lexeme, span: label.span));
+      labels.add(
+        WASIComponentWitLabel(name: label.identifier, span: label.span),
+      );
       _matchSymbol(',');
     }
     _expectSymbol('}');
@@ -1455,7 +1487,7 @@ final class _WitParser {
     }
     _expectSymbol('}');
     return WASIComponentWitWorld(
-      name: name.lexeme,
+      name: name.identifier,
       items: items,
       span: name.span,
     );
@@ -1478,10 +1510,10 @@ final class _WitParser {
           final from = _expectWord('included plain name');
           if (!_matchWord('as')) _fail(_current.span, "expected 'as'");
           final to = _expectWord('included plain name replacement');
-          if (renames.containsKey(from.lexeme)) {
+          if (renames.containsKey(from.identifier)) {
             _fail(from.span, "duplicate include rename '${from.lexeme}'");
           }
-          renames[from.lexeme] = to.lexeme;
+          renames[from.identifier] = to.identifier;
           if (!_matchSymbol(',')) break;
         }
         _expectSymbol('}');
@@ -1516,7 +1548,7 @@ final class _WitParser {
                 tokens[1].span.offset ||
             tokens[1].span.offset + tokens[1].span.length <
                 tokens[2].span.offset)) {
-      name = tokens[0].lexeme;
+      name = tokens[0].identifier;
       // Function and inline-interface boundaries keep their existing compact
       // target spelling; only named interface references are expanded here.
       if (tokens[2].lexeme != 'interface' &&
@@ -1529,7 +1561,7 @@ final class _WitParser {
       _fail(targetStart, 'external-id requires a plain binding name');
     }
     final target = WASIComponentWitTarget(
-      text: targetTokens.map((token) => token.lexeme).join(),
+      text: targetTokens.map((token) => token.identifier).join(),
       span: targetTokens.first.span,
     );
     if (name == null &&
@@ -1803,6 +1835,10 @@ final class _WitToken {
   final _WitTokenKind kind;
   final String lexeme;
   final WASIComponentWitSpan span;
+
+  String get identifier => kind == _WitTokenKind.word && lexeme.startsWith('%')
+      ? lexeme.substring(1)
+      : lexeme;
 }
 
 final class _WitLexer {

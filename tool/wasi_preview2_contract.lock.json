@@ -1,0 +1,487 @@
+{
+  "wasi": {
+    "version": "0.2.12",
+    "repository": "https://github.com/WebAssembly/WASI",
+    "commit": "281ba75fafcd50961ef55f9e52747afcc9b71ede",
+    "tree": "edaab1239de855e4fb3f95bb73e5139f66adfd0f",
+    "source_pattern": "proposals/<package>/wit/*.wit only; excludes wit-0.3.0-draft and non-WIT files",
+    "source_files": [
+      {
+        "path": "proposals/cli/wit/command.wit",
+        "bytes": 154,
+        "git_blob": "d364394187c1081548f27c059b08dce60ec54be3",
+        "sha256": "31501d47bbb3b114c4fcb5218d42e69a4583d298384518c6adda1f2f97442153"
+      },
+      {
+        "path": "proposals/cli/wit/environment.wit",
+        "bytes": 811,
+        "git_blob": "2f449bd7c1f27da4e8a382ab2c68d3853ac35293",
+        "sha256": "5e58cd47b162e9f004bc9224a29c2ec3cf9e1a3d4c910154ce53742f828af91f"
+      },
+      {
+        "path": "proposals/cli/wit/exit.wit",
+        "bytes": 638,
+        "git_blob": "3dffe9873095286e0c3597204edcfefb1973ae11",
+        "sha256": "05453b1a965cdbd08fd1f9fa5df25f98746a68245bf6ff484ff661ed1e192c15"
+      },
+      {
+        "path": "proposals/cli/wit/imports.wit",
+        "bytes": 865,
+        "git_blob": "8d91ed2708603427c48a8a431f23d7409ee4b2a1",
+        "sha256": "2be596bf68d2a4babe8ab388b390af96b4fcd7e4436eea599bd9c4d5705c22f7"
+      },
+      {
+        "path": "proposals/cli/wit/run.wit",
+        "bytes": 116,
+        "git_blob": "655346efb6dde44c3e582098e5489c923a4a48fb",
+        "sha256": "a7df5376da8230e0509fffbb8355641af0765cc5cff8064bbe58fef1cbbe63c1"
+      },
+      {
+        "path": "proposals/cli/wit/stdio.wit",
+        "bytes": 547,
+        "git_blob": "2fe15f75b46bf47af2dd34f7e43cf8b5c8bcc23d",
+        "sha256": "87e289b61c200a8cfc615767ef74920da51fdd75d7fac413dba67fff76e0f95f"
+      },
+      {
+        "path": "proposals/cli/wit/terminal.wit",
+        "bytes": 2021,
+        "git_blob": "d305498c64de95572fee043072bed17125f7f6ba",
+        "sha256": "fc87cd0bc3f76ff7181d3666617a38ee10239f8e0344db2a52cb79f46c6b2d31"
+      },
+      {
+        "path": "proposals/clocks/wit/monotonic-clock.wit",
+        "bytes": 1954,
+        "git_blob": "5c299ced23f90eb73958ef6cad73f1cd1ebe99a9",
+        "sha256": "3453cd071d43c1045d417adea2bec82d66580639b71c09cad641f8a5753da947"
+      },
+      {
+        "path": "proposals/clocks/wit/timezone.wit",
+        "bytes": 2220,
+        "git_blob": "22f3f6698673c28e1b0ebfdc7bcc9d85b5907604",
+        "sha256": "657bb268af30308f7b34f28e0b2bb83f69655789158813dd9926e10b57ebba43"
+      },
+      {
+        "path": "proposals/clocks/wit/wall-clock.wit",
+        "bytes": 1783,
+        "git_blob": "a11bc9a93eb6590eba267670cc21b30aaa38576c",
+        "sha256": "59a16c2aa86e89bb0a15eeb81b4205ea607cc7e97bebffdf62622b369da9b3d5"
+      },
+      {
+        "path": "proposals/clocks/wit/world.wit",
+        "bytes": 240,
+        "git_blob": "19feacabf8db68705afe0cdbff46f78f7d7cc217",
+        "sha256": "b998c5cba8ef680051e83fe12bdc9d579775efe05bc93c27202c125ecc82e76d"
+      },
+      {
+        "path": "proposals/filesystem/wit/preopens.wit",
+        "bytes": 295,
+        "git_blob": "20bd3f020af3f8804993e753fb3efa88aa723128",
+        "sha256": "d67e1e166fdcbd0336784b774997d9af777b3843bca21cc651ba88f524f716e1"
+      },
+      {
+        "path": "proposals/filesystem/wit/types.wit",
+        "bytes": 28872,
+        "git_blob": "8210704925be1bee5307712b8ab31f66a2a55a43",
+        "sha256": "ff4b5f880ef38afb462fa37f00f75a75b476feb5dc0fc2da8a3633e2ae592ee6"
+      },
+      {
+        "path": "proposals/filesystem/wit/world.wit",
+        "bytes": 170,
+        "git_blob": "f166fb41df553065029fed865ffa3b3b01923eef",
+        "sha256": "3b126a50383dc58c7b85bfbde38836179a3df2acc9cddd3130d8dd112b77b2ae"
+      },
+      {
+        "path": "proposals/http/wit/handler.wit",
+        "bytes": 1959,
+        "git_blob": "6a6c62966f112c89ccf816ca6bca3c8639fa346f",
+        "sha256": "1f66174b4058b102367e69ce8aa657b3e9dbc767f6ade960108faaa1731f0945"
+      },
+      {
+        "path": "proposals/http/wit/proxy.wit",
+        "bytes": 1938,
+        "git_blob": "60b745ab57d3c4d6fbe5412e16c814f80572f1ab",
+        "sha256": "8342e207c6ddcd642babce6e744a940c6521892e1370562c7918eb2116de379c"
+      },
+      {
+        "path": "proposals/http/wit/types.wit",
+        "bytes": 27964,
+        "git_blob": "fa7ac221cf77bf9ef9bf23c1dd196d699113eabf",
+        "sha256": "d67973c394247f8ed912368ef81a47408254163e26f11de2d1440ba3f4b66eec"
+      },
+      {
+        "path": "proposals/io/wit/error.wit",
+        "bytes": 1507,
+        "git_blob": "4f6e4f0cac56429d12e5feaeb060903857a9f4e1",
+        "sha256": "a4eb0f5805db705c3c9754d5fc1396c5d75ada2628a4c0ac599310e194e38a9b"
+      },
+      {
+        "path": "proposals/io/wit/poll.wit",
+        "bytes": 1796,
+        "git_blob": "8f87632f337b95be841875fd478660a9cd502d20",
+        "sha256": "385347a39e16284d6c78e9776014be4a5e90aeee74c8de4eabbc6ea5e3b1b2c5"
+      },
+      {
+        "path": "proposals/io/wit/streams.wit",
+        "bytes": 11870,
+        "git_blob": "c7baafbc9891d60f92b36fdd4d4193cbff37450e",
+        "sha256": "8b667deda5c89045ff30cea91693cc5cf1510cc2fdd96a20053459c6bf27e7e9"
+      },
+      {
+        "path": "proposals/io/wit/world.wit",
+        "bytes": 161,
+        "git_blob": "a3fb21e7e2692d5a2e9ade5f3a53bc0c3c346c65",
+        "sha256": "366f9d1a2b5b11cbdbb7a15155b25aa6999c1d1da30e4ba58047d11526014be3"
+      },
+      {
+        "path": "proposals/random/wit/insecure-seed.wit",
+        "bytes": 1157,
+        "git_blob": "ae2c383767c95adeb25b2dc95aeec06c9d3697fa",
+        "sha256": "ef468057768649dd74b23baf659626fd80fc7b653cdb2347437503ffa03fd00a"
+      },
+      {
+        "path": "proposals/random/wit/insecure.wit",
+        "bytes": 944,
+        "git_blob": "25d4b7b278344f76f06e5e112f1eaf329900b342",
+        "sha256": "5c3f5c1e2250edc4db2685a983880822304d0a0847c88e068f2a4a04209f7be1"
+      },
+      {
+        "path": "proposals/random/wit/random.wit",
+        "bytes": 1230,
+        "git_blob": "2763ba4ae8a9948417b55b593bad98625b8c4678",
+        "sha256": "c9553bdc37f0306e7d6908de669330675d528e79762954ed1539f32dbe9f61c4"
+      },
+      {
+        "path": "proposals/random/wit/world.wit",
+        "bytes": 223,
+        "git_blob": "180f0bab0cac49c06e9a92bce4c7cc4dd98ac01f",
+        "sha256": "fc32132c0aee89c0a846dfa5358dfe2143350acca1a470052270bf427815110d"
+      },
+      {
+        "path": "proposals/sockets/wit/instance-network.wit",
+        "bytes": 301,
+        "git_blob": "5f6e6c1cc983085f7265ff8aadcdc65653066ff3",
+        "sha256": "1e4a5d97df44421503a169e1d514eca2cf160f545c44d320ce8a82f726a40cf8"
+      },
+      {
+        "path": "proposals/sockets/wit/ip-name-lookup.wit",
+        "bytes": 2797,
+        "git_blob": "119b731aff10038217babc7070c2fcc62c5b5764",
+        "sha256": "9bbdac3007844acc4a292736be3fe01e39df2ea968f8d1e4568fec20869752f0"
+      },
+      {
+        "path": "proposals/sockets/wit/network.wit",
+        "bytes": 5180,
+        "git_blob": "fd6138fca1ea27dff8712e383300bb627dd300d0",
+        "sha256": "7813868ee56552a434319f5fbf141d55cc1d37272b2976debcc75a50b9cb52e6"
+      },
+      {
+        "path": "proposals/sockets/wit/tcp-create-socket.wit",
+        "bytes": 1594,
+        "git_blob": "eedbd30768c9ceff6df1bfd8081dd971d9ed7ddd",
+        "sha256": "96a6a1a93b859127ee60273f0a77cda8d60930f7952174fb22469293b5da6a3a"
+      },
+      {
+        "path": "proposals/sockets/wit/tcp.wit",
+        "bytes": 21317,
+        "git_blob": "c9c58cb42db60b63b9ecddab172532f99e722298",
+        "sha256": "1e9d17a8e0770abbc2ddead9dcc66793393bafe549f4b7effe73d8ad27272295"
+      },
+      {
+        "path": "proposals/sockets/wit/udp-create-socket.wit",
+        "bytes": 1584,
+        "git_blob": "e8eeacbfefb462c9355abc11a35ae240034276b6",
+        "sha256": "c52b9bf91ef4e30e7ec08ad1fc9e77ef005a0a87648c5d2e416dd6e35369f08c"
+      },
+      {
+        "path": "proposals/sockets/wit/udp.wit",
+        "bytes": 15936,
+        "git_blob": "279ff1d003ac5be1cfb2207b7b19a3849dde80f5",
+        "sha256": "83d0808198c95f261897676a54c93f1914061190d7a08c99847a6e3ddbeabada"
+      },
+      {
+        "path": "proposals/sockets/wit/world.wit",
+        "bytes": 436,
+        "git_blob": "a309aadb2dec91f270053b0d9f6bdc762e0c8171",
+        "sha256": "abf77820f4208da60dab68dc9be63c510eb0e5083014963dc478326798cd771b"
+      }
+    ],
+    "source_bytes": 140580,
+    "compatibility": "Existing 0.2.0 through 0.2.11 compatibility contracts are retained separately; this pin certifies only 0.2.12."
+  },
+  "wasm_tools": {
+    "version": "1.262.0",
+    "revision": "e22db44da",
+    "normalization": [
+      "component",
+      "wit",
+      "--no-docs",
+      "--out-dir"
+    ]
+  },
+  "profiles": {
+    "stable-default": {
+      "features": [],
+      "packages": {
+        "wasi:cli": {
+          "bytes": 4513,
+          "sha256": "131117204aff4a3f85a5064c872eb7a55597a9297169fbedaea198ea5bbd39de"
+        },
+        "wasi:clocks": {
+          "bytes": 977,
+          "sha256": "0f869dc2d6c92c2118e93a7de2de3d8cdce8ab1034e3ee139228698618b9c094"
+        },
+        "wasi:filesystem": {
+          "bytes": 6204,
+          "sha256": "b7dedee38dea2dc0ddfe6dc881f0a5ea8abd8f5c1a86a58100b3c3b74efc44e9"
+        },
+        "wasi:io": {
+          "bytes": 2353,
+          "sha256": "f498eb59daf320aa3092e953f9ff33031b45d22c7771f4f0499e04eb22641a4b"
+        },
+        "wasi:random": {
+          "bytes": 712,
+          "sha256": "9fe4f6d4843eafe388105a35762b49a62d86aa63c90527aceb66bf9fba07e0d8"
+        },
+        "wasi:sockets": {
+          "bytes": 8810,
+          "sha256": "a8186f186090434ab963889127339e19a0cbe90a02897ac556d11ef42741179b"
+        },
+        "wasi:http": {
+          "bytes": 9603,
+          "sha256": "ea7d6d219094658f355f6dccce5afa45851d6ae340dcf3d0cd0f76ee1ad56955"
+        }
+      },
+      "declared_interface_functions": 177
+    },
+    "informational-outbound-responses": {
+      "features": [
+        "informational-outbound-responses"
+      ],
+      "packages": {
+        "wasi:cli": {
+          "bytes": 4513,
+          "sha256": "131117204aff4a3f85a5064c872eb7a55597a9297169fbedaea198ea5bbd39de"
+        },
+        "wasi:clocks": {
+          "bytes": 977,
+          "sha256": "0f869dc2d6c92c2118e93a7de2de3d8cdce8ab1034e3ee139228698618b9c094"
+        },
+        "wasi:filesystem": {
+          "bytes": 6204,
+          "sha256": "b7dedee38dea2dc0ddfe6dc881f0a5ea8abd8f5c1a86a58100b3c3b74efc44e9"
+        },
+        "wasi:io": {
+          "bytes": 2353,
+          "sha256": "f498eb59daf320aa3092e953f9ff33031b45d22c7771f4f0499e04eb22641a4b"
+        },
+        "wasi:random": {
+          "bytes": 712,
+          "sha256": "9fe4f6d4843eafe388105a35762b49a62d86aa63c90527aceb66bf9fba07e0d8"
+        },
+        "wasi:sockets": {
+          "bytes": 8810,
+          "sha256": "a8186f186090434ab963889127339e19a0cbe90a02897ac556d11ef42741179b"
+        },
+        "wasi:http": {
+          "bytes": 9747,
+          "sha256": "aac4f0f3132227b0a203ae182614a9ae4dd6c21636b8e687041ef1dd84153d41"
+        }
+      },
+      "declared_interface_functions": 178
+    }
+  },
+  "informational_extension": {
+    "feature": "informational-outbound-responses",
+    "interface": "wasi:http/types@0.2.12",
+    "function": "[method]response-outparam.send-informational",
+    "insert_after": "  resource response-outparam {\n",
+    "bytes": 144,
+    "sha256": "6a5e265b4c81c666f84bef9f716c44a5cd77c02e9988579ced78560686f9db66"
+  },
+  "worlds": {
+    "wasi:io/imports@0.2.12": {
+      "imports": [
+        "wasi:io/error@0.2.12",
+        "wasi:io/poll@0.2.12",
+        "wasi:io/streams@0.2.12"
+      ],
+      "exports": []
+    },
+    "wasi:clocks/imports@0.2.12": {
+      "imports": [
+        "wasi:io/poll@0.2.12",
+        "wasi:clocks/monotonic-clock@0.2.12",
+        "wasi:clocks/wall-clock@0.2.12"
+      ],
+      "exports": []
+    },
+    "wasi:filesystem/imports@0.2.12": {
+      "imports": [
+        "wasi:io/error@0.2.12",
+        "wasi:io/poll@0.2.12",
+        "wasi:io/streams@0.2.12",
+        "wasi:clocks/wall-clock@0.2.12",
+        "wasi:filesystem/types@0.2.12",
+        "wasi:filesystem/preopens@0.2.12"
+      ],
+      "exports": []
+    },
+    "wasi:sockets/imports@0.2.12": {
+      "imports": [
+        "wasi:sockets/network@0.2.12",
+        "wasi:sockets/instance-network@0.2.12",
+        "wasi:io/poll@0.2.12",
+        "wasi:sockets/udp@0.2.12",
+        "wasi:sockets/udp-create-socket@0.2.12",
+        "wasi:io/error@0.2.12",
+        "wasi:io/streams@0.2.12",
+        "wasi:clocks/monotonic-clock@0.2.12",
+        "wasi:sockets/tcp@0.2.12",
+        "wasi:sockets/tcp-create-socket@0.2.12",
+        "wasi:sockets/ip-name-lookup@0.2.12"
+      ],
+      "exports": []
+    },
+    "wasi:random/imports@0.2.12": {
+      "imports": [
+        "wasi:random/random@0.2.12",
+        "wasi:random/insecure@0.2.12",
+        "wasi:random/insecure-seed@0.2.12"
+      ],
+      "exports": []
+    },
+    "wasi:cli/imports@0.2.12": {
+      "imports": [
+        "wasi:cli/environment@0.2.12",
+        "wasi:cli/exit@0.2.12",
+        "wasi:io/error@0.2.12",
+        "wasi:io/poll@0.2.12",
+        "wasi:io/streams@0.2.12",
+        "wasi:cli/stdin@0.2.12",
+        "wasi:cli/stdout@0.2.12",
+        "wasi:cli/stderr@0.2.12",
+        "wasi:cli/terminal-input@0.2.12",
+        "wasi:cli/terminal-output@0.2.12",
+        "wasi:cli/terminal-stdin@0.2.12",
+        "wasi:cli/terminal-stdout@0.2.12",
+        "wasi:cli/terminal-stderr@0.2.12",
+        "wasi:clocks/monotonic-clock@0.2.12",
+        "wasi:clocks/wall-clock@0.2.12",
+        "wasi:filesystem/types@0.2.12",
+        "wasi:filesystem/preopens@0.2.12",
+        "wasi:sockets/network@0.2.12",
+        "wasi:sockets/instance-network@0.2.12",
+        "wasi:sockets/udp@0.2.12",
+        "wasi:sockets/udp-create-socket@0.2.12",
+        "wasi:sockets/tcp@0.2.12",
+        "wasi:sockets/tcp-create-socket@0.2.12",
+        "wasi:sockets/ip-name-lookup@0.2.12",
+        "wasi:random/random@0.2.12",
+        "wasi:random/insecure@0.2.12",
+        "wasi:random/insecure-seed@0.2.12"
+      ],
+      "exports": []
+    },
+    "wasi:cli/command@0.2.12": {
+      "imports": [
+        "wasi:cli/environment@0.2.12",
+        "wasi:cli/exit@0.2.12",
+        "wasi:io/error@0.2.12",
+        "wasi:io/poll@0.2.12",
+        "wasi:io/streams@0.2.12",
+        "wasi:cli/stdin@0.2.12",
+        "wasi:cli/stdout@0.2.12",
+        "wasi:cli/stderr@0.2.12",
+        "wasi:cli/terminal-input@0.2.12",
+        "wasi:cli/terminal-output@0.2.12",
+        "wasi:cli/terminal-stdin@0.2.12",
+        "wasi:cli/terminal-stdout@0.2.12",
+        "wasi:cli/terminal-stderr@0.2.12",
+        "wasi:clocks/monotonic-clock@0.2.12",
+        "wasi:clocks/wall-clock@0.2.12",
+        "wasi:filesystem/types@0.2.12",
+        "wasi:filesystem/preopens@0.2.12",
+        "wasi:sockets/network@0.2.12",
+        "wasi:sockets/instance-network@0.2.12",
+        "wasi:sockets/udp@0.2.12",
+        "wasi:sockets/udp-create-socket@0.2.12",
+        "wasi:sockets/tcp@0.2.12",
+        "wasi:sockets/tcp-create-socket@0.2.12",
+        "wasi:sockets/ip-name-lookup@0.2.12",
+        "wasi:random/random@0.2.12",
+        "wasi:random/insecure@0.2.12",
+        "wasi:random/insecure-seed@0.2.12"
+      ],
+      "exports": [
+        "wasi:cli/run@0.2.12"
+      ]
+    },
+    "wasi:http/imports@0.2.12": {
+      "imports": [
+        "wasi:io/poll@0.2.12",
+        "wasi:clocks/monotonic-clock@0.2.12",
+        "wasi:clocks/wall-clock@0.2.12",
+        "wasi:random/random@0.2.12",
+        "wasi:io/error@0.2.12",
+        "wasi:io/streams@0.2.12",
+        "wasi:cli/stdout@0.2.12",
+        "wasi:cli/stderr@0.2.12",
+        "wasi:cli/stdin@0.2.12",
+        "wasi:http/types@0.2.12",
+        "wasi:http/outgoing-handler@0.2.12"
+      ],
+      "exports": []
+    },
+    "wasi:http/proxy@0.2.12": {
+      "imports": [
+        "wasi:io/poll@0.2.12",
+        "wasi:clocks/monotonic-clock@0.2.12",
+        "wasi:clocks/wall-clock@0.2.12",
+        "wasi:random/random@0.2.12",
+        "wasi:io/error@0.2.12",
+        "wasi:io/streams@0.2.12",
+        "wasi:cli/stdout@0.2.12",
+        "wasi:cli/stderr@0.2.12",
+        "wasi:cli/stdin@0.2.12",
+        "wasi:http/types@0.2.12",
+        "wasi:http/outgoing-handler@0.2.12"
+      ],
+      "exports": [
+        "wasi:http/incoming-handler@0.2.12"
+      ]
+    }
+  },
+  "excluded_features": [
+    "clocks-timezone",
+    "network-error-code"
+  ],
+  "fixtures": {
+    "wasi_cli_0_2_12_full_command_exit.component.wasm": {
+      "world": "wasi:cli/command@0.2.12",
+      "bytes": 11248,
+      "sha256": "4cff2e1c47e290d8d36a1383aab953dccefe6d5897bf14230927f60045e3bfdf",
+      "source": {
+        "bytes": 36663,
+        "sha256": "f5118fa914760a994181995813601782666947e3091d7795c88243ebd822ff11"
+      }
+    },
+    "wasi_cli_0_2_12_full_command_stdio.component.wasm": {
+      "world": "wasi:cli/command@0.2.12",
+      "bytes": 11976,
+      "sha256": "493d6a4be0e7556b72ce6312f0d647deb9b173ae7e6734d962d8fda5b19fa87c",
+      "source": {
+        "bytes": 38959,
+        "sha256": "3e11c17f8d44f6dcb9fd66ce0bbd730bc980941d69b7c15da4bf7f18ffad57aa"
+      }
+    },
+    "wasi_http_0_2_12_full_proxy.component.wasm": {
+      "world": "wasi:http/proxy@0.2.12",
+      "bytes": 9866,
+      "sha256": "227ab950a4e352907743d387fb7f6f864dc8d32eafa7f5319e6f377c3a879ec0",
+      "source": {
+        "bytes": 29296,
+        "sha256": "ae390f3449eb7c81b2085df86d80911f5ccfcd8c374abad44eb83d190410450a"
+      }
+    }
+  }
+}

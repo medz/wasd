@@ -606,9 +606,190 @@ world demo {
       final document = WASIComponentWitDocument.parse(source);
       final world = document.worldNamed('demo')!;
 
-      expect(document.interfaceNamed('%type'), isNotNull);
-      expect(world.imports.single.target.text, '%type');
+      expect(document.interfaceNamed('type'), isNotNull);
+      expect(world.imports.single.target.text, 'type');
       expect(world.exports.single.target.text, 'handler:interface');
+    });
+
+    test('canonicalizes escaped declaration and use names', () {
+      final document = WASIComponentWitDocument.parse('''
+package %probe:%escaped@1.0.0;
+interface %types {
+  type %count = u32;
+  type %u32 = string;
+  record %record { %type: %count }
+  flags %flags { %read }
+  resource %token { %type: func(%flags: u32); }
+  %interface: func(%type: borrow<%token>, %flags: %flags) -> %record;
+}
+interface %consumer {
+  use %types.{%token as %local-token, %count as %local-count};
+  %run: func(%value: borrow<%local-token>) -> %local-count;
+}
+world %base { import %named: %consumer; }
+world %command { include %base with { %named as %renamed } import %types; }
+''');
+      expect(document.package!.text, 'probe:escaped@1.0.0');
+      expect(document.interfaces.map((i) => i.name), ['types', 'consumer']);
+      expect(document.worlds.map((w) => w.name), ['base', 'command']);
+      final types = document.interfaceNamed('types')!;
+      expect(types.typeAliases.map((a) => a.name), ['count', 'u32']);
+      expect(types.records.single.name, 'record');
+      expect(types.records.single.fields.single.name, 'type');
+      expect(types.flags.single.name, 'flags');
+      expect(types.flags.single.labels.map((label) => label.name), ['read']);
+      expect(types.resources.single.name, 'token');
+      expect(types.functions.map((f) => f.name), ['token.type', 'interface']);
+      final consumer = document.interfaceNamed('consumer')!;
+      expect(consumer.uses.single.target.text, 'types');
+      expect(consumer.uses.single.items.map((i) => (i.name, i.alias)), [
+        ('token', 'local-token'),
+        ('count', 'local-count'),
+      ]);
+      final world = document.worldNamed('command')!;
+      expect(world.includes.single.target.text, 'base');
+      expect(world.includes.single.renames, {'named': 'renamed'});
+      expect(world.imports.single.target.text, 'types');
+    });
+
+    for (final (declaration, reference) in [
+      ('%demo', 'demo'),
+      ('demo', '%demo'),
+    ]) {
+      test('escaped interface reference $declaration matches $reference', () {
+        final document = WASIComponentWitDocument.parse('''
+interface $declaration { run: func(); }
+world command { import $reference; }
+''');
+        expect(document.interfaceNamed('demo'), isNotNull);
+        expect(document.worlds.single.imports.single.target.text, 'demo');
+      });
+    }
+
+    test('escaped keyword identifiers remain function names', () {
+      final document = WASIComponentWitDocument.parse('''
+interface demo {
+  %type: func(%flags: u32);
+  %interface: func(%type: string);
+}
+world command { import demo; }
+''');
+      expect(document.interfaces.single.functions.map((f) => f.name), [
+        'type',
+        'interface',
+      ]);
+    });
+
+    test('escaped and unescaped function names conflict semantically', () {
+      expect(
+        () {
+          final document = WASIComponentWitDocument.parse('''
+interface demo { run: func(); %run: func(); }
+world command { import demo; }
+''');
+          WASIComponentWitAdapterProgram.bind(
+            wasiComponentWitWorldFunctions(document, document.worlds.single),
+            imports: {'demo.run': (_) => null, 'demo.%run': (_) => null},
+          );
+        },
+        throwsA(
+          predicate<Object>(
+            (error) => '$error'.toLowerCase().contains('duplicate'),
+          ),
+        ),
+      );
+    });
+
+    test('escaped identifiers retain external IDs and raw source spans', () {
+      const source = '''
+interface demo {
+  @external-id("remote.%stream")
+  %type: func(%flags: u32);
+}
+world command { @external-id("world.%name") import named: demo; }
+''';
+      final document = WASIComponentWitDocument.parse(
+        source,
+        sourceName: 'escaped-source.wit',
+      );
+      final function = document.interfaces.single.functions.single;
+      final span = function.span;
+      expect(function.externalId, 'remote.%stream');
+      expect(document.worlds.single.imports.single.externalId, 'world.%name');
+      expect(span.sourceName, 'escaped-source.wit');
+      expect(span.offset, source.indexOf('%type:'));
+      expect(span.line, 3);
+      expect(span.column, 3);
+      expect(span.length, '%type'.length);
+      expect(source.substring(span.offset, span.offset + span.length), '%type');
+      expect(function.name, 'type');
+    });
+
+    group('WIT constructor identities', () {
+      for (final isStatic in [false, true]) {
+        test(
+          'keeps a constructor distinct from its named function static=$isStatic',
+          () {
+            final document = WASIComponentWitDocument.parse('''
+interface demo {
+  resource token {
+    constructor(value: u32);
+    %constructor: ${isStatic ? 'static ' : ''}func(value: u32) -> u32;
+  }
+}
+world command { import demo; }
+''');
+            final functions = document.interfaces.single.functions;
+            expect(functions.map((function) => function.name), [
+              'token.constructor',
+              'token.constructor',
+            ]);
+            expect(functions.map((function) => function.isConstructor), [
+              true,
+              false,
+            ]);
+            expect(functions.first.signature, 'func(value:u32)->token');
+            expect(
+              functions.last.signature,
+              isStatic
+                  ? 'func(value:u32)->u32'
+                  : 'func(self:borrow<token>,value:u32)->u32',
+            );
+          },
+        );
+      }
+
+      test(
+        'keeps free constructor names and constructor resource names separate',
+        () {
+          final document = WASIComponentWitDocument.parse('''
+interface %demo {
+  %constructor: func(value: u32) -> u32;
+  resource %constructor {
+    constructor(value: u32);
+    %drop: func() -> u32;
+  }
+}
+world command { import %demo; }
+''');
+          final functions = document.interfaces.single.functions;
+          expect(functions.map((function) => function.name), [
+            'constructor',
+            'constructor.constructor',
+            'constructor.drop',
+          ]);
+          expect(functions.map((function) => function.isConstructor), [
+            false,
+            true,
+            false,
+          ]);
+          expect(functions[1].signature, 'func(value:u32)->%constructor');
+          expect(
+            functions[2].signature,
+            'func(self:borrow<%constructor>)->u32',
+          );
+        },
+      );
     });
 
     test('rejects duplicate interfaces with boundary diagnostics', () {

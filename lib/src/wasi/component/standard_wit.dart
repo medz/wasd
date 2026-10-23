@@ -1,15 +1,31 @@
 import 'wit_adapter.dart';
 import 'wit_document.dart';
 
+part 'standard_wit_preview2.dart';
 part 'standard_wit_preview3.dart';
 
 /// Resolves checked-in standard WASI WIT packages supported by this host.
+///
+/// The fixed 0.2.12 contract defaults to stable declarations. [features] may
+/// enable `informational-outbound-responses`; other features are rejected.
 WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
-  String target,
-) {
+  String target, {
+  Set<String> features = const {},
+}) {
+  validateWASIComponentStandardWitFeatures(features);
   final parsed = _parseQualifiedWitTarget(target);
   if (parsed == null) {
     return null;
+  }
+  if (parsed.version == '0.2.12' &&
+      _wasiPreview2PinnedSources.containsKey(parsed.packageName)) {
+    return WASIComponentWitResolvedTarget(
+      document: _preview2PinnedDocument(
+        parsed.packageName,
+        informational: features.contains(_wasiPreview2InformationalFeature),
+      ),
+      memberName: parsed.memberName,
+    );
   }
   if (parsed.packageName == 'wasi:random' &&
       _isPreview2PatchVersion(parsed.version)) {
@@ -153,6 +169,15 @@ WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
     );
   }
   return null;
+}
+
+/// Rejects feature names outside the supported standard WIT contracts.
+void validateWASIComponentStandardWitFeatures(Set<String> features) {
+  for (final feature in features) {
+    if (feature != _wasiPreview2InformationalFeature) {
+      throw ArgumentError.value(feature, 'features', 'Unknown WIT feature');
+    }
+  }
 }
 
 bool _isPreview3PatchVersion(String? version) =>

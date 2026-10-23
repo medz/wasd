@@ -308,17 +308,25 @@ final class WASIPreview2ComponentHost {
   WASIComponentVersionedWitWorldPlan prepareWitWorld(
     WASIComponentWitDocument document, {
     String? worldName,
+    Set<String> features = const {},
   }) {
-    return versionedHost.prepareWitWorld(document, worldName: worldName);
+    return versionedHost.prepareWitWorld(
+      document,
+      worldName: worldName,
+      features: features,
+    );
   }
 
   /// Prepares and binds a Preview2 WIT world.
   ///
   /// Built-in standard WASI imports are supplied by default and can be
-  /// overridden by passing the same key in [imports].
+  /// overridden by passing the same semantic or historical escaped key in
+  /// [imports]. [features] selects optional fixed 0.2.12 contracts, such as
+  /// `informational-outbound-responses`.
   WASIComponentWitAdapterProgram bindWitWorld(
     WASIComponentWitDocument document, {
     String? worldName,
+    Set<String> features = const {},
     Map<String, WASIComponentWitAdapterCallback> imports =
         const <String, WASIComponentWitAdapterCallback>{},
     Map<String, WASIComponentWitAdapterCallback> exports =
@@ -327,9 +335,10 @@ final class WASIPreview2ComponentHost {
     return versionedHost.bindWitWorld(
       document,
       worldName: worldName,
+      features: features,
       imports: <String, WASIComponentWitAdapterCallback>{
-        ...standardImports,
-        ...imports,
+        ...normalizeWASIComponentWitCallbacks(standardImports),
+        ...normalizeWASIComponentWitCallbacks(imports),
       },
       exports: exports,
     );

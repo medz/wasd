@@ -14,6 +14,36 @@ import 'package:wasd/wasi.dart';
 import 'package:wasd/wasm.dart' hide Exception;
 
 void main() {
+  for (final callbackKey in ['demo.stream', 'demo.%stream']) {
+    test('generic component accepts callback key $callbackKey', () async {
+      final component = await _encodeComponent(r'''
+(component
+  (type $api (instance
+    (type $function (func (result u32)))
+    (export "stream" (func (type $function)))))
+  (import "demo" (instance $demo (type $api)))
+  (alias export $demo "stream" (func $stream))
+  (export "run" (func $stream)))
+''', validate: true);
+      var calls = 0;
+      final runtime = WASIComponentNativeRuntime.component(
+        component: component,
+        host: WASIComponentHost(),
+        imports: {
+          callbackKey: (_) {
+            calls++;
+            return 42;
+          },
+        },
+      );
+      try {
+        expect(await runtime.invokeExport('run', []), 42);
+        expect(calls, 1);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+  }
   for (final kind in ['stream', 'future']) {
     for (final namedAlias in [false, true]) {
       test(

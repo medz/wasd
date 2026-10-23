@@ -9,6 +9,393 @@ import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 
 void main() {
+  group('WIT escaped identifier adapters', () {
+    test('binds canonical keyword names and parameter labels', () {
+      final document = WASIComponentWitDocument.parse('''
+interface demo {
+  %type: func(%flags: u32);
+  %interface: func(%type: string);
+}
+world command { import demo; }
+''');
+      final functions = wasiComponentWitWorldFunctions(
+        document,
+        document.worlds.single,
+      );
+      expect(functions.map((f) => f.qualifiedName), [
+        'demo.type',
+        'demo.interface',
+      ]);
+      expect(functions.map((f) => f.signature.params.single.label), [
+        'flags',
+        'type',
+      ]);
+      final program = WASIComponentWitAdapterProgram.bind(
+        functions,
+        imports: {'demo.type': (_) => null, 'demo.interface': (_) => null},
+      );
+      expect(program.invokeImport('demo.type', [7]), isNull);
+      expect(program.invokeImport('demo.interface', ['value']), isNull);
+    });
+
+    test('resolves escaped resource references to their declaring owner', () {
+      final document = WASIComponentWitDocument.parse('''
+interface demo {
+  resource token;
+  inspect: func(value: borrow<%token>) -> %token;
+}
+world command { import demo; }
+''');
+      final functions = wasiComponentWitWorldFunctions(
+        document,
+        document.worlds.single,
+      );
+      expect(wasiComponentWitAdapterBindingErrors(functions), isEmpty);
+      final owner = document.interfaces.single.resources.single;
+      final signature = functions.single.signature;
+      expect(signature.params.single.type.resourceIdentity, same(owner));
+      expect(signature.params.single.type.resourceName, 'token');
+      expect(signature.params.single.type.isBorrowedResource, isTrue);
+      expect(signature.result!.resourceIdentity, same(owner));
+      expect(signature.result!.isBorrowedResource, isFalse);
+    });
+
+    for (final imported in [false, true]) {
+      test(
+        'keeps explicit primitive-name aliases distinct imported=$imported',
+        () {
+          final document = WASIComponentWitDocument.parse('''
+${imported ? 'interface types { type %u32 = string; }' : ''}
+interface values {
+  ${imported ? 'use types.{%u32};' : 'type %u32 = string;'}
+  inspect: func(custom: %u32, primitive: u32) -> %u32;
+}
+world command { import values; }
+''');
+          final functions = wasiComponentWitWorldFunctions(
+            document,
+            document.worlds.single,
+          );
+          expect(wasiComponentWitAdapterBindingErrors(functions), isEmpty);
+          final signature = functions.single.signature;
+          expect(
+            signature.params[0].type.primitive,
+            WasmComponentPrimitiveValueType.string,
+          );
+          expect(
+            signature.params[1].type.primitive,
+            WasmComponentPrimitiveValueType.u32,
+          );
+          expect(
+            signature.result!.primitive,
+            WasmComponentPrimitiveValueType.string,
+          );
+          final program = WASIComponentWitAdapterProgram.bind(
+            functions,
+            imports: {'values.inspect': (args) => args.first},
+          );
+          expect(program.invokeImport('values.inspect', ['text', 7]), 'text');
+          expect(
+            () => program.invokeImport('values.inspect', [7, 7]),
+            throwsStateError,
+          );
+        },
+      );
+    }
+
+    for (final key in ['demo.type', 'demo.%type']) {
+      test('accepts the callback spelling $key for canonical invocation', () {
+        final program = WASIComponentWitAdapterProgram.bind(
+          _escapedCallbackFunctions(),
+          imports: {key: (args) => args.single},
+        );
+        expect(program.invokeImport('demo.type', [17]), 17);
+        expect(program.invokeImport('demo.%type', [23]), 23);
+      });
+    }
+
+    for (final reversed in [false, true]) {
+      test('rejects conflicting callback spellings reversed=$reversed', () {
+        Object? first(List<Object?> _) => 11;
+        Object? second(List<Object?> _) => 22;
+        expect(
+          () => WASIComponentWitAdapterProgram.bind(
+            _escapedCallbackFunctions(),
+            imports: reversed
+                ? {'demo.%type': second, 'demo.type': first}
+                : {'demo.type': first, 'demo.%type': second},
+          ),
+          throwsStateError,
+        );
+      });
+    }
+
+    test('accepts callback aliases that refer to the identical function', () {
+      Object? callback(List<Object?> args) => args.single;
+      final program = WASIComponentWitAdapterProgram.bind(
+        _escapedCallbackFunctions(),
+        imports: {'demo.type': callback, 'demo.%type': callback},
+      );
+      expect(program.invokeImport('demo.type', [17]), 17);
+      expect(program.invokeImport('demo.%type', [23]), 23);
+    });
+  });
+
+  group('WIT constructor identities', () {
+    for (final isStatic in [false, true]) {
+      test('invokes separate constructor callbacks static=$isStatic', () {
+        final document = WASIComponentWitDocument.parse('''
+interface demo {
+  resource token {
+    constructor(value: u32);
+    %constructor: ${isStatic ? 'static ' : ''}func(value: u32) -> u32;
+  }
+}
+world command { import demo; }
+''');
+        final functions = wasiComponentWitWorldFunctions(
+          document,
+          document.worlds.single,
+        );
+        expect(functions.map((function) => function.qualifiedName), [
+          'demo.token.constructor',
+          'demo.token.%constructor',
+        ]);
+        final calls = <List<Object?>>[];
+        Object? constructor(List<Object?> args) {
+          calls.add(['constructor', ...args]);
+          return 41;
+        }
+
+        Object? member(List<Object?> args) {
+          calls.add(['member', ...args]);
+          return 100 + (args.last! as int);
+        }
+
+        for (final callbacks in [
+          {
+            'demo.token.constructor': constructor,
+            'demo.token.%constructor': member,
+          },
+          {
+            'demo.token.%constructor': member,
+            'demo.token.constructor': constructor,
+          },
+        ]) {
+          calls.clear();
+          final program = WASIComponentWitAdapterProgram.bind(
+            functions,
+            imports: callbacks,
+          );
+          expect(program.invokeImport('demo.token.constructor', [7]), 41);
+          expect(
+            program.invokeImport('demo.token.%constructor', [
+              if (!isStatic) 41,
+              9,
+            ]),
+            109,
+          );
+          expect(program.invokeImport('%demo.%token.constructor', [8]), 41);
+          expect(
+            program.invokeImport('%demo.%token.%constructor', [
+              if (!isStatic) 41,
+              10,
+            ]),
+            110,
+          );
+          expect(calls, [
+            ['constructor', 7],
+            ['member', if (!isStatic) 41, 9],
+            ['constructor', 8],
+            ['member', if (!isStatic) 41, 10],
+          ]);
+        }
+      });
+    }
+
+    test('resolves escaped free constructor and resource-name prefixes', () {
+      final document = WASIComponentWitDocument.parse('''
+interface %demo {
+  %constructor: func(value: u32) -> u32;
+  resource %constructor {
+    constructor(value: u32);
+    %drop: func() -> u32;
+  }
+}
+world command { import %demo; }
+''');
+      final program = WASIComponentWitAdapterProgram.bind(
+        wasiComponentWitWorldFunctions(document, document.worlds.single),
+        imports: {
+          '%demo.%constructor': (args) => args.single,
+          '%demo.%constructor.constructor': (args) =>
+              100 + (args.single! as int),
+          '%demo.%constructor.%drop': (args) => 1 + (args.single! as int),
+        },
+      );
+      expect(program.invokeImport('demo.constructor', [7]), 7);
+      expect(program.invokeImport('%demo.%constructor', [8]), 8);
+      expect(program.invokeImport('demo.constructor.constructor', [9]), 109);
+      expect(program.invokeImport('%demo.%constructor.constructor', [10]), 110);
+      expect(program.invokeImport('%demo.%constructor.%drop', [110]), 111);
+    });
+
+    test(
+      'never treats an absent constructor method as a resource constructor',
+      () async {
+        final document = WASIComponentWitDocument.parse('''
+interface demo { resource token { constructor(); } }
+world command { import demo; }
+''');
+        final program = WASIComponentWitAdapterProgram.bind(
+          wasiComponentWitWorldFunctions(document, document.worlds.single),
+          imports: {'demo.token.constructor': (_) => 41},
+        );
+        expect(program.invokeImport('demo.token.constructor', []), 41);
+        for (final key in [
+          'demo.token.%constructor',
+          '%demo.%token.%constructor',
+        ]) {
+          expect(() => program.invokeImport(key, []), throwsStateError);
+          await expectLater(
+            () => program.invokeImportAsync(key, []),
+            throwsStateError,
+          );
+        }
+      },
+    );
+
+    test('free constructor aliases retain same-layer conflict checks', () {
+      final document = WASIComponentWitDocument.parse('''
+interface demo { %constructor: func() -> u32; }
+world command { import demo; }
+''');
+      final functions = wasiComponentWitWorldFunctions(
+        document,
+        document.worlds.single,
+      );
+      Object? first(List<Object?> _) => 1;
+      Object? second(List<Object?> _) => 2;
+      for (final callbacks in [
+        {'demo.constructor': first, 'demo.%constructor': second},
+        {'demo.%constructor': second, 'demo.constructor': first},
+      ]) {
+        expect(
+          () => WASIComponentWitAdapterProgram.bind(
+            functions,
+            imports: callbacks,
+          ),
+          throwsStateError,
+        );
+      }
+      final program = WASIComponentWitAdapterProgram.bind(
+        functions,
+        imports: {'demo.constructor': first, 'demo.%constructor': first},
+      );
+      expect(program.invokeImport('demo.%constructor', []), 1);
+    });
+
+    test(
+      'canonical dependency callbacks keep async constructor identities separate',
+      () async {
+        final document = WASIComponentWitDocument.parse('''
+package probe:constructors@1.0.0;
+interface dep {
+  %constructor: async func(value: u32) -> u32;
+  resource token {
+    constructor(value: u32);
+    %constructor: async func(value: u32) -> u32;
+  }
+}
+interface api { use dep.{token}; run: func(value: borrow<token>); }
+world command { import api; }
+''');
+        final functions = wasiComponentWitWorldFunctions(
+          document,
+          document.worlds.single,
+        );
+        final callbacks = <String, WASIComponentWitAdapterCallback>{
+          'probe:constructors/dep@1.0.0.%constructor': (args) async =>
+              100 + (args.single! as int),
+          'probe:constructors/dep@1.0.0.token.constructor': (_) async => 41,
+          'probe:constructors/dep@1.0.0.token.%constructor': (args) async =>
+              200 + (args.last! as int),
+          'api.run': (_) => null,
+        };
+        final program = WASIComponentWitAdapterProgram.bind(
+          functions,
+          imports: callbacks,
+        );
+        expect(await program.invokeImportAsync('%dep.%constructor', [7]), 107);
+        expect(await program.invokeImportAsync('dep.constructor', [8]), 108);
+        expect(
+          await program.invokeImportAsync('%dep.%token.constructor', [9]),
+          41,
+        );
+        expect(
+          await program.invokeImportAsync('%dep.%token.%constructor', [41, 10]),
+          210,
+        );
+        expect(
+          () => program.invokeImport('%dep.%constructor', [7]),
+          throwsStateError,
+        );
+        expect(
+          () => program.invokeImport('%dep.%token.%constructor', [41, 10]),
+          throwsStateError,
+        );
+
+        final overridden = WASIComponentWitAdapterProgram.bind(
+          functions,
+          imports: {
+            ...callbacks,
+            'dep.%constructor': (args) async => 300 + (args.single! as int),
+            'dep.token.%constructor': (args) async => 400 + (args.last! as int),
+          },
+        );
+        expect(await overridden.invokeImportAsync('dep.constructor', [7]), 307);
+        expect(
+          await overridden.invokeImportAsync('dep.token.%constructor', [
+            41,
+            10,
+          ]),
+          410,
+        );
+        expect(
+          await overridden.invokeImportAsync('dep.token.constructor', [9]),
+          41,
+        );
+      },
+    );
+
+    test('still rejects conflicting aliases of ordinary escaped functions', () {
+      final document = WASIComponentWitDocument.parse('''
+interface demo {
+  %constructor: func() -> u32;
+  %type: func() -> u32;
+}
+world command { import demo; }
+''');
+      expect(
+        () => WASIComponentWitAdapterProgram.bind(
+          wasiComponentWitWorldFunctions(document, document.worlds.single),
+          imports: {
+            'demo.%constructor': (_) => 1,
+            'demo.type': (_) => 2,
+            'demo.%type': (_) => 3,
+          },
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            contains('Conflicting WIT adapter callbacks for demo.type'),
+          ),
+        ),
+      );
+    });
+  });
+
   group('WIT named interface adapters', () {
     test('nested include with can rename a plain empty interface binding', () {
       final document = WASIComponentWitDocument.parse('''
@@ -233,7 +620,11 @@ world command { import filesystem; }
       final owner = resolveWASIComponentStandardWitTarget(
         'wasi:io/error@0.2.12',
       )!.document.interfaceNamed('error')!.resourceNamed('error');
-      final signature = functions.single.signature;
+      final signature = functions
+          .singleWhere(
+            (function) => function.qualifiedName == 'filesystem.inspect',
+          )
+          .signature;
       final borrowed = signature.params.single.type;
       expect(borrowed.isBorrowedResource, isTrue);
       expect(borrowed.resourceName, 'stream-error');
@@ -845,6 +1236,14 @@ world command { import api; }
       ]);
     });
   });
+}
+
+List<WASIComponentWitFunctionBinding> _escapedCallbackFunctions() {
+  final document = WASIComponentWitDocument.parse('''
+interface demo { %type: func(value: u32) -> u32; }
+world command { import demo; }
+''');
+  return wasiComponentWitWorldFunctions(document, document.worlds.single);
 }
 
 WASIComponentWitAdapterProgram _bindMapWorld(

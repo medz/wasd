@@ -52,7 +52,7 @@ export 'component/value_memory.dart'
 export 'component/versioned_host.dart';
 export 'component/waitable_set.dart'
     hide WASIComponentCanonicalWaitableCopyState;
-export 'component/wit_adapter.dart';
+export 'component/wit_adapter.dart' hide normalizeWASIComponentWitCallbacks;
 export 'component/wit_document.dart';
 export 'preview2/cli.dart' hide WASIPreview2CliResourceTypes;
 export 'preview2/clocks.dart';

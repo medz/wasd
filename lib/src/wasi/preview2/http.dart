@@ -880,7 +880,15 @@ base class WASIPreview2HttpHost {
         onDrop: (response) => response._drop(),
       );
 
-  /// Standard `wasi:http@0.2.0` import callbacks.
+  late final WASIComponentWitAdapterCallback _incomingBodyStreamImport =
+      _incomingBodyStream;
+
+  Object? _incomingBodyStream(List<Object?> args) => _inputStreamResult(
+    _handle(args.single),
+    _incomingBody(_handle(args.single)).takeStream(),
+  );
+
+  /// Standard `wasi:http@0.2.0` import callbacks, including legacy WIT spellings.
   late final Map<String, WASIComponentWitAdapterCallback>
   imports = Map<String, WASIComponentWitAdapterCallback>.unmodifiable({
     'wasi:http/types@0.2.0.http-error-code': (args) =>
@@ -997,10 +1005,8 @@ base class WASIPreview2HttpHost {
         ),
     'wasi:http/types@0.2.0.incoming-response.consume': (args) =>
         _incomingBodyResult(_incomingResponse(_handle(args.single)).consume()),
-    'wasi:http/types@0.2.0.incoming-body.%stream': (args) => _inputStreamResult(
-      _handle(args.single),
-      _incomingBody(_handle(args.single)).takeStream(),
-    ),
+    'wasi:http/types@0.2.0.incoming-body.stream': _incomingBodyStreamImport,
+    'wasi:http/types@0.2.0.incoming-body.%stream': _incomingBodyStreamImport,
     'wasi:http/types@0.2.0.incoming-body.finish': (args) =>
         _finishIncomingBody(_handle(args.single)),
     'wasi:http/types@0.2.0.future-trailers.subscribe': (args) =>

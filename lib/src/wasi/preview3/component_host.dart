@@ -259,8 +259,8 @@ final class WASIPreview3ComponentHost {
       document,
       worldName: worldName,
       imports: <String, WASIComponentWitAdapterCallback>{
-        ...standardImports,
-        ...imports,
+        ...normalizeWASIComponentWitCallbacks(standardImports),
+        ...normalizeWASIComponentWitCallbacks(imports),
       },
       exports: exports,
     );
