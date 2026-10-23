@@ -98,6 +98,12 @@ Typed, nonnullable, GC and table64 public bindings remain unsupported; existing
 module feature gates are unchanged. JS tables retain primitive-only externref
 conversion and the explicit Dart function-reference limitation.
 
+Native [exception tags](doc/host_tags.md) also support nullable `externref` and
+`funcref` payloads, preserving tag identity and values across host and guest
+throws. Function payloads retain their call signatures and asynchronous targets.
+Typed, nonnullable, GC and vector public tag payloads remain unsupported;
+JavaScript payload conversion keeps its existing limits.
+
 ## Quick Start
 
 Run included examples:

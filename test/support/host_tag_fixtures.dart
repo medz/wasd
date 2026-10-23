@@ -10,7 +10,7 @@ const _fixtures = <String, String>{
   'nonfinal_import':
       'AGFzbQEAAAABBwFQAGABfwACDQEEaG9zdAN0YWcEAAAADQRuYW1lBAYBAAN0YWc=',
   'unsupported_export_start':
-      'AGFzbQEAAAABCAJgAABgAW8AAg0BBGhvc3QEdGljawAADQMBAAEHBwEDdGFnBAAIAQAADgRuYW1lAQcBAAR0aWNr',
+      'AGFzbQEAAAABCAJgAABgAXsAAg0BBGhvc3QEdGljawAADQMBAAEHBwEDdGFnBAAIAQAADgRuYW1lAQcBAAR0aWNr',
   'duplicate_import':
       'AGFzbQEAAAABCQJgAW8AYAF/AAIZAgRob3N0A3RhZwQAAARob3N0A3RhZwQAAQ==',
   'consumer':

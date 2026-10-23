@@ -17,7 +17,10 @@ abstract interface class Tag {
   /// Creates a tag from [descriptor].
   ///
   /// The tag snapshots the ordered parameters. Native module bindings currently
-  /// support empty and numeric (`i32`, `i64`, `f32`, `f64`) payloads.
+  /// support empty, numeric (`i32`, `i64`, `f32`, `f64`), and nullable
+  /// `externref`/`funcref` payloads. Native `funcref` values must be functions
+  /// from this backend or `null`; typed and nonnullable references and `v128`
+  /// remain unsupported at public tag boundaries.
   factory Tag(TagDescriptor descriptor) = backend.Tag;
 
   /// Returns the tag type information.

@@ -328,6 +328,13 @@ final class WasmVm {
                 table.refTypeSignature == '70' ||
                 table.refTypeSignature == '6370'),
       );
+      // A host callback may throw a previously unseen function reference in a
+      // tag payload, then guest code can call it during the same invocation.
+      mutableReferenceState |= vm._tagTypes.any(
+        (type) => type.paramTypeSignatures.any(
+          (signature) => WasmModule.canonicalTagSignature(signature) == '70',
+        ),
+      );
       for (var i = 0; i < vm._functions.length; i++) {
         final function = vm._functions[i];
         mutableReferenceState |= function.type.paramTypeSignatures.any(

@@ -27,8 +27,9 @@ class Tag implements wasm.Tag {
             ValueKind.i64 => ir.WasmValueType.i64,
             ValueKind.f32 => ir.WasmValueType.f32,
             ValueKind.f64 => ir.WasmValueType.f64,
+            ValueKind.externref || ValueKind.funcref => ir.WasmValueType.i32,
             _ => throw UnsupportedError(
-              'Native tag bindings support numeric payload kinds only.',
+              'Native public tags do not support v128 payloads.',
             ),
           },
         )
@@ -38,7 +39,7 @@ class Tag implements wasm.Tag {
         params: List.unmodifiable(params),
         results: const [],
         kind: ir.WasmCompositeTypeKind.function,
-        paramTypeSignatures: List.unmodifiable(params.map(_signature)),
+        paramTypeSignatures: List.unmodifiable(_parameters.map(_signature)),
       ),
       nominalTypeKey: 'host:tag:${_nextHostTagId++}',
       typeKey: '${params.map((type) => type.index).join(',')}->',
@@ -48,6 +49,8 @@ class Tag implements wasm.Tag {
   static void checkSupportedType(ir.WasmFunctionType type) {
     _runtimeParameters(type);
   }
+
+  String parameterSignature(int index) => _signature(_parameters[index]);
 
   @override
   wasm.TagDescriptor type() =>
@@ -67,24 +70,31 @@ class Tag implements wasm.Tag {
     }
     return List.unmodifiable([
       for (var i = 0; i < type.params.length; i++)
-        if (type.paramTypeSignatures[i] == _signature(type.params[i]))
-          switch (type.params[i]) {
-            ir.WasmValueType.i32 => ValueKind.i32,
-            ir.WasmValueType.i64 => ValueKind.i64,
-            ir.WasmValueType.f32 => ValueKind.f32,
-            ir.WasmValueType.f64 => ValueKind.f64,
-          }
-        else
-          throw UnsupportedError(
-            'Native tag bindings support numeric payload kinds only.',
+        switch ((
+          ir.WasmModule.canonicalTagSignature(type.paramTypeSignatures[i]),
+          type.params[i],
+        )) {
+          ('7f', ir.WasmValueType.i32) => ValueKind.i32,
+          ('7e', ir.WasmValueType.i64) => ValueKind.i64,
+          ('7d', ir.WasmValueType.f32) => ValueKind.f32,
+          ('7c', ir.WasmValueType.f64) => ValueKind.f64,
+          ('6f', ir.WasmValueType.i32) => ValueKind.externref,
+          ('70', ir.WasmValueType.i32) => ValueKind.funcref,
+          _ => throw UnsupportedError(
+            'Native public tags support numeric, nullable externref and '
+            'nullable funcref payloads only.',
           ),
+        },
     ]);
   }
 
-  static String _signature(ir.WasmValueType type) => switch (type) {
-    ir.WasmValueType.i32 => '7f',
-    ir.WasmValueType.i64 => '7e',
-    ir.WasmValueType.f32 => '7d',
-    ir.WasmValueType.f64 => '7c',
+  static String _signature(ValueKind kind) => switch (kind) {
+    ValueKind.i32 => '7f',
+    ValueKind.i64 => '7e',
+    ValueKind.f32 => '7d',
+    ValueKind.f64 => '7c',
+    ValueKind.externref => '6f',
+    ValueKind.funcref => '70',
+    _ => throw UnsupportedError('Unsupported native tag payload kind.'),
   };
 }
