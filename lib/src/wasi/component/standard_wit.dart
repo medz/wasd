@@ -12,11 +12,7 @@ WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
   String target, {
   Set<String> features = const {},
 }) {
-  for (final feature in features) {
-    if (feature != _wasiPreview2InformationalFeature) {
-      throw ArgumentError.value(feature, 'features', 'Unknown WIT feature');
-    }
-  }
+  validateWASIComponentStandardWitFeatures(features);
   final parsed = _parseQualifiedWitTarget(target);
   if (parsed == null) {
     return null;
@@ -173,6 +169,15 @@ WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
     );
   }
   return null;
+}
+
+/// Rejects feature names outside the supported standard WIT contracts.
+void validateWASIComponentStandardWitFeatures(Set<String> features) {
+  for (final feature in features) {
+    if (feature != _wasiPreview2InformationalFeature) {
+      throw ArgumentError.value(feature, 'features', 'Unknown WIT feature');
+    }
+  }
 }
 
 bool _isPreview3PatchVersion(String? version) =>

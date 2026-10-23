@@ -2428,6 +2428,51 @@ world http-test {
       );
     });
 
+    for (final (kind, source) in [
+      ('empty', 'world command {}'),
+      (
+        'local',
+        'interface demo { run: func(); } world command { import demo; }',
+      ),
+      ('qualified', 'world command { import wasi:http/types@0.2.12; }'),
+    ]) {
+      test('WIT features reject unknown names for $kind worlds', () {
+        final document = WASIComponentWitDocument.parse(source);
+        const features = {'informational-outbound-response'};
+        final versioned = WASIComponentVersionedHost(
+          version: WASIVersion.preview2,
+        );
+        final preview2 = WASIPreview2ComponentHost();
+        for (final prepare in [
+          () => versioned.prepareWitWorld(document, features: features),
+          () => preview2.prepareWitWorld(document, features: features),
+          () => versioned.bindWitWorld(document, features: features),
+          () => preview2.bindWitWorld(document, features: features),
+        ]) {
+          expect(
+            prepare,
+            throwsA(
+              isA<ArgumentError>().having(
+                (error) => error.invalidValue,
+                'feature name',
+                features.single,
+              ),
+            ),
+          );
+        }
+        expect(preview2.prepareWitWorld(document).canIngest, isTrue);
+        expect(
+          preview2
+              .prepareWitWorld(
+                document,
+                features: {'informational-outbound-responses'},
+              )
+              .canIngest,
+          isTrue,
+        );
+      });
+    }
+
     test('Preview2 0.2.12 informational contract is an explicit opt-in', () {
       final document = WASIComponentWitDocument.parse('''
 world command { import wasi:http/types@0.2.12; }

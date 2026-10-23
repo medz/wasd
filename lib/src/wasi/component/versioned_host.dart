@@ -101,6 +101,7 @@ final class WASIComponentVersionedHost {
     String? worldName,
     Set<String> features = const {},
   }) {
+    validateWASIComponentStandardWitFeatures(features);
     final world = _selectWitWorld(document, worldName);
     final errors = _witWorldVersionErrors(profile, document, world).toList();
     List<WASIComponentWitFunctionBinding> functions;
