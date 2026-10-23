@@ -58,7 +58,7 @@ class Instance implements wasm.Instance {
       rethrow;
     } on ir_vm.WasmGuestException catch (error, stackTrace) {
       Error.throwWithStackTrace(
-        native_exception.Exception.fromRuntime(error),
+        native_exception.Exception.fromRuntime(error, _references),
         stackTrace,
       );
     } on WasmError {
@@ -173,24 +173,30 @@ class Instance implements wasm.Instance {
         );
       }
     }
-    final declaredTags = <(String, String)>{};
+    final tagTypes = [
+      for (final import in decoded.imports)
+        if (import.kind == ir_module.WasmImportKind.tag)
+          decoded.types[import.tagType!.typeIndex],
+      for (final tag in decoded.tags) decoded.types[tag.typeIndex],
+    ];
+    _hasFunctionReferences |= tagTypes.any(
+      (type) => type.paramTypeSignatures.any(
+        (signature) => ReferenceValues.isFunction(
+          ir_module.WasmModule.canonicalTagSignature(signature),
+        ),
+      ),
+    );
+    final declaredTags = <(String, String), List<ir_module.WasmFunctionType>>{};
     for (final import in decoded.imports) {
       if (import.kind == ir_module.WasmImportKind.tag) {
-        native_tag.Tag.checkSupportedType(
-          decoded.types[import.tagType!.typeIndex],
-        );
-        declaredTags.add((import.module, import.name));
+        final type = decoded.types[import.tagType!.typeIndex];
+        native_tag.Tag.checkSupportedType(type);
+        (declaredTags[(import.module, import.name)] ??= []).add(type);
       }
     }
     if (decoded.exports.any(
       (export) => export.kind == ir_module.WasmExportKind.tag,
     )) {
-      final tagTypes = [
-        for (final import in decoded.imports)
-          if (import.kind == ir_module.WasmImportKind.tag)
-            decoded.types[import.tagType!.typeIndex],
-        for (final tag in decoded.tags) decoded.types[tag.typeIndex],
-      ];
       for (final export in decoded.exports) {
         if (export.kind == ir_module.WasmExportKind.tag) {
           native_tag.Tag.checkSupportedType(tagTypes[export.index]);
@@ -255,6 +261,7 @@ class Instance implements wasm.Instance {
                       ? result
                       : referenceValues.target!.encodeResults(type, result);
                 } on native_exception.Exception catch (error, stackTrace) {
+                  error.retainIn(referenceValues.target!);
                   Error.throwWithStackTrace(error.host, stackTrace);
                 } catch (error, stack) {
                   if (error is WasmHostControlFlowException) rethrow;
@@ -281,6 +288,7 @@ class Instance implements wasm.Instance {
                     ? result
                     : referenceValues.target!.encodeResults(type, result);
               } on native_exception.Exception catch (error, stackTrace) {
+                error.retainIn(referenceValues.target!);
                 Error.throwWithStackTrace(error.host, stackTrace);
               } catch (error, stack) {
                 if (error is WasmHostControlFlowException) rethrow;
@@ -309,7 +317,8 @@ class Instance implements wasm.Instance {
               _references.connect(ref.references);
             }
           case wasm.TagImportExportValue(:final ref):
-            if (!declaredTags.contains((moduleEntry.key, importEntry.key))) {
+            final expected = declaredTags[(moduleEntry.key, importEntry.key)];
+            if (expected == null) {
               continue;
             }
             if (ref is! native_tag.Tag) {
@@ -318,6 +327,19 @@ class Instance implements wasm.Instance {
               );
             }
             final binding = ref.host;
+            final actual = binding.type.paramTypeSignatures
+                .map(ir_module.WasmModule.canonicalTagSignature)
+                .join(',');
+            for (final type in expected) {
+              if (type.paramTypeSignatures
+                      .map(ir_module.WasmModule.canonicalTagSignature)
+                      .join(',') !=
+                  actual) {
+                throw LinkError(
+                  'Tag import `$key` has incompatible payload types.',
+                );
+              }
+            }
             tags[key] = binding;
             (_tagBindings ??= {})[binding.nominalTypeKey] = ref;
           case wasm.TableImportExportValue(:final ref):
@@ -402,7 +424,7 @@ class Instance implements wasm.Instance {
       failure.rethrowOriginal();
     } on ir_vm.WasmGuestException catch (error, stackTrace) {
       Error.throwWithStackTrace(
-        native_exception.Exception.fromRuntime(error),
+        native_exception.Exception.fromRuntime(error, _references),
         stackTrace,
       );
     }
@@ -475,7 +497,7 @@ class Instance implements wasm.Instance {
                 failure.rethrowOriginal();
               } on ir_vm.WasmGuestException catch (error, stackTrace) {
                 Error.throwWithStackTrace(
-                  native_exception.Exception.fromRuntime(error),
+                  native_exception.Exception.fromRuntime(error, _references),
                   stackTrace,
                 );
               }

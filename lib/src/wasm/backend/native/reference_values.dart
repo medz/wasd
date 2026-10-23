@@ -303,11 +303,11 @@ final class ReferenceValues {
     ];
   }
 
-  static Never rethrowPublicError(Object error, StackTrace stack) {
+  Never rethrowPublicError(Object error, StackTrace stack) {
     if (error is HostCallbackFailure) error.rethrowOriginal();
     if (error is WasmGuestException) {
       Error.throwWithStackTrace(
-        native_exception.Exception.fromRuntime(error),
+        native_exception.Exception.fromRuntime(error, this),
         stack,
       );
     }

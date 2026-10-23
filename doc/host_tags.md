@@ -3,6 +3,8 @@
 Version `0.6.0` includes numeric public `Tag`/`Exception` bindings and the
 native `CoreFeature.exceptionHandling` opt-in, first published in
 `0.6.0-dev.2`. Earlier `0.6.0-dev.1` does not provide these additions.
+Unreleased main also supports native nullable `externref` and `funcref` tag
+payloads; these additions are not included in published `0.6.1`.
 The JavaScript adapter uses its platform engine and does not accept explicit
 feature options. The native Dart VM requires the option below.
 
@@ -21,12 +23,16 @@ final parameters = exported.type().parameters;
 ```
 
 The module must declare the matching `host.error` import and `error` export.
-Empty payloads and ordered `i32`, `i64`, `f32`, and `f64` payloads are supported.
+Empty payloads and ordered `i32`, `i64`, `f32`, `f64`, nullable `externref` and
+nullable `funcref` payloads are supported on native main. Equivalent explicit
+nullable reference encodings are accepted.
 Bindings use simple final function types; non-final types, supertypes and
 multi-type recursive groups remain unsupported and fail before guest start.
 Missing providers, wrong import kinds and different payload types fail linking.
-Reference and vector host signatures remain unsupported; numeric tags cannot
-satisfy reference signatures merely because they share an internal carrier.
+Typed, nonnullable, GC, exception-reference and vector public tag signatures
+remain unsupported. Numeric and reference tags cannot satisfy one another's
+signatures merely because they share an internal carrier. Every declaration is
+checked even when several imports use the same module and name.
 
 Each new tag has its own identity. Passing one tag under several import names
 shares that identity; two tags with identical signatures remain distinct.
@@ -62,6 +68,22 @@ for `f32`/`f64`. Payload length and value kinds must match the tag. Construction
 copies and normalizes numeric values once; later changes to the input list do
 not change the exception. `getArg` requires the matching tag and a valid index.
 
+Native `externref` fields accept arbitrary Dart values or `null` and preserve
+object and function identity. Records preserve their value and nested object
+identities; Dart does not guarantee record object identity. Native `funcref`
+fields accept `null` or functions obtained from this backend, including decoded
+guest function references. Ordinary Dart closures and integer carriers are not
+function references. A function reference retains its original target and its
+indirect-call type checks; an incompatible callable signature still traps.
+
+Exceptions keep their reference store alive across guest, Dart and subsequent
+guest calls. Stores connected by these transfers share a lifetime, including
+references copied into guest storage after the original payload is discarded;
+this does not provide per-value garbage collection. A call that may receive an
+asynchronous function through a host-thrown exception returns a `Future`, even
+when the throwing host callback is synchronous. Execution selects that path
+before invoking the callback and does not replay host or guest effects.
+
 A host function can throw this public exception and a guest can catch it by tag.
 An uncaught guest exception becomes a public `Exception` at the Dart boundary,
 including when thrown during module start. Re-throwing it into another guest
@@ -76,11 +98,21 @@ JavaScript exported tags obtain their signatures lazily from the original
 module metadata. Byte and stream compilation snapshot the necessary sections;
 the adapter does not depend on a platform `WebAssembly.Tag.type()` method.
 
-The verified host targets are Dart VM and Dart2js on Node/Chrome. Dart2wasm host
-exception interoperability remains unqualified. Throwing public exceptions
-from JavaScript host callbacks requires the engine's `WebAssembly.JSTag` support.
+The verified host targets are Dart VM and Dart2js on Node/Chrome. JavaScript
+`externref` conversion supports primitives and `null`, not arbitrary Dart objects
+or functions. `Exception.getArg` returns an opaque JavaScript value for a JS
+BigInt externref; numeric `i64` decoding still returns Dart `BigInt`. The JS
+exception codec explicitly rejects `funcref` and `v128` payload conversion.
+Dart2wasm host exception interoperability remains unqualified. In a separate
+Node probe, a host-thrown numeric exception could be caught inside the guest,
+but an exception escaping a synchronous guest call terminated execution without
+entering the Dart catch block. Typed asynchronous host callback controls did
+preserve catchable escaped wrappers. Those bounded results do not qualify full
+host/guest exception parity or Dart2wasm on other engines.
+Throwing public exceptions from JavaScript host callbacks requires the engine's
+`WebAssembly.JSTag` support.
 
-General reference/vector native tags and whole-Core conformance remain separate
+Broader typed/GC/vector native tag bindings and whole-Core conformance remain separate
 acceptance work under the [standards plan](standards.md).
 
 ```sh

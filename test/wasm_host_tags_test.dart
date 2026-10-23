@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:test/test.dart';
 import 'package:wasd/wasm.dart';
 
@@ -40,6 +42,60 @@ Tag _tag(Instance instance, String name) =>
 
 WasmFunction _function(Instance instance, String name) =>
     (instance.exports[name]! as FunctionImportExportValue).ref;
+
+// Type 0 is a function target for the concrete reference cases; type 1 is
+// the tag signature. Preserve encodings that WAT tools would canonicalize.
+Uint8List _tagSignatureBytes(List<int> signature, {required bool imported}) =>
+    Uint8List.fromList([
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x01,
+      7 + signature.length,
+      0x02,
+      0x60,
+      0x00,
+      0x00,
+      0x60,
+      0x01,
+      ...signature,
+      0x00,
+      if (imported) ...[
+        0x02,
+        0x0d,
+        0x01,
+        0x04,
+        0x68,
+        0x6f,
+        0x73,
+        0x74,
+        0x03,
+        0x74,
+        0x61,
+        0x67,
+        0x04,
+        0x00,
+        0x01,
+      ] else ...[
+        0x0d,
+        0x03,
+        0x01,
+        0x00,
+        0x01,
+      ],
+      0x07,
+      0x05,
+      0x01,
+      0x01,
+      0x74,
+      0x04,
+      0x00,
+    ]);
 
 void main() {
   if (!hasDartIoRuntime) return;
@@ -209,16 +265,16 @@ void main() {
 
   test('duplicate import names check every tag declaration', () {
     final module = _module('duplicate_import');
-    expect(
-      () => Instance(module, {
-        'host': {
-          'tag': ImportExportKind.tag(
-            Tag(const TagDescriptor(parameters: [ValueKind.i32])),
-          ),
-        },
-      }),
-      throwsA(isA<LinkError>()),
-    );
+    for (final kind in <ValueKind>[ValueKind.i32, ValueKind.externref]) {
+      expect(
+        () => Instance(module, {
+          'host': {
+            'tag': ImportExportKind.tag(Tag(TagDescriptor(parameters: [kind]))),
+          },
+        }),
+        throwsA(isA<LinkError>()),
+      );
+    }
   });
 
   test('unsupported exported tags fail before guest start effects', () {
@@ -302,22 +358,17 @@ void main() {
     ValueKind.funcref,
     ValueKind.v128,
   ]) {
-    test(
-      'unsupported ${kind.name} host payload rejects a declared binding',
-      () {
-        expect(
-          () => Instance(_module('i32'), {
-            'host': {
-              'tick': ImportExportKind.function(_tick(false)),
-              'tag': ImportExportKind.tag(
-                Tag(TagDescriptor(parameters: [kind])),
-              ),
-            },
-          }),
-          throwsA(isA<LinkError>()),
-        );
-      },
-    );
+    test('${kind.name} host payload cannot satisfy an i32 tag', () {
+      expect(
+        () => Instance(_module('i32'), {
+          'host': {
+            'tick': ImportExportKind.function(_tick(false)),
+            'tag': ImportExportKind.tag(Tag(TagDescriptor(parameters: [kind]))),
+          },
+        }),
+        throwsA(isA<LinkError>()),
+      );
+    });
 
     test('i32 carrier cannot satisfy a ${kind.name} tag signature', () {
       expect(
@@ -332,12 +383,54 @@ void main() {
       );
     });
 
-    test('unsupported ${kind.name} tag exports fail explicitly', () {
-      expect(
-        () => Instance(_module('${kind.name}_export')),
-        throwsA(isA<LinkError>()),
-      );
-    });
+    if (kind == ValueKind.v128) {
+      test('unsupported v128 tag exports fail explicitly', () {
+        expect(
+          () => Instance(_module('v128_export')),
+          throwsA(isA<LinkError>()),
+        );
+      });
+    } else {
+      test('${kind.name} tags preserve exported types on re-import', () {
+        final provider = Instance(_module('${kind.name}_export'));
+        final tag = _tag(provider, 'tag');
+        expect(tag.type().parameters, [kind]);
+        tag.type().parameters.clear();
+        expect(tag.type().parameters, [kind]);
+        expect(
+          () => Instance(_module('${kind.name}_import'), {
+            'host': {'tag': ImportExportKind.tag(tag)},
+          }),
+          returnsNormally,
+        );
+      });
+
+      test('${kind.name} tag imports accept matching host tags', () {
+        final tag = Tag(TagDescriptor(parameters: [kind]));
+        expect(
+          () => Instance(_module('${kind.name}_import'), {
+            'host': {'tag': ImportExportKind.tag(tag)},
+          }),
+          returnsNormally,
+        );
+      });
+
+      test('${kind.name} tag imports reject the other reference kind', () {
+        final ValueKind other = kind == ValueKind.externref
+            ? ValueKind.funcref
+            : ValueKind.externref;
+        expect(
+          () => Instance(_module('${kind.name}_import'), {
+            'host': {
+              'tag': ImportExportKind.tag(
+                Tag(TagDescriptor(parameters: [other])),
+              ),
+            },
+          }),
+          throwsA(isA<LinkError>()),
+        );
+      });
+    }
   }
 
   test('unused superset tags do not bind or block instantiation', () {
@@ -361,6 +454,42 @@ void main() {
     });
     expect(_function(instance, 'catch')([]), isNull);
   });
+
+  for (final entry in <String, List<int>>{
+    'nonnullable externref': [0x64, 0x6f],
+    'nonnullable funcref': [0x64, 0x70],
+    'nullable concrete function': [0x63, 0x00],
+    'nonnullable concrete function': [0x64, 0x00],
+    'anyref': [0x6e],
+    'eqref': [0x6d],
+    'i31ref': [0x6c],
+    'structref': [0x6b],
+    'arrayref': [0x6a],
+    'exnref': [0x69],
+    'nullref': [0x71],
+    'nullexternref': [0x72],
+    'nullfuncref': [0x73],
+    'v128': [0x7b],
+  }.entries) {
+    for (final imported in [false, true]) {
+      test('${entry.key} tag binding fails explicitly imported=$imported', () {
+        final module = Module(
+          _tagSignatureBytes(entry.value, imported: imported).buffer,
+          features: {CoreFeature.exceptionHandling},
+        );
+        expect(
+          () => Instance(module),
+          throwsA(
+            isA<LinkError>().having(
+              (error) => error.cause,
+              'cause',
+              isA<UnsupportedError>(),
+            ),
+          ),
+        );
+      });
+    }
+  }
 }
 
 class _ForeignTag implements Tag {

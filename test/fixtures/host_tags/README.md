@@ -2,10 +2,13 @@
 
 These small modules exercise the native public tag adapter: empty and numeric
 payloads, aliases, independent identities, cross-instance calls and unsupported
-reference/vector signatures. `exception_refs` checks captured exception
+typed/vector signatures. Basic nullable reference tag imports and exports are
+accepted; scalar carriers cannot satisfy a different payload kind.
+`exception_refs` checks captured exception
 references across instances and synchronous/asynchronous interpreters.
 
-Parse and validate with the pinned wasm-tools 1.254.0:
+The original fixtures used wasm-tools 1.254.0. Parse changed fixtures with the
+currently pinned wasm-tools 1.262.0:
 
 ```sh
 for file in test/fixtures/host_tags/*.wat; do

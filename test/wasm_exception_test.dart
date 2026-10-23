@@ -35,8 +35,9 @@ Object? _normalize(Object? value) => switch (value) {
   _ => value,
 };
 
-// Keep the explicit ref encoding and signed LEB padding intact; WAT tools
-// canonicalize these encodings into the single-byte shorthand.
+// Preserve explicit encodings for metadata compatibility controls. Current
+// backends also accept padded abstract heap types, which pinned wasm-tools
+// rejects; those cases do not establish valid frozen Core input coverage.
 Uint8List _explicitRefTagBytes(
   int heapType, {
   bool padded = false,
@@ -95,6 +96,46 @@ Future<Exception> _thrownBy(Object? Function() action) async {
 }
 
 void main() {
+  _referencePayloadTests();
+
+  for (final heapType in [0x6f, 0x70]) {
+    final label = heapType == 0x6f ? 'externref' : 'funcref';
+    for (final padded in [false, true]) {
+      test('explicit nullable $label tag padded=$padded', () {
+        final bytes = _explicitRefTagBytes(heapType, padded: padded);
+        final module = Module(
+          bytes.buffer,
+          features: hasDartIoRuntime ? {CoreFeature.exceptionHandling} : {},
+        );
+        final tag = _tag(Instance(module), 't');
+        final parameters = tag.type().parameters;
+        expect(parameters, hasLength(1));
+        expect(parameters.single.name, label);
+        if (heapType == 0x6f || hasDartIoRuntime) {
+          for (final payload in [null, if (heapType == 0x6f) 'payload']) {
+            final error = Exception(tag, [payload]);
+            expect(error.isTag(tag), isTrue);
+            expect(error.getArg(tag, 0), payload);
+          }
+        }
+      });
+    }
+
+    test('nonnullable $label tag binding fails explicitly', () {
+      final bytes = _explicitRefTagBytes(heapType, nullable: false);
+      final module = Module(
+        bytes.buffer,
+        features: hasDartIoRuntime ? {CoreFeature.exceptionHandling} : {},
+      );
+      if (hasDartIoRuntime) {
+        expect(() => Instance(module), throwsA(isA<LinkError>()));
+      } else {
+        final tag = _tag(Instance(module), 't');
+        expect(tag.type, throwsUnsupportedError);
+      }
+    });
+  }
+
   if (!hasDartIoRuntime) {
     test('JS host funcref tag returns independent parameter snapshots', () {
       final parameters = List<ValueKind>.generate(1, (_) => ValueKind.funcref);
@@ -105,30 +146,6 @@ void main() {
       snapshot.clear();
       expect(tag.type().parameters.single.name, 'funcref');
     });
-
-    for (final heapType in [0x6f, 0x70]) {
-      final label = heapType == 0x6f ? 'externref' : 'funcref';
-      for (final padded in [false, true]) {
-        test('JS explicit nullable $label tag padded=$padded', () {
-          final bytes = _explicitRefTagBytes(heapType, padded: padded);
-          final tag = _tag(Instance(Module(bytes.buffer)), 't');
-          final parameters = tag.type().parameters;
-          expect(parameters, hasLength(1));
-          expect(parameters.single.name, label);
-          if (heapType == 0x6f) {
-            final error = Exception(tag, ['payload']);
-            expect(error.isTag(tag), isTrue);
-            expect(error.getArg(tag, 0), 'payload');
-          }
-        });
-      }
-
-      test('JS nonnullable $label tag type fails explicitly', () {
-        final bytes = _explicitRefTagBytes(heapType, nullable: false);
-        final tag = _tag(Instance(Module(bytes.buffer)), 't');
-        expect(tag.type, throwsUnsupportedError);
-      });
-    }
 
     test(
       'JS sync module snapshots exported tag metadata before source changes',
@@ -567,6 +584,369 @@ void main() {
       );
     });
   }
+}
+
+void _referencePayloadTests() {
+  Instance provider(bool asyncHost) =>
+      Instance(_module('reference_provider', exceptionFixture: true), {
+        'host': {'tick': ImportExportKind.function(_tick(asyncHost))},
+      });
+
+  Instance receiver(String fixture, Tag tag, Exception error, bool asyncHost) =>
+      Instance(_module(fixture, exceptionFixture: true), {
+        'host': {
+          'tag': ImportExportKind.tag(tag),
+          'source': ImportExportKind.function(
+            asyncHost
+                ? (List<Object?> _) async => throw error
+                : (List<Object?> _) => throw error,
+          ),
+        },
+      });
+
+  test('externref exception preserves nullable primitive payloads', () {
+    final tag = Tag(const TagDescriptor(parameters: [ValueKind.externref]));
+    final other = Tag(const TagDescriptor(parameters: [ValueKind.externref]));
+    for (final payload in <Object?>[
+      null,
+      'payload',
+      17,
+      1.25,
+      false,
+      if (hasDartIoRuntime) BigInt.one << 80,
+    ]) {
+      final values = [payload];
+      final error = Exception(tag, values);
+      values.clear();
+      expect(error.isTag(tag), isTrue);
+      expect(error.isTag(other), isFalse);
+      expect(error.getArg(tag, 0), payload);
+      expect(() => error.getArg(other, 0), throwsA(anything));
+      expect(() => error.getArg(tag, -1), throwsA(anything));
+      expect(() => error.getArg(tag, 1), throwsA(anything));
+    }
+    expect(() => Exception(tag, []), throwsArgumentError);
+    expect(() => Exception(tag, [null, null]), throwsArgumentError);
+  });
+
+  for (final calleeAsync in [false, true]) {
+    for (final catcherAsync in [false, true]) {
+      test(
+        'externref exception survives guest Dart guest $calleeAsync/$catcherAsync',
+        () async {
+          final source = provider(calleeAsync);
+          final tag = _tag(source, 'extern');
+          final alias = _tag(source, 'extern_alias');
+          expect(tag.type().parameters, [ValueKind.externref]);
+          for (final payload in <Object?>[
+            null,
+            'roundtrip',
+            if (hasDartIoRuntime) BigInt.one << 80,
+          ]) {
+            final error = await _thrownBy(
+              () => _function(source, 'throw_extern')([payload]),
+            );
+            expect(error.isTag(tag), isTrue);
+            expect(error.isTag(alias), isTrue);
+            expect(error.getArg(alias, 0), payload);
+            final target = receiver(
+              'externref_consumer',
+              tag,
+              error,
+              catcherAsync,
+            );
+            expect(error.isTag(_tag(target)), isTrue);
+            expect(
+              await Future<Object?>.sync(() => _function(target, 'catch')([])),
+              payload,
+            );
+            final mismatch = receiver(
+              'externref_consumer',
+              Tag(const TagDescriptor(parameters: [ValueKind.externref])),
+              error,
+              catcherAsync,
+            );
+            expect(
+              await _thrownBy(() => _function(mismatch, 'catch')([])),
+              same(error),
+            );
+          }
+        },
+      );
+    }
+  }
+
+  for (final asyncHost in [false, true]) {
+    test(
+      'mixed numeric reference exception keeps payload order async=$asyncHost',
+      () async {
+        final source = provider(asyncHost);
+        final tag = _tag(source, 'mixed');
+        expect(tag.type().parameters, [
+          ValueKind.i32,
+          ValueKind.externref,
+          ValueKind.f64,
+        ]);
+        final error = await _thrownBy(
+          () => _function(source, 'throw_mixed')([37, 'middle', -0.0]),
+        );
+        expect(error.getArg(tag, 0), 37);
+        expect(error.getArg(tag, 1), 'middle');
+        expect(1 / (error.getArg(tag, 2)! as double), double.negativeInfinity);
+        final target = receiver(
+          'mixed_reference_consumer',
+          tag,
+          error,
+          asyncHost,
+        );
+        final result =
+            await Future<Object?>.sync(() => _function(target, 'catch')([]))
+                as List;
+        expect(result, [37, 'middle', -0.0]);
+        expect(1 / (result[2] as double), double.negativeInfinity);
+      },
+    );
+  }
+
+  if (!hasDartIoRuntime) {
+    test('JS externref BigInt readback stays an opaque JS value', () async {
+      final value = BigInt.one << 80;
+      final hostTag = Tag(
+        const TagDescriptor(parameters: [ValueKind.externref]),
+      );
+      final hostError = Exception(hostTag, [value]);
+      final hostReadback = hostError.getArg(hostTag, 0);
+      expect(hostReadback, isNot(isA<BigInt>()));
+      expect(hostReadback.toString(), value.toString());
+      final source = provider(false);
+      final tag = _tag(source, 'extern');
+      final error = await _thrownBy(
+        () => _function(source, 'throw_extern')([value]),
+      );
+      expect(error.getArg(tag, 0).toString(), value.toString());
+      final target = receiver('externref_consumer', tag, error, false);
+      expect(
+        await Future<Object?>.sync(() => _function(target, 'catch')([])),
+        value,
+      );
+    });
+    test('JS funcref exception retains explicit codec limitations', () async {
+      final tag = Tag(const TagDescriptor(parameters: [ValueKind.funcref]));
+      expect(() => Exception(tag, [null]), throwsUnsupportedError);
+      final source = provider(false);
+      final error = await _thrownBy(
+        () => _function(source, 'throw_null_function')([]),
+      );
+      expect(error.isTag(_tag(source, 'function')), isTrue);
+      expect(
+        () => error.getArg(_tag(source, 'function'), 0),
+        throwsUnsupportedError,
+      );
+    });
+    test('JS v128 exception retains an explicit encoding limitation', () {
+      final tag = Tag(const TagDescriptor(parameters: [ValueKind.v128]));
+      expect(() => Exception(tag, [ByteData(16)]), throwsUnsupportedError);
+    });
+    return;
+  }
+
+  for (final asyncHost in [false, true]) {
+    test(
+      'VM private unsupported reference exception stays opaque async=$asyncHost',
+      () async {
+        late Exception original;
+        final WasmFunction source = asyncHost
+            ? (List<Object?> _) async => throw original
+            : (List<Object?> _) => throw original;
+        Instance instance() =>
+            Instance(_module('private_reference', exceptionFixture: true), {
+              'host': {
+                'tick': ImportExportKind.function(_tick(asyncHost)),
+                'source': ImportExportKind.function(source),
+              },
+            });
+        final owner = instance();
+        original = await _thrownBy(() => _function(owner, 'throw')([]));
+        expect(
+          await Future<Object?>.sync(
+            () => _function(owner, 'catch_is_null')([]),
+          ),
+          1,
+        );
+        expect(
+          await _thrownBy(() => _function(owner, 'relay')([])),
+          same(original),
+        );
+        final mismatch = instance();
+        expect(
+          await _thrownBy(() => _function(mismatch, 'catch_is_null')([])),
+          same(original),
+        );
+      },
+    );
+
+    test(
+      'VM externref exception retains arbitrary Dart values async=$asyncHost',
+      () async {
+        final source = provider(asyncHost);
+        final tag = _tag(source, 'extern');
+        final marker = Object();
+        final values = <Object?>[
+          marker,
+          <Object?>[marker],
+          (List<Object?> _) => marker,
+          (marker, 'record'),
+        ];
+        for (final payload in values) {
+          final hostError = Exception(tag, [payload]);
+          expect(
+            hostError.getArg(tag, 0),
+            payload is Record ? equals(payload) : same(payload),
+          );
+          final error = await _thrownBy(
+            () => _function(source, 'throw_extern')([payload]),
+          );
+          final direct = error.getArg(tag, 0);
+          expect(direct, payload is Record ? equals(payload) : same(payload));
+          final target = receiver('externref_consumer', tag, error, asyncHost);
+          final result = await Future<Object?>.sync(
+            () => _function(target, 'catch')([]),
+          );
+          expect(result, payload is Record ? equals(payload) : same(payload));
+          if (result is (Object, String)) expect(result.$1, same(marker));
+        }
+      },
+    );
+
+    test(
+      'VM funcref exception preserves null and genuine functions async=$asyncHost',
+      () async {
+        final source = provider(asyncHost);
+        final tag = _tag(source, 'function');
+        final function = _function(source, 'increment');
+        for (final payload in <Object?>[null, function]) {
+          final host = Exception(tag, [payload]);
+          expect(host.getArg(tag, 0), same(payload));
+          final guest = await _thrownBy(
+            () => _function(source, 'throw_function')([payload]),
+          );
+          expect(guest.getArg(tag, 0), same(payload));
+          if (payload != null) {
+            final target = receiver('funcref_consumer', tag, guest, asyncHost);
+            expect(
+              await Future<Object?>.sync(
+                () => _function(target, 'catch_call')([41]),
+              ),
+              42,
+            );
+          }
+        }
+        for (final invalid in <Object?>[0, Object(), (List<Object?> _) => 1]) {
+          expect(() => Exception(tag, [invalid]), throwsArgumentError);
+        }
+        for (final uncallable in <Object?>[null, _function(source, 'wrong')]) {
+          final error = Exception(tag, [uncallable]);
+          expect(error.getArg(tag, 0), same(uncallable));
+          final target = receiver('funcref_consumer', tag, error, asyncHost);
+          await expectLater(
+            Future<Object?>.sync(() => _function(target, 'catch_call')([41])),
+            throwsA(
+              allOf(
+                isNot(isA<Exception>()),
+                predicate<Object>(
+                  (error) => '$error'.contains('call_indirect'),
+                ),
+              ),
+            ),
+          );
+        }
+      },
+    );
+  }
+
+  test(
+    'VM funcref exception owns a guest function after its entrypoint',
+    () async {
+      Future<(Tag, Exception)> escape() async {
+        final source = provider(false);
+        return (
+          _tag(source, 'function'),
+          await _thrownBy(() => _function(source, 'throw_own_function')([])),
+        );
+      }
+
+      final (tag, error) = await escape();
+      final function = error.getArg(tag, 0)! as WasmFunction;
+      expect(await Future<Object?>.sync(() => function([41])), 42);
+      final target = receiver('funcref_consumer', tag, error, false);
+      expect(
+        await Future<Object?>.sync(() => _function(target, 'catch_call')([9])),
+        10,
+      );
+    },
+  );
+
+  test(
+    'VM decoded funcref translates its reference exception payload',
+    () async {
+      final source = provider(false);
+      final functionTag = _tag(source, 'function');
+      final carrier = await _thrownBy(
+        () => _function(source, 'throw_own_thrower')([]),
+      );
+      final thrower = carrier.getArg(functionTag, 0)! as WasmFunction;
+      final payload = Object();
+      final error = await _thrownBy(() => thrower([payload]));
+      final tag = _tag(source, 'extern');
+      expect(error.getArg(tag, 0), same(payload));
+      final target = receiver('externref_consumer', tag, error, false);
+      expect(
+        await Future<Object?>.sync(() => _function(target, 'catch')([])),
+        same(payload),
+      );
+    },
+  );
+
+  test(
+    'VM sync host exception awaits foreign async funcref without callback replay',
+    () async {
+      var callbacks = 0, entered = 0, settled = 0;
+      final source = Instance(
+        _module('reference_provider', exceptionFixture: true),
+        {
+          'host': {
+            'tick': ImportExportKind.function((List<Object?> _) async {
+              entered++;
+              await Future<void>.value();
+              settled++;
+              return null;
+            }),
+          },
+        },
+      );
+      final tag = Tag(const TagDescriptor(parameters: [ValueKind.funcref]));
+      final error = Exception(tag, [_function(source, 'increment')]);
+      final target = Instance(
+        _module('funcref_consumer', exceptionFixture: true),
+        {
+          'host': {
+            'tag': ImportExportKind.tag(tag),
+            'source': ImportExportKind.function((List<Object?> _) {
+              callbacks++;
+              throw error;
+            }),
+          },
+        },
+      );
+      expect(
+        await Future<Object?>.sync(() => _function(target, 'catch_call')([41])),
+        42,
+      );
+      expect(callbacks, 1);
+      expect(entered, 1);
+      expect(settled, 1);
+    },
+  );
 }
 
 final class _HostControlFlow implements WasmHostControlFlowException {}

@@ -441,23 +441,23 @@ final class WasmModule {
         if (import.kind == WasmImportKind.tag) import.tagType!,
       ...tags,
     ];
-    String signature(String value) {
-      final ref = _parseRefSignatureForShapeCheck(value);
-      if (ref?.nullable ?? false) {
-        if (ref!.heapType == _shapeHeapExtern) return '6f';
-        if (ref.heapType == _shapeHeapFunc) return '70';
-      }
-      return value;
-    }
-
     return {
       for (final export in exports)
         if (export.kind == WasmExportKind.tag)
           export.name: types[allTags[export.index].typeIndex]
               .paramTypeSignatures
-              .map(signature)
+              .map(canonicalTagSignature)
               .toList(growable: false),
     };
+  }
+
+  static String canonicalTagSignature(String value) {
+    final ref = _parseRefSignatureForShapeCheck(value);
+    if (ref?.nullable ?? false) {
+      if (ref!.heapType == _shapeHeapExtern) return '6f';
+      if (ref.heapType == _shapeHeapFunc) return '70';
+    }
+    return value;
   }
 
   static WasmModule decode(
