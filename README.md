@@ -238,6 +238,22 @@ against a `WASIPreview2HttpIncomingRequest`. Preview2 execution is currently
 native Dart VM only and targets the synchronous Canonical ABI required by
 these stable WASI 0.2.12 worlds.
 
+The [fixed 0.2.12 WIT contract](tool/wasi_preview2_contract.lock.json) uses stable
+upstream declarations by default. WIT adapter callers can pass
+`features: {'informational-outbound-responses'}` to `prepareWitWorld` or
+`bindWitWorld` to opt into informational HTTP responses. Earlier 0.2.x contract
+aliases and historical host callback entrypoints remain available.
+
+Parsed WIT names and labels use semantic identifiers: `%stream` becomes
+`stream`. Callback maps and invocation also accept the historical escaped
+spelling. Supplying different callbacks for both spellings in one map throws
+`StateError`; user overrides are applied after host defaults.
+Resource constructors expose `isConstructor: true`. An ordinary resource method
+named `constructor` keeps the callback key `resource.%constructor`, alongside
+`resource.constructor` for the actual constructor. Newly implicit dependencies
+accept local or package-qualified callback keys, with the local key taking
+priority; explicitly named interface copies require their own callbacks.
+
 ```dart
 final proxyComponent = WasmComponent.decode(
   await File('proxy.component.wasm').readAsBytes(),

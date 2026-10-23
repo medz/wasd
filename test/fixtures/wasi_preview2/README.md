@@ -176,3 +176,74 @@ done
 
 The printed source-archive checksum must match the value above before using
 the generated components.
+
+## Complete stable command and proxy surfaces
+
+The `wasi_cli_0_2_12_full_command_exit`,
+`wasi_cli_0_2_12_full_command_stdio`, and `wasi_http_0_2_12_full_proxy`
+fixtures retain the complete stable world import instances and their types.
+Their interface graph comes from WebAssembly/WASI commit
+[`281ba75fafcd50961ef55f9e52747afcc9b71ede`](https://github.com/WebAssembly/WASI/tree/281ba75fafcd50961ef55f9e52747afcc9b71ede/proposals):
+[`wasi:cli/command@0.2.12`](https://github.com/WebAssembly/WASI/blob/281ba75fafcd50961ef55f9e52747afcc9b71ede/proposals/cli/wit/command.wit)
+and
+[`wasi:http/proxy@0.2.12`](https://github.com/WebAssembly/WASI/blob/281ba75fafcd50961ef55f9e52747afcc9b71ede/proposals/http/wit/proxy.wit),
+resolved with the CLI, clocks, filesystem, HTTP, IO, random, and sockets
+packages. Optional unstable features are disabled.
+
+The checked-in component WAT contains the types, imports, and aliases from the
+world type printed by `wasm-tools component wit --wat`, followed by a small
+guest implementation. Both command fixtures retain all 27 interface imports,
+including the type-only terminal and network interfaces. The proxy retains
+all 11 imports and exports the incoming handler's `incoming-request` and
+`response-outparam` type aliases as well as `handle`. These aliases refer to
+the resources supplied by the imported HTTP types interface.
+
+The exit guest reuses the handwritten `exit-with-code(7)` behavior above.
+The stdio guest lowers `get-stdin`, `get-stdout`, `blocking-read`, and
+`blocking-write-and-flush`, copies a four-byte input through canonical memory,
+accepts the `stream-error.closed` EOF case, and drops both stream handles.
+The proxy reuses the handwritten static-response behavior, returning HTTP 200
+with empty headers and no response body. Its type/function shim preserves the
+handler's exported resource aliases. Runner tests check these observable
+results and resource cleanup. Unused imports retain their complete contract
+and are linked, but these fixtures do not execute every imported function or
+every error case.
+
+Generator: `wasm-tools 1.262.0 (e22db44da 2026-10-13)`, executable SHA-256
+`4a5b127f48340fbd453708283d190f9b1dbbe5820571eae5cbae0a205a095a00`.
+The WAT inputs are self-contained and require no guest compiler or external
+runtime to rebuild.
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `wasi_cli_0_2_12_full_command_exit.component.wat` | 36,663 | `f5118fa914760a994181995813601782666947e3091d7795c88243ebd822ff11` |
+| `wasi_cli_0_2_12_full_command_exit.component.wasm` | 11,248 | `4cff2e1c47e290d8d36a1383aab953dccefe6d5897bf14230927f60045e3bfdf` |
+| `wasi_cli_0_2_12_full_command_stdio.component.wat` | 38,959 | `3e11c17f8d44f6dcb9fd66ce0bbd730bc980941d69b7c15da4bf7f18ffad57aa` |
+| `wasi_cli_0_2_12_full_command_stdio.component.wasm` | 11,976 | `493d6a4be0e7556b72ce6312f0d647deb9b173ae7e6734d962d8fda5b19fa87c` |
+| `wasi_http_0_2_12_full_proxy.component.wat` | 29,296 | `ae390f3449eb7c81b2085df86d80911f5ccfcd8c374abad44eb83d190410450a` |
+| `wasi_http_0_2_12_full_proxy.component.wasm` | 9,866 | `227ab950a4e352907743d387fb7f6f864dc8d32eafa7f5319e6f377c3a879ec0` |
+
+Rebuild and validate from the repository root with the pinned tool:
+
+```sh
+for fixture in \
+  wasi_cli_0_2_12_full_command_exit \
+  wasi_cli_0_2_12_full_command_stdio \
+  wasi_http_0_2_12_full_proxy; do
+  .toolchains/bin/wasm-tools parse \
+    "test/fixtures/wasi_preview2/$fixture.component.wat" \
+    -o "test/fixtures/wasi_preview2/$fixture.component.wasm"
+  .toolchains/bin/wasm-tools validate \
+    "test/fixtures/wasi_preview2/$fixture.component.wasm"
+done
+
+dart test test/wasi_preview2_conformance_test.dart \
+  test/wasi_preview2_http_proxy_conformance_test.dart
+```
+
+The fixture tests verify the source and binary checksums and validate the
+decoded components.
+The complete imported/exported function signatures, named types, and resource
+owners are also compared with the fixed upstream contract by the offline
+contract verifier; runner tests independently check the actual interface keys,
+type-only imports, and handler type exports.

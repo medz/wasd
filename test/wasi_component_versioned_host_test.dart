@@ -2417,7 +2417,7 @@ world http-test {
           'wasi:http/types@0.2.8.outgoing-request.constructor',
           'wasi:http/types@0.2.8.outgoing-body.write',
           'wasi:http/types@0.2.8.future-incoming-response.get',
-          'wasi:http/types@0.2.8.incoming-body.%stream',
+          'wasi:http/types@0.2.8.incoming-body.stream',
           'wasi:cli/stdout@0.2.8.get-stdout',
           'wasi:random/random@0.2.8.get-random-bytes',
         ]),
@@ -2426,6 +2426,168 @@ world http-test {
         preview2.standardImports,
         contains('wasi:http/outgoing-handler@0.2.8.handle'),
       );
+    });
+
+    test('Preview2 0.2.12 informational contract is an explicit opt-in', () {
+      final document = WASIComponentWitDocument.parse('''
+world command { import wasi:http/types@0.2.12; }
+''');
+      final preview2 = WASIPreview2ComponentHost();
+      const key = 'wasi:http/types@0.2.12.response-outparam.send-informational';
+      final stable = preview2.prepareWitWorld(document);
+      expect(stable.canBindAdapters, isTrue);
+      expect(
+        stable.functions.map((function) => function.qualifiedName),
+        isNot(contains(key)),
+      );
+      final optional = preview2.prepareWitWorld(
+        document,
+        features: {'informational-outbound-responses'},
+      );
+      final stableNames = stable.functions.map((f) => f.qualifiedName).toSet();
+      final optionalNames = optional.functions
+          .map((f) => f.qualifiedName)
+          .toSet();
+      expect(optional.canBindAdapters, isTrue);
+      expect(optionalNames.difference(stableNames), {key});
+      expect(stableNames.difference(optionalNames), isEmpty);
+      final program = preview2.bindWitWorld(
+        document,
+        features: {'informational-outbound-responses'},
+      );
+      final outparam = WASIPreview2HttpResponseOutparam();
+      final handle = preview2.httpHost.insertResponseOutparam(outparam);
+      final fields =
+          program.invokeImport(
+                'wasi:http/types@0.2.12.fields.constructor',
+                const [],
+              )
+              as int;
+      _expectUnitOk(
+        program.invokeImport(key, [handle, 103, fields])
+            as WasmComponentValueData,
+      );
+      expect(outparam.informationalResponses.single.status, 103);
+      expect(preview2.componentHost.table.contains(fields), isFalse);
+      preview2.componentHost.table.dropNamed(
+        'wasi:http/types@0.2.0.response-outparam',
+        handle,
+      );
+      expect(preview2.componentHost.table.activeCount, 0);
+    });
+
+    group('Preview2 HTTP callback aliases', () {
+      test('host maps retain canonical and historical stream callbacks', () {
+        final preview2 = WASIPreview2ComponentHost();
+        final httpImports = preview2.httpHost.imports;
+        const original = 'wasi:http/types@0.2.0.incoming-body';
+        expect(httpImports['$original.stream'], isNotNull);
+        expect(
+          httpImports['$original.stream'],
+          same(httpImports['$original.%stream']),
+        );
+        for (final version in ['0.2.0', '0.2.8', '0.2.12']) {
+          final prefix = 'wasi:http/types@$version.incoming-body';
+          expect(preview2.standardImports['$prefix.stream'], isNotNull);
+          expect(
+            preview2.standardImports['$prefix.stream'],
+            same(preview2.standardImports['$prefix.%stream']),
+          );
+        }
+      });
+
+      for (final version in ['0.2.0', '0.2.12']) {
+        for (final legacy in [false, true]) {
+          test(
+            'actual request body stream version=$version legacy=$legacy',
+            () {
+              final preview2 = WASIPreview2ComponentHost();
+              final program = preview2.bindWitWorld(
+                WASIComponentWitDocument.parse('''
+world command { import wasi:http/types@$version; }
+'''),
+              );
+              _expectIncomingRequestStream(
+                preview2,
+                program,
+                version,
+                legacy: legacy,
+              );
+            },
+          );
+        }
+      }
+
+      for (final legacy in [false, true]) {
+        test(
+          'user stream override keeps other versions unchanged legacy=$legacy',
+          () {
+            final preview2 = WASIPreview2ComponentHost();
+            const prefix = 'wasi:http/types@0.2.12.incoming-body';
+            final key = '$prefix.${legacy ? '%' : ''}stream';
+            final marker = _unitErrorValue();
+            final program = preview2.bindWitWorld(
+              WASIComponentWitDocument.parse('''
+world command {
+  import wasi:http/types@0.2.0;
+  import wasi:http/types@0.2.12;
+}
+'''),
+              imports: {key: (_) => marker},
+            );
+            expect(program.invokeImport('$prefix.stream', [17]), same(marker));
+            expect(program.invokeImport('$prefix.%stream', [17]), same(marker));
+            _expectIncomingRequestStream(
+              preview2,
+              program,
+              '0.2.0',
+              legacy: false,
+            );
+            _expectIncomingRequestStream(
+              preview2,
+              program,
+              '0.2.0',
+              legacy: true,
+            );
+          },
+        );
+      }
+
+      for (final reversed in [false, true]) {
+        test('rejects conflicting user callbacks reversed=$reversed', () {
+          final preview2 = WASIPreview2ComponentHost();
+          const canonical = 'wasi:http/types@0.2.12.incoming-body.stream';
+          const historical = 'wasi:http/types@0.2.12.incoming-body.%stream';
+          Object? first(List<Object?> _) => _unitErrorValue();
+          Object? second(List<Object?> _) => _unitErrorValue();
+          expect(
+            () => preview2.bindWitWorld(
+              WASIComponentWitDocument.parse('''
+world command { import wasi:http/types@0.2.12; }
+'''),
+              imports: reversed
+                  ? {historical: second, canonical: first}
+                  : {canonical: first, historical: second},
+            ),
+            throwsStateError,
+          );
+        });
+      }
+
+      test('accepts aliases for the identical user callback', () {
+        final preview2 = WASIPreview2ComponentHost();
+        const prefix = 'wasi:http/types@0.2.12.incoming-body';
+        final marker = _unitErrorValue();
+        Object? callback(List<Object?> _) => marker;
+        final program = preview2.bindWitWorld(
+          WASIComponentWitDocument.parse('''
+world command { import wasi:http/types@0.2.12; }
+'''),
+          imports: {'$prefix.stream': callback, '$prefix.%stream': callback},
+        );
+        expect(program.invokeImport('$prefix.stream', [17]), same(marker));
+        expect(program.invokeImport('$prefix.%stream', [17]), same(marker));
+      });
     });
 
     test('Preview2 HTTP backend completes outgoing request response flow', () {
@@ -6886,6 +7048,49 @@ WasmComponentValueData _u32StringOkValue(int value) {
       integer: value,
     ),
   );
+}
+
+void _expectIncomingRequestStream(
+  WASIPreview2ComponentHost host,
+  WASIComponentWitAdapterProgram program,
+  String version, {
+  required bool legacy,
+}) {
+  final input = WASIPreview2InputStream(bytes: const [1, 2], closed: true);
+  final request = host.httpHost.insertIncomingRequest(
+    WASIPreview2HttpIncomingRequest(
+      method: const WASIPreview2HttpMethod.standard('post'),
+      headers: WASIPreview2HttpFields(),
+      body: WASIPreview2HttpIncomingBody(input),
+    ),
+  );
+  final table = host.componentHost.table;
+  final requestType = host.httpHost.canonicalResourceType('incoming-request')!;
+  final bodyType = host.httpHost.canonicalResourceType('incoming-body')!;
+  final inputType = host.streamsHost.canonicalResourceType('input-stream')!;
+  int? body;
+  int? stream;
+  addTearDown(() {
+    if (stream != null) table.drop(inputType, stream);
+    if (body != null) table.drop(bodyType, body);
+    table.drop(requestType, request);
+  });
+  final prefix = 'wasi:http/types@$version';
+  body = _resourceHandle(
+    _resultOk(
+      program.invokeImport('$prefix.incoming-request.consume', [request])
+          as WasmComponentValueData,
+    ),
+  );
+  stream = _resourceHandle(
+    _resultOk(
+      program.invokeImport('$prefix.incoming-body.${legacy ? '%' : ''}stream', [
+            body,
+          ])
+          as WasmComponentValueData,
+    ),
+  );
+  expect(table.get(inputType, stream), same(input));
 }
 
 WasmComponentValueData _unitOkValue() {

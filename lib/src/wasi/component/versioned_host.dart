@@ -99,16 +99,63 @@ final class WASIComponentVersionedHost {
   WASIComponentVersionedWitWorldPlan prepareWitWorld(
     WASIComponentWitDocument document, {
     String? worldName,
+    Set<String> features = const {},
   }) {
     final world = _selectWitWorld(document, worldName);
     final errors = _witWorldVersionErrors(profile, document, world).toList();
     List<WASIComponentWitFunctionBinding> functions;
+    List<WASIComponentWitInterfaceBinding> interfaces;
     try {
-      functions = wasiComponentWitWorldFunctions(
+      final expansion = wasiComponentWitWorldBindings(
         document,
         world,
-        resolveTarget: resolveWASIComponentStandardWitTarget,
+        resolveTarget: (target) =>
+            resolveWASIComponentStandardWitTarget(target, features: features),
       );
+      functions = expansion.functions;
+      interfaces = expansion.interfaces;
+      // Preflight diagnostics keep their existing shape. When they pass,
+      // dependencies must pass the same profile checks as explicit imports.
+      if (errors.isEmpty && !_profileSupportsPreview3Async(profile)) {
+        for (final binding in interfaces) {
+          final target = binding.item.target;
+          if (target.isQualified && _requiresPreview3WitTarget(target.text)) {
+            errors.add(
+              WASIComponentVersionedWitWorldError(
+                profile: profile,
+                item: binding.item,
+                targetName: target.text,
+                reason: '${profile.label} cannot ingest WASI 0.3 WIT target.',
+              ),
+            );
+            continue;
+          }
+          for (final function in binding.interface.functions) {
+            if (!function.usesPreview3AsyncFeatures) continue;
+            errors.add(
+              WASIComponentVersionedWitWorldError(
+                profile: profile,
+                item: binding.item,
+                function: function,
+                targetName: '${binding.interfaceName}.${function.name}',
+                reason:
+                    '${profile.label} does not include Preview3 async WIT '
+                    'functions, streams, or futures.',
+              ),
+            );
+          }
+        }
+      }
+      for (final error in expansion.dependencyErrors) {
+        errors.add(
+          WASIComponentVersionedWitWorldError(
+            profile: profile,
+            item: error.item,
+            targetName: error.target,
+            reason: error.reason,
+          ),
+        );
+      }
     } on WASIComponentWitTargetResolutionException catch (error) {
       final item = _witWorldItemForTarget(document, world, error.target);
       if (item == null) {
@@ -123,6 +170,7 @@ final class WASIComponentVersionedHost {
         ),
       );
       functions = const <WASIComponentWitFunctionBinding>[];
+      interfaces = const <WASIComponentWitInterfaceBinding>[];
     }
     return WASIComponentVersionedWitWorldPlan._(
       profile: profile,
@@ -130,6 +178,7 @@ final class WASIComponentVersionedHost {
       world: world,
       versionErrors: errors,
       functions: functions,
+      interfaces: interfaces,
     );
   }
 
@@ -137,6 +186,7 @@ final class WASIComponentVersionedHost {
   WASIComponentWitAdapterProgram bindWitWorld(
     WASIComponentWitDocument document, {
     String? worldName,
+    Set<String> features = const {},
     Map<String, WASIComponentWitAdapterCallback> imports =
         const <String, WASIComponentWitAdapterCallback>{},
     Map<String, WASIComponentWitAdapterCallback> exports =
@@ -145,6 +195,7 @@ final class WASIComponentVersionedHost {
     return prepareWitWorld(
       document,
       worldName: worldName,
+      features: features,
     ).bindAdapters(imports: imports, exports: exports);
   }
 }
@@ -382,11 +433,15 @@ final class WASIComponentVersionedWitWorldPlan {
     required this.world,
     required List<WASIComponentVersionedWitWorldError> versionErrors,
     required List<WASIComponentWitFunctionBinding> functions,
+    required List<WASIComponentWitInterfaceBinding> interfaces,
   }) : versionErrors = List<WASIComponentVersionedWitWorldError>.unmodifiable(
          versionErrors,
        ),
        functions = List<WASIComponentWitFunctionBinding>.unmodifiable(
          functions,
+       ),
+       interfaces = List<WASIComponentWitInterfaceBinding>.unmodifiable(
+         interfaces,
        ),
        bindingErrors = wasiComponentWitAdapterBindingErrors(functions);
 
@@ -404,6 +459,10 @@ final class WASIComponentVersionedWitWorldPlan {
 
   /// Direct world items preserved in declaration order.
   List<WASIComponentWitWorldItem> get items => world.items;
+
+  /// Elaborated import/export interfaces, including empty and resource-only
+  /// interfaces and implicit dependencies that are absent from [items].
+  final List<WASIComponentWitInterfaceBinding> interfaces;
 
   /// Whether this WIT world can enter adapter binding for [profile].
   bool get canIngest => versionErrors.isEmpty;
@@ -598,8 +657,11 @@ WASIComponentWitWorld _selectWitWorld(
 List<WASIComponentVersionedWitWorldError> _witWorldVersionErrors(
   WASIComponentVersionProfile profile,
   WASIComponentWitDocument document,
-  WASIComponentWitWorld world,
-) {
+  WASIComponentWitWorld world, [
+  Set<WASIComponentWitWorld>? visiting,
+]) {
+  final active = visiting ?? <WASIComponentWitWorld>{};
+  if (!active.add(world)) return const [];
   final errors = <WASIComponentVersionedWitWorldError>[];
   for (final item in world.items) {
     final target = item.target;
@@ -620,7 +682,9 @@ List<WASIComponentVersionedWitWorldError> _witWorldVersionErrors(
     if (item.direction == WASIComponentWitWorldItemDirection.include) {
       final included = document.worldNamed(target.text);
       if (included != null) {
-        errors.addAll(_witWorldVersionErrors(profile, document, included));
+        errors.addAll(
+          _witWorldVersionErrors(profile, document, included, active),
+        );
       }
       continue;
     }
@@ -648,6 +712,7 @@ List<WASIComponentVersionedWitWorldError> _witWorldVersionErrors(
       );
     }
   }
+  active.remove(world);
   return List<WASIComponentVersionedWitWorldError>.unmodifiable(errors);
 }
 

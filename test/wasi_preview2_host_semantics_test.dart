@@ -92,6 +92,297 @@ world test {
       );
     });
 
+    group('stable stream operations', () {
+      late WASIPreview2StreamsHost streams;
+      late Map<String, WASIComponentWitAdapterCallback> imports;
+      late int baselineResources;
+
+      setUp(() {
+        final host = WASIPreview2ComponentHost();
+        streams = host.streamsHost;
+        imports = host.standardImports;
+        baselineResources = streams.table.activeCount;
+      });
+
+      tearDown(() {
+        expect(streams.table.activeCount, baselineResources);
+      });
+
+      Future<WasmComponentValueData> invoke(
+        String name,
+        List<Object?> args,
+      ) async =>
+          (await imports['wasi:io/streams@0.2.12.$name']!(args))!
+              as WasmComponentValueData;
+
+      void expectIoFailure(WasmComponentValueData result, String diagnostic) {
+        expect(_resultError(result), 'last-operation-failed');
+        final error = _resultHandle(result.associatedValue!);
+        expect(
+          imports['wasi:io/error@0.2.12.error.to-debug-string']!(<Object?>[
+            error,
+          ]),
+          diagnostic,
+        );
+        streams.table.dropNamed('wasi:io/error@0.2.0.error', error);
+      }
+
+      test(
+        'blocking-skip waits and leaves unskipped bytes available',
+        () async {
+          final input = WASIPreview2InputStream();
+          final handle = streams.insertInputStream(input);
+          final pollable =
+              imports['wasi:io/streams@0.2.12.input-stream.subscribe']!(
+                    <Object?>[handle],
+                  )!
+                  as int;
+          final ready = imports['wasi:io/poll@0.2.12.pollable.ready']!;
+          var completed = false;
+          final pending =
+              invoke('input-stream.blocking-skip', <Object?>[
+                handle,
+                BigInt.two,
+              ]).then((result) {
+                completed = true;
+                return result;
+              });
+
+          await Future<void>.delayed(Duration.zero);
+          expect(completed, isFalse);
+          expect(ready(<Object?>[pollable]), isFalse);
+
+          input.append(<int>[10, 20, 30]);
+          final skipped = await pending;
+          expect(skipped.isOk, isTrue);
+          expect(skipped.associatedValue!.integer, BigInt.two);
+          expect(ready(<Object?>[pollable]), isTrue);
+          final remaining = await invoke('input-stream.read', <Object?>[
+            handle,
+            BigInt.from(8),
+          ]);
+          expect(remaining.isOk, isTrue);
+          expect(
+            remaining.associatedValue!.items.map((item) => item.integer),
+            <int>[30],
+          );
+          expect(ready(<Object?>[pollable]), isFalse);
+
+          input.close();
+          expect(
+            _resultError(
+              await invoke('input-stream.blocking-skip', <Object?>[
+                handle,
+                BigInt.one,
+              ]),
+            ),
+            'closed',
+          );
+          expect(ready(<Object?>[pollable]), isTrue);
+          streams.table.dropNamed('wasi:io/poll@0.2.0.pollable', pollable);
+          streams.table.dropNamed('wasi:io/streams@0.2.0.input-stream', handle);
+        },
+      );
+
+      for (final method in <String>['flush', 'blocking-flush']) {
+        test(
+          '$method preserves written bytes and reports terminal errors',
+          () async {
+            final output = WASIPreview2OutputStream(maxWriteSize: 2);
+            final handle = streams.insertOutputStream(output);
+            final permit = await invoke('output-stream.check-write', <Object?>[
+              handle,
+            ]);
+            expect(permit.isOk, isTrue);
+            expect(permit.associatedValue!.integer, BigInt.two);
+            final written = await invoke('output-stream.write', <Object?>[
+              handle,
+              _list(<WasmComponentValueData>[_integer(5), _integer(8)]),
+            ]);
+            expect(written.isOk, isTrue);
+
+            final flushed = await invoke('output-stream.$method', <Object?>[
+              handle,
+            ]);
+            expect(flushed.isOk, isTrue);
+            expect(flushed.associatedValue, isNull);
+            expect(output.bytes, <int>[5, 8]);
+
+            output.fail('sink failed');
+            expectIoFailure(
+              await invoke('output-stream.$method', <Object?>[handle]),
+              'sink failed',
+            );
+            expect(
+              _resultError(
+                await invoke('output-stream.$method', <Object?>[handle]),
+              ),
+              'closed',
+            );
+            expect(output.bytes, <int>[5, 8]);
+            streams.table.dropNamed(
+              'wasi:io/streams@0.2.0.output-stream',
+              handle,
+            );
+          },
+        );
+      }
+
+      test(
+        'blocking-write-zeroes-and-flush reaches the sink across write permits',
+        () async {
+          final sink = <int>[];
+          final output = WASIPreview2OutputStream(
+            maxWriteSize: 2,
+            onWrite: (bytes) {
+              sink.addAll(bytes);
+              return null;
+            },
+          );
+          final handle = streams.insertOutputStream(output);
+          final written = await invoke(
+            'output-stream.blocking-write-zeroes-and-flush',
+            <Object?>[handle, BigInt.from(5)],
+          );
+
+          expect(written.isOk, isTrue);
+          expect(written.associatedValue, isNull);
+          expect(output.bytes, <int>[0, 0, 0, 0, 0]);
+          expect(sink, <int>[0, 0, 0, 0, 0]);
+          expect(
+            (await invoke(
+              'output-stream.blocking-write-zeroes-and-flush',
+              <Object?>[handle, BigInt.zero],
+            )).isOk,
+            isTrue,
+          );
+          expect(sink, <int>[0, 0, 0, 0, 0]);
+          streams.table.dropNamed(
+            'wasi:io/streams@0.2.0.output-stream',
+            handle,
+          );
+        },
+      );
+
+      test(
+        'blocking-write-zeroes-and-flush returns an owned sink failure',
+        () async {
+          final output = WASIPreview2OutputStream(onWrite: (_) => 'disk full');
+          final handle = streams.insertOutputStream(output);
+
+          expectIoFailure(
+            await invoke(
+              'output-stream.blocking-write-zeroes-and-flush',
+              <Object?>[handle, BigInt.from(3)],
+            ),
+            'disk full',
+          );
+          expect(output.bytes, isEmpty);
+          expect(
+            _resultError(
+              await invoke(
+                'output-stream.blocking-write-zeroes-and-flush',
+                <Object?>[handle, BigInt.one],
+              ),
+            ),
+            'closed',
+          );
+          streams.table.dropNamed(
+            'wasi:io/streams@0.2.0.output-stream',
+            handle,
+          );
+        },
+      );
+
+      test(
+        'blocking-splice waits and transfers only the available write permit',
+        () async {
+          final input = WASIPreview2InputStream();
+          final output = WASIPreview2OutputStream(maxWriteSize: 2);
+          final inputHandle = streams.insertInputStream(input);
+          final outputHandle = streams.insertOutputStream(output);
+          var completed = false;
+          final pending =
+              invoke('output-stream.blocking-splice', <Object?>[
+                outputHandle,
+                inputHandle,
+                BigInt.from(8),
+              ]).then((result) {
+                completed = true;
+                return result;
+              });
+
+          await Future<void>.delayed(Duration.zero);
+          expect(completed, isFalse);
+          expect(output.bytes, isEmpty);
+          input.append(<int>[21, 22, 23]);
+          input.close();
+          final first = await pending;
+          expect(first.isOk, isTrue);
+          expect(first.associatedValue!.integer, BigInt.two);
+          expect(output.bytes, <int>[21, 22]);
+
+          final remaining = await invoke(
+            'output-stream.blocking-splice',
+            <Object?>[outputHandle, inputHandle, BigInt.from(8)],
+          );
+          expect(remaining.isOk, isTrue);
+          expect(remaining.associatedValue!.integer, BigInt.one);
+          expect(output.bytes, <int>[21, 22, 23]);
+          expect(
+            _resultError(
+              await invoke('output-stream.blocking-splice', <Object?>[
+                outputHandle,
+                inputHandle,
+                BigInt.one,
+              ]),
+            ),
+            'closed',
+          );
+          streams.table.dropNamed(
+            'wasi:io/streams@0.2.0.input-stream',
+            inputHandle,
+          );
+          streams.table.dropNamed(
+            'wasi:io/streams@0.2.0.output-stream',
+            outputHandle,
+          );
+        },
+      );
+
+      for (final method in <String>[
+        'input-stream.blocking-skip',
+        'output-stream.blocking-splice',
+      ]) {
+        test(
+          '$method wakes on failure and returns its owned I/O error',
+          () async {
+            final input = WASIPreview2InputStream();
+            final inputHandle = streams.insertInputStream(input);
+            final isSplice = method == 'output-stream.blocking-splice';
+            final outputHandle = isSplice ? streams.insertOutputStream() : null;
+            final args = <Object?>[?outputHandle, inputHandle, BigInt.one];
+            final pending = invoke(method, args);
+
+            input.fail('source failed');
+            expectIoFailure(await pending, 'source failed');
+            expect(_resultError(await invoke(method, args)), 'closed');
+            streams.table.dropNamed(
+              'wasi:io/streams@0.2.0.input-stream',
+              inputHandle,
+            );
+            if (outputHandle != null) {
+              expect(streams.outputStream(outputHandle).bytes, isEmpty);
+              streams.table.dropNamed(
+                'wasi:io/streams@0.2.0.output-stream',
+                outputHandle,
+              );
+            }
+          },
+        );
+      }
+    });
+
     test('DNS lookup remains non-blocking while an async resolver runs', () async {
       final resolved = Completer<Iterable<WASIPreview2IpAddress>>();
       final sockets = WASIPreview2SocketsHost(

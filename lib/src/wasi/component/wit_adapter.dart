@@ -55,8 +55,56 @@ final class WASIComponentWitTargetResolutionException implements Exception {
   }
 }
 
-/// Expands local and resolved WIT import/export interface functions from [world].
-List<WASIComponentWitFunctionBinding> wasiComponentWitWorldFunctions(
+/// An interface boundary, including interfaces without executable functions.
+final class WASIComponentWitInterfaceBinding {
+  const WASIComponentWitInterfaceBinding._({
+    required this.item,
+    required this.document,
+    required this.interface,
+    required this.interfaceName,
+    required this.canonicalName,
+    this.isImplicit = false,
+    required String Function(String)? qualifyInterfaceName,
+  }) : _qualifyInterfaceName = qualifyInterfaceName;
+
+  /// Explicit or dependency-generated world item introducing this boundary.
+  final WASIComponentWitWorldItem item;
+
+  /// Document declaring [interface].
+  final WASIComponentWitDocument document;
+
+  /// Resolved interface declaration.
+  final WASIComponentWitInterface interface;
+
+  /// Callback prefix, preserving local names and explicitly named copies.
+  final String interfaceName;
+
+  /// Package-qualified declaration ID, or the name for a headerless document.
+  final String canonicalName;
+
+  /// Whether a `use` dependency generated this canonical interface boundary.
+  final bool isImplicit;
+
+  /// Import or export direction of this world instance.
+  WASIComponentWitWorldItemDirection get direction => item.direction;
+
+  final String Function(String)? _qualifyInterfaceName;
+}
+
+/// A dependency that prevents a world surface from being complete.
+typedef WASIComponentWitDependencyError = ({
+  WASIComponentWitWorldItem item,
+  String target,
+  String reason,
+});
+
+/// Elaborates interface dependencies and expands executable function metadata.
+({
+  List<WASIComponentWitInterfaceBinding> interfaces,
+  List<WASIComponentWitFunctionBinding> functions,
+  List<WASIComponentWitDependencyError> dependencyErrors,
+})
+wasiComponentWitWorldBindings(
   WASIComponentWitDocument document,
   WASIComponentWitWorld world, {
   WASIComponentWitTargetResolver? resolveTarget,
@@ -64,26 +112,78 @@ List<WASIComponentWitFunctionBinding> wasiComponentWitWorldFunctions(
   String Function(String interfaceName)? qualifyInterfaceName,
 }) {
   final resolvedTargets = <String, WASIComponentWitResolvedTarget?>{};
-  return _expandWitWorldFunctions(
+  final WASIComponentWitTargetResolver? resolver = resolveTarget == null
+      ? null
+      : (target) =>
+            resolvedTargets.putIfAbsent(target, () => resolveTarget(target));
+  final expansion = _expandWitWorldInterfaces(
     document,
     world,
-    resolveTarget: resolveTarget == null
-        ? null
-        : (target) =>
-              resolvedTargets.putIfAbsent(target, () => resolveTarget(target)),
-    resourceOwners: <(String, String, String), WASIComponentWitResource>{},
+    resolveTarget: resolver,
     visiting: visiting,
     qualifyInterfaceName: qualifyInterfaceName,
-  ).functions;
+  );
+  final resourceOwners = <(String, String, String), WASIComponentWitResource>{};
+  final functions = <WASIComponentWitFunctionBinding>[];
+  for (final binding in expansion.interfaces) {
+    final resourceIdentities = binding.item.name == null
+        ? null
+        : {
+            for (final resource in binding.interface.resources)
+              resource: Object(),
+          };
+    for (final function in binding.interface.functions) {
+      functions.add(
+        WASIComponentWitFunctionBinding._(
+          item: binding.item,
+          interfaceName: binding.interfaceName,
+          implicitInterfaceName: binding.isImplicit
+              ? binding.canonicalName
+              : null,
+          function: function,
+          direction: binding.direction,
+          signature: _parseWitAdapterSignature(
+            function,
+            binding.interface,
+            document: binding.document,
+            resolveTarget: resolver,
+            resourceOwners: resourceOwners,
+            resourceIdentities: resourceIdentities,
+          ),
+        ),
+      );
+    }
+  }
+  return (
+    interfaces: expansion.interfaces,
+    functions: List<WASIComponentWitFunctionBinding>.unmodifiable(functions),
+    dependencyErrors: expansion.dependencyErrors,
+  );
 }
 
-({List<WASIComponentWitFunctionBinding> functions, Set<String> plainNames})
-_expandWitWorldFunctions(
+/// Expands local and resolved WIT import/export interface functions from [world].
+List<WASIComponentWitFunctionBinding> wasiComponentWitWorldFunctions(
   WASIComponentWitDocument document,
   WASIComponentWitWorld world, {
   WASIComponentWitTargetResolver? resolveTarget,
-  required Map<(String, String, String), WASIComponentWitResource>
-  resourceOwners,
+  Set<String>? visiting,
+  String Function(String interfaceName)? qualifyInterfaceName,
+}) => wasiComponentWitWorldBindings(
+  document,
+  world,
+  resolveTarget: resolveTarget,
+  visiting: visiting,
+  qualifyInterfaceName: qualifyInterfaceName,
+).functions;
+
+({
+  List<WASIComponentWitInterfaceBinding> interfaces,
+  List<WASIComponentWitDependencyError> dependencyErrors,
+})
+_expandWitWorldInterfaces(
+  WASIComponentWitDocument document,
+  WASIComponentWitWorld world, {
+  WASIComponentWitTargetResolver? resolveTarget,
   Set<String>? visiting,
   String Function(String interfaceName)? qualifyInterfaceName,
 }) {
@@ -91,15 +191,82 @@ _expandWitWorldFunctions(
   final visitKey = _witWorldVisitKey(document, world);
   if (!active.add(visitKey)) {
     return (
-      functions: const <WASIComponentWitFunctionBinding>[],
-      plainNames: <String>{},
+      interfaces: const <WASIComponentWitInterfaceBinding>[],
+      dependencyErrors: const <WASIComponentWitDependencyError>[],
     );
   }
-  final functions = <WASIComponentWitFunctionBinding>[];
-  final plainNames = <String>{};
-  for (final item in world.items) {
-    final target = item.target;
-    if (item.direction == WASIComponentWitWorldItemDirection.include) {
+  final declared = <WASIComponentWitInterfaceBinding>[];
+  final entries =
+      <
+        (WASIComponentWitWorldItemDirection, Object),
+        WASIComponentWitInterfaceBinding
+      >{};
+  final includedBindings = <WASIComponentWitInterfaceBinding>{};
+  final directKeys = <(WASIComponentWitWorldItemDirection, Object)>{};
+  final errors = <WASIComponentWitDependencyError>[];
+  void add(WASIComponentWitInterfaceBinding binding, {bool direct = false}) {
+    final key = _witWorldInterfaceKey(binding);
+    final previous = entries[key];
+    if ((binding.item.name != null && previous != null) ||
+        (direct && !directKeys.add(key))) {
+      throw WASIComponentWitTargetResolutionException(
+        binding.item.target.text,
+        '${binding.direction.name} of '
+        "'${binding.item.name ?? binding.canonicalName}' shadows a previous binding",
+      );
+    }
+    if (previous == null) {
+      entries[key] = binding;
+      declared.add(binding);
+    } else if (previous.isImplicit && !binding.isImplicit) {
+      // An explicit item keeps its original callback position even when an
+      // earlier include has already introduced the same dependency implicitly.
+      entries[key] = binding;
+      declared.remove(previous);
+      declared.add(binding);
+    }
+  }
+
+  try {
+    for (final item in world.items) {
+      final target = item.target;
+      if (item.direction == WASIComponentWitWorldItemDirection.include) {
+        final resolved = target.isQualified
+            ? resolveTarget?.call(target.text)
+            : null;
+        if (target.isQualified && resolved == null) {
+          throw WASIComponentWitTargetResolutionException(
+            target.text,
+            'no resolver result',
+          );
+        }
+        final includedDocument = resolved?.document ?? document;
+        final includedName = resolved?.memberName ?? target.text;
+        final included = includedDocument.worldNamed(includedName);
+        if (included == null) {
+          throw WASIComponentWitTargetResolutionException(
+            target.text,
+            "world '$includedName' does not exist in the resolved document",
+          );
+        }
+        final includedExpansion = _expandWitWorldInterfaces(
+          includedDocument,
+          included,
+          resolveTarget: resolveTarget,
+          visiting: active,
+          qualifyInterfaceName:
+              resolved?.qualifiedInterfaceName ?? qualifyInterfaceName,
+        );
+        errors.addAll(includedExpansion.dependencyErrors);
+        for (final binding in _renameIncludedWitInterfaces(
+          includedExpansion.interfaces,
+          item,
+        )) {
+          includedBindings.add(binding);
+          add(binding);
+        }
+        continue;
+      }
       final resolved = target.isQualified
           ? resolveTarget?.call(target.text)
           : null;
@@ -109,98 +276,139 @@ _expandWitWorldFunctions(
           'no resolver result',
         );
       }
-      final includedDocument = resolved?.document ?? document;
-      final includedName = resolved?.memberName ?? target.text;
-      final included = includedDocument.worldNamed(includedName);
-      if (included == null) {
-        throw WASIComponentWitTargetResolutionException(
-          target.text,
-          "world '$includedName' does not exist in the resolved document",
-        );
+      final interfaceDocument = resolved?.document ?? document;
+      final interfaceName = resolved?.memberName ?? target.text;
+      final interface = interfaceDocument.interfaceNamed(interfaceName);
+      if (interface == null) {
+        if (target.isQualified) {
+          throw WASIComponentWitTargetResolutionException(
+            target.text,
+            "interface '$interfaceName' does not exist in the resolved document",
+          );
+        }
+        continue;
       }
-      final includedExpansion = _expandWitWorldFunctions(
-        includedDocument,
-        included,
-        resolveTarget: resolveTarget,
-        resourceOwners: resourceOwners,
-        visiting: active,
-        qualifyInterfaceName:
-            resolved?.qualifiedInterfaceName ?? qualifyInterfaceName,
-      );
-      functions.addAll(
-        _renameIncludedWitFunctions(
-          includedExpansion.functions,
-          item,
-          includedExpansion.plainNames,
-        ),
-      );
-      plainNames.addAll(
-        includedExpansion.plainNames.map((name) => item.renames[name] ?? name),
-      );
-      continue;
-    }
-    if (item.name != null) plainNames.add(item.name!);
-    final resolved = target.isQualified
-        ? resolveTarget?.call(target.text)
-        : null;
-    if (target.isQualified && resolved == null) {
-      throw WASIComponentWitTargetResolutionException(
-        target.text,
-        'no resolver result',
-      );
-    }
-    final interfaceDocument = resolved?.document ?? document;
-    final interfaceName = resolved?.memberName ?? target.text;
-    final interface = interfaceDocument.interfaceNamed(interfaceName);
-    if (interface == null) {
-      if (target.isQualified) {
-        throw WASIComponentWitTargetResolutionException(
-          target.text,
-          "interface '$interfaceName' does not exist in the resolved document",
-        );
-      }
-      continue;
-    }
-    final callbackInterfaceName =
-        item.name ??
-        resolved?.qualifiedInterfaceName(interface.name) ??
-        qualifyInterfaceName?.call(interface.name) ??
-        interface.name;
-    final resourceIdentities = item.name == null
-        ? null
-        : {for (final resource in interface.resources) resource: Object()};
-    for (final function in interface.functions) {
-      functions.add(
-        WASIComponentWitFunctionBinding._(
+      final qualifier =
+          resolved?.qualifiedInterfaceName ?? qualifyInterfaceName;
+      add(
+        WASIComponentWitInterfaceBinding._(
           item: item,
-          interfaceName: callbackInterfaceName,
-          function: function,
-          direction: item.direction,
-          signature: _parseWitAdapterSignature(
-            function,
+          document: interfaceDocument,
+          interface: interface,
+          interfaceName:
+              item.name ?? qualifier?.call(interface.name) ?? interface.name,
+          canonicalName: _witCanonicalInterfaceName(
+            interfaceDocument,
             interface,
-            document: interfaceDocument,
-            resolveTarget: resolveTarget,
-            resourceOwners: resourceOwners,
-            resourceIdentities: resourceIdentities,
           ),
+          qualifyInterfaceName: qualifier,
         ),
+        direct: true,
       );
     }
+
+    final interfaces = <WASIComponentWitInterfaceBinding>[];
+    final scheduled = declared.toSet();
+    final emitted = <(WASIComponentWitWorldItemDirection, Object)>{};
+    final dependencies = <(WASIComponentWitWorldItemDirection, Object)>{};
+    void visit(WASIComponentWitInterfaceBinding binding) {
+      final key = _witWorldInterfaceKey(binding);
+      // This is boundary elaboration, not complete WIT graph validation. Keep
+      // cyclic metadata finite without replacing existing signature diagnostics.
+      if (emitted.contains(key) || !dependencies.add(key)) return;
+      if (!includedBindings.contains(binding)) {
+        for (final use in binding.interface.uses) {
+          final target = use.target;
+          final resolved = target.isQualified
+              ? resolveTarget?.call(target.text)
+              : null;
+          final dependencyDocument = resolved?.document ?? binding.document;
+          final dependencyName = resolved?.memberName ?? target.text;
+          final dependency = target.isQualified && resolved == null
+              ? null
+              : dependencyDocument.interfaceNamed(dependencyName);
+          if (dependency == null) {
+            errors.add((
+              item: binding.item,
+              target: target.text,
+              reason:
+                  "WIT dependency interface '$dependencyName' could not be resolved",
+            ));
+            continue;
+          }
+          for (final used in use.items) {
+            if (!_witInterfaceHasType(dependency, used.name)) {
+              errors.add((
+                item: binding.item,
+                target: target.text,
+                reason:
+                    "WIT dependency type '${used.name}' does not exist in '$dependencyName'",
+              ));
+            }
+          }
+          final qualifier =
+              resolved?.qualifiedInterfaceName ?? binding._qualifyInterfaceName;
+          final imported = WASIComponentWitInterfaceBinding._(
+            isImplicit: true,
+            item: WASIComponentWitWorldItem(
+              direction: WASIComponentWitWorldItemDirection.import,
+              target: target,
+              span: use.span,
+            ),
+            document: dependencyDocument,
+            interface: dependency,
+            interfaceName: qualifier?.call(dependency.name) ?? dependency.name,
+            canonicalName: _witCanonicalInterfaceName(
+              dependencyDocument,
+              dependency,
+            ),
+            qualifyInterfaceName: qualifier,
+          );
+          final dependencyKey = _witWorldInterfaceKey(imported);
+          final exported =
+              binding.direction == WASIComponentWitWorldItemDirection.export
+              ? entries[(
+                  WASIComponentWitWorldItemDirection.export,
+                  dependencyKey.$2,
+                )]
+              : null;
+          if (exported == null) {
+            final required = entries.putIfAbsent(dependencyKey, () => imported);
+            // Existing explicit items retain their callback order. Only newly
+            // implicit dependencies need inserting before their consumer.
+            if (!scheduled.contains(required)) visit(required);
+          }
+        }
+      }
+      dependencies.remove(key);
+      if (emitted.add(key)) interfaces.add(binding);
+    }
+
+    for (final binding in declared) {
+      visit(binding);
+    }
+    return (
+      interfaces: List<WASIComponentWitInterfaceBinding>.unmodifiable(
+        interfaces,
+      ),
+      dependencyErrors: List<WASIComponentWitDependencyError>.unmodifiable(
+        errors,
+      ),
+    );
+  } finally {
+    active.remove(visitKey);
   }
-  active.remove(visitKey);
-  return (
-    functions: List<WASIComponentWitFunctionBinding>.unmodifiable(functions),
-    plainNames: plainNames,
-  );
 }
 
-List<WASIComponentWitFunctionBinding> _renameIncludedWitFunctions(
-  List<WASIComponentWitFunctionBinding> functions,
+List<WASIComponentWitInterfaceBinding> _renameIncludedWitInterfaces(
+  List<WASIComponentWitInterfaceBinding> interfaces,
   WASIComponentWitWorldItem include,
-  Set<String> plainNames,
 ) {
-  if (include.renames.isEmpty) return functions;
+  if (include.renames.isEmpty) return interfaces;
+  final plainNames = {
+    for (final binding in interfaces)
+      if (binding.item.name != null) binding.item.name!,
+  };
   for (final name in include.renames.keys) {
     if (!plainNames.contains(name)) {
       throw WASIComponentWitTargetResolutionException(
@@ -209,8 +417,8 @@ List<WASIComponentWitFunctionBinding> _renameIncludedWitFunctions(
       );
     }
   }
-  final result = <WASIComponentWitFunctionBinding>[];
-  for (final binding in functions) {
+  final result = <WASIComponentWitInterfaceBinding>[];
+  for (final binding in interfaces) {
     final name = binding.item.name;
     final renamed = include.renames[name];
     if (renamed == null) {
@@ -219,7 +427,7 @@ List<WASIComponentWitFunctionBinding> _renameIncludedWitFunctions(
     }
     final item = binding.item;
     result.add(
-      WASIComponentWitFunctionBinding._(
+      WASIComponentWitInterfaceBinding._(
         item: WASIComponentWitWorldItem(
           direction: item.direction,
           target: item.target,
@@ -229,14 +437,47 @@ List<WASIComponentWitFunctionBinding> _renameIncludedWitFunctions(
           renames: item.renames,
         ),
         interfaceName: renamed,
-        function: binding.function,
-        direction: binding.direction,
-        signature: binding.signature,
+        canonicalName: binding.canonicalName,
+        isImplicit: binding.isImplicit,
+        document: binding.document,
+        interface: binding.interface,
+        qualifyInterfaceName: binding._qualifyInterfaceName,
       ),
     );
   }
   return result;
 }
+
+(WASIComponentWitWorldItemDirection, Object) _witWorldInterfaceKey(
+  WASIComponentWitInterfaceBinding binding,
+) => (
+  binding.direction,
+  binding.item.name == null
+      ? (
+          false,
+          binding.document.package == null
+              ? binding.interface
+              : binding.canonicalName,
+        )
+      : (true, binding.item.name!),
+);
+
+String _witCanonicalInterfaceName(
+  WASIComponentWitDocument document,
+  WASIComponentWitInterface interface,
+) => WASIComponentWitResolvedTarget(
+  document: document,
+  memberName: interface.name,
+).qualifiedInterfaceName(interface.name);
+
+bool _witInterfaceHasType(WASIComponentWitInterface interface, String name) =>
+    interface.resourceNamed(name) != null ||
+    interface.typeAliasNamed(name) != null ||
+    interface.recordNamed(name) != null ||
+    interface.variantNamed(name) != null ||
+    interface.enumNamed(name) != null ||
+    interface.flagsNamed(name) != null ||
+    interface.useItemNamed(name) != null;
 
 String _witWorldVisitKey(
   WASIComponentWitDocument document,
@@ -267,16 +508,19 @@ final class WASIComponentWitFunctionBinding {
   const WASIComponentWitFunctionBinding._({
     required this.item,
     required this.interfaceName,
+    required String? implicitInterfaceName,
     required this.function,
     required this.direction,
     required this.signature,
-  });
+  }) : _implicitInterfaceName = implicitInterfaceName;
 
   /// World item that introduced [function].
   final WASIComponentWitWorldItem item;
 
   /// Local interface name that declares [function].
   final String interfaceName;
+
+  final String? _implicitInterfaceName;
 
   /// WIT function boundary.
   final WASIComponentWitFunction function;
@@ -288,7 +532,7 @@ final class WASIComponentWitFunctionBinding {
   final WASIComponentWitAdapterSignature signature;
 
   /// Stable callback key, such as `filesystem.open-at`.
-  String get qualifiedName => '$interfaceName.${function.name}';
+  String get qualifiedName => '$interfaceName.${function.callbackName}';
 }
 
 /// Parsed subset of a WIT function signature that can drive adapters.
@@ -647,6 +891,58 @@ final class WASIComponentWitAdapterBindingException implements Exception {
   }
 }
 
+final _witCallbackEscape = RegExp(r'(^|[.:/])%([A-Za-z][A-Za-z0-9_-]*)');
+
+String _canonicalWitCallbackName(
+  String name, {
+  bool preserveConstructorMethod = true,
+}) => name.contains('%')
+    ? name.replaceAllMapped(
+        _witCallbackEscape,
+        (match) =>
+            preserveConstructorMethod &&
+                match[2] == 'constructor' &&
+                match.end == name.length
+            ? match[0]!
+            : '${match[1]}${match[2]}',
+      )
+    : name;
+
+/// Internal callback normalization shared by host defaults and user overrides.
+Map<String, WASIComponentWitAdapterCallback> normalizeWASIComponentWitCallbacks(
+  Map<String, WASIComponentWitAdapterCallback> callbacks, {
+  Iterable<WASIComponentWitFunctionBinding> functions = const [],
+}) {
+  if (!callbacks.keys.any((name) => name.contains('%'))) return callbacks;
+  // Only free functions can use both constructor spellings. Resource
+  // `%constructor` keys name ordinary methods, never resource constructors.
+  final freeConstructors = {
+    for (final binding in functions)
+      if (binding.function.name == 'constructor') ...[
+        binding.qualifiedName,
+        if (binding._implicitInterfaceName case final String canonical)
+          '$canonical.constructor',
+      ],
+  };
+  final result = <String, WASIComponentWitAdapterCallback>{};
+  for (final entry in callbacks.entries) {
+    var name = _canonicalWitCallbackName(entry.key);
+    if (name.endsWith('.%constructor')) {
+      final unescaped = _canonicalWitCallbackName(
+        entry.key,
+        preserveConstructorMethod: false,
+      );
+      if (freeConstructors.contains(unescaped)) name = unescaped;
+    }
+    final previous = result[name];
+    if (previous != null && previous != entry.value) {
+      throw StateError('Conflicting WIT adapter callbacks for $name.');
+    }
+    result[name] = entry.value;
+  }
+  return result;
+}
+
 /// Executable WIT adapter program indexed by import/export function name.
 final class WASIComponentWitAdapterProgram {
   WASIComponentWitAdapterProgram._(
@@ -671,15 +967,29 @@ final class WASIComponentWitAdapterProgram {
     Map<String, WASIComponentWitAdapterCallback> exports =
         const <String, WASIComponentWitAdapterCallback>{},
   }) {
+    final bindings = functions.toList(growable: false);
+    final normalizedImports = normalizeWASIComponentWitCallbacks(
+      imports,
+      functions: bindings,
+    );
+    final normalizedExports = normalizeWASIComponentWitCallbacks(
+      exports,
+      functions: bindings,
+    );
     final operations = <WASIComponentWitAdapterOperation>[];
-    for (final function in functions) {
+    for (final function in bindings) {
       final callbacks = switch (function.direction) {
-        WASIComponentWitWorldItemDirection.import => imports,
-        WASIComponentWitWorldItemDirection.export => exports,
+        WASIComponentWitWorldItemDirection.import => normalizedImports,
+        WASIComponentWitWorldItemDirection.export => normalizedExports,
         WASIComponentWitWorldItemDirection.include =>
           const <String, WASIComponentWitAdapterCallback>{},
       };
-      final callback = callbacks[function.qualifiedName];
+      final implicitInterface = function._implicitInterfaceName;
+      final callback =
+          callbacks[function.qualifiedName] ??
+          (implicitInterface == null
+              ? null
+              : callbacks['$implicitInterface.${function.function.callbackName}']);
       if (callback == null) {
         throw StateError(
           'Missing WIT ${function.direction.name} adapter callback for '
@@ -728,7 +1038,7 @@ final class WASIComponentWitAdapterProgram {
     String qualifiedName,
     List<Object?> args,
   ) {
-    final operation = operations[qualifiedName];
+    final operation = _operationNamed(operations, qualifiedName);
     if (operation == null) {
       throw StateError('Unknown WIT $direction adapter: $qualifiedName.');
     }
@@ -741,11 +1051,26 @@ final class WASIComponentWitAdapterProgram {
     String qualifiedName,
     List<Object?> args,
   ) {
-    final operation = operations[qualifiedName];
+    final operation = _operationNamed(operations, qualifiedName);
     if (operation == null) {
       throw StateError('Unknown WIT $direction adapter: $qualifiedName.');
     }
     return operation.invokeAsync(args);
+  }
+
+  WASIComponentWitAdapterOperation? _operationNamed(
+    Map<String, WASIComponentWitAdapterOperation> operations,
+    String qualifiedName,
+  ) {
+    final name = _canonicalWitCallbackName(qualifiedName);
+    final exact = operations[name];
+    if (exact != null || !name.endsWith('.%constructor')) return exact;
+    final free =
+        operations[_canonicalWitCallbackName(
+          qualifiedName,
+          preserveConstructorMethod: false,
+        )];
+    return free?.function.function.name == 'constructor' ? free : null;
   }
 }
 
@@ -916,7 +1241,9 @@ WASIComponentWitAdapterSignature _parseWitAdapterSignature(
         continue;
       }
       final colon = _findWitTopLevelSymbol(paramText, ':');
-      final label = colon == null ? null : paramText.substring(0, colon);
+      final label = colon == null
+          ? null
+          : _witAdapterIdentifier(paramText.substring(0, colon));
       final typeText = colon == null
           ? paramText
           : paramText.substring(colon + 1);
@@ -1244,7 +1571,26 @@ _parseWitAdapterValueType(
       isBorrowed: true,
     );
   }
-  final alias = typeContext.interface.typeAliasNamed(text);
+  return _parseWitAdapterNamedValueType(
+    text,
+    context,
+    typeContext,
+    visitingTypes,
+  );
+}
+
+String _witAdapterIdentifier(String text) =>
+    text.startsWith('%') ? text.substring(1) : text;
+
+({WASIComponentWitAdapterValueType? type, String? error})
+_parseWitAdapterNamedValueType(
+  String text,
+  String context,
+  _WitAdapterTypeContext typeContext, [
+  Set<String>? visitingTypes,
+]) {
+  final name = _witAdapterIdentifier(text);
+  final alias = typeContext.interface.typeAliasNamed(name);
   if (alias != null) {
     final visiting = visitingTypes ?? <String>{};
     final typeKey = '${typeContext.visitPrefix}:alias:${alias.name}';
@@ -1263,7 +1609,7 @@ _parseWitAdapterValueType(
     visiting.remove(typeKey);
     return parsed;
   }
-  final record = typeContext.interface.recordNamed(text);
+  final record = typeContext.interface.recordNamed(name);
   if (record != null) {
     final visiting = visitingTypes ?? <String>{};
     final typeKey = '${typeContext.visitPrefix}:record:${record.name}';
@@ -1298,7 +1644,7 @@ _parseWitAdapterValueType(
       error: null,
     );
   }
-  final flags = typeContext.interface.flagsNamed(text);
+  final flags = typeContext.interface.flagsNamed(name);
   if (flags != null) {
     return (
       type: WASIComponentWitAdapterValueType.flags(
@@ -1308,7 +1654,7 @@ _parseWitAdapterValueType(
       error: null,
     );
   }
-  final enum_ = typeContext.interface.enumNamed(text);
+  final enum_ = typeContext.interface.enumNamed(name);
   if (enum_ != null) {
     return (
       type: WASIComponentWitAdapterValueType.enumeration(
@@ -1318,7 +1664,7 @@ _parseWitAdapterValueType(
       error: null,
     );
   }
-  final variant = typeContext.interface.variantNamed(text);
+  final variant = typeContext.interface.variantNamed(name);
   if (variant != null) {
     final visiting = visitingTypes ?? <String>{};
     final typeKey = '${typeContext.visitPrefix}:variant:${variant.name}';
@@ -1355,7 +1701,7 @@ _parseWitAdapterValueType(
       error: null,
     );
   }
-  final resource = typeContext.interface.resourceNamed(text);
+  final resource = typeContext.interface.resourceNamed(name);
   if (resource != null) {
     return (
       type: WASIComponentWitAdapterValueType.resource(
@@ -1386,7 +1732,7 @@ _parseWitAdapterUsedValueType(
   _WitAdapterTypeContext typeContext, [
   Set<String>? visitingTypes,
 ]) {
-  final used = typeContext.interface.useItemNamed(text);
+  final used = typeContext.interface.useItemNamed(_witAdapterIdentifier(text));
   if (used == null) {
     return (type: null, error: null);
   }
@@ -1411,7 +1757,7 @@ _parseWitAdapterUsedValueType(
       error: 'unsupported recursive WIT adapter $context type $text',
     );
   }
-  final parsed = _parseWitAdapterValueType(
+  final parsed = _parseWitAdapterNamedValueType(
     used.name,
     '$context use ${used.target.text}.${used.name}',
     usedContext,
@@ -1442,7 +1788,8 @@ _parseWitAdapterUsedValueType(
   _WitAdapterTypeContext typeContext, [
   Set<(Object, String)>? visiting,
 ]) {
-  final resource = typeContext.interface.resourceNamed(resourceName);
+  final name = _witAdapterIdentifier(resourceName);
+  final resource = typeContext.interface.resourceNamed(name);
   if (resource != null) {
     return (
       identity: typeContext.resourceIdentity(resource),
@@ -1451,7 +1798,7 @@ _parseWitAdapterUsedValueType(
     );
   }
   final active = visiting ?? <(Object, String)>{};
-  final key = (typeContext.interface, resourceName);
+  final key = (typeContext.interface, name);
   if (!active.add(key)) {
     return (
       identity: null,
@@ -1461,7 +1808,7 @@ _parseWitAdapterUsedValueType(
     );
   }
   try {
-    final alias = typeContext.interface.typeAliasNamed(resourceName);
+    final alias = typeContext.interface.typeAliasNamed(name);
     if (alias != null) {
       // A handle alias (own/borrow<T>) is not a resource declaration. Resolve
       // alias targets as names, without using the generic value-type parser.
@@ -1472,7 +1819,7 @@ _parseWitAdapterUsedValueType(
         active,
       );
     }
-    final used = typeContext.interface.useItemNamed(resourceName);
+    final used = typeContext.interface.useItemNamed(name);
     if (used != null) {
       // A resolver may reparse a qualified interface on every call, so object
       // identity alone cannot detect a cycle across those resolutions.
