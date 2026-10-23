@@ -547,6 +547,46 @@ interface types { resource token; }
       },
     );
 
+    test('retains local copy identities through cyclic boundary reexports', () {
+      // Full WIT validation rejects this interface cycle. The boundary parser
+      // accepts it, so its resolved metadata must still keep each local copy.
+      final document = WASIComponentWitDocument.parse('''
+interface shared { resource token; }
+interface store {
+  resource token;
+  use helper.{token as helper-token};
+  use shared.{token as shared-token};
+  roundtrip: func(value: borrow<helper-token>) -> token;
+  common: func(value: borrow<shared-token>) -> shared-token;
+}
+interface helper { use store.{token}; }
+world command { import one: store; import two: store; }
+''');
+      final functions = wasiComponentWitWorldFunctions(
+        document,
+        document.worldNamed('command')!,
+      );
+      expect(wasiComponentWitAdapterBindingErrors(functions), isEmpty);
+      WASIComponentWitAdapterSignature signature(String name) => functions
+          .singleWhere((function) => function.qualifiedName == name)
+          .signature;
+      final one = signature('one.roundtrip');
+      final two = signature('two.roundtrip');
+      final oneOwner = one.result!.resourceIdentity;
+      final twoOwner = two.result!.resourceIdentity;
+      expect(one.params.single.type.resourceIdentity, same(oneOwner));
+      expect(two.params.single.type.resourceIdentity, same(twoOwner));
+      expect(oneOwner, isNot(same(twoOwner)));
+      final shared = document.interfaceNamed('shared')!.resources.single;
+      for (final name in ['one.common', 'two.common']) {
+        final common = signature(name);
+        expect(common.params.single.type.resourceIdentity, same(shared));
+        expect(common.result!.resourceIdentity, same(shared));
+      }
+      expect(shared, isNot(same(oneOwner)));
+      expect(shared, isNot(same(twoOwner)));
+    });
+
     test('rejects a qualified cycle when the resolver reparses documents', () {
       final document = WASIComponentWitDocument.parse('''
 interface api {

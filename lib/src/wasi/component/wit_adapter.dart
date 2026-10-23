@@ -1001,6 +1001,7 @@ final class _WitAdapterTypeContext {
       interface: nextInterface,
       resolveTarget: resolveTarget,
       resourceOwners: resourceOwners,
+      resourceIdentities: resourceIdentities,
     );
   }
 
