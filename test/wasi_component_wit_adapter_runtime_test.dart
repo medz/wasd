@@ -297,9 +297,12 @@ world command { import api; }
             .resourceNamed('token');
         final signature = functions.single.signature;
         expect(signature.params.single.type.resourceIdentity, same(owner));
-        expect(signature.params.single.type.resourceName, selected);
+        final resourceName = throughUse ? selected : 'token';
+        expect(signature.params.single.type.resourceName, resourceName);
+        expect(signature.params.single.type.text, 'borrow<$selected>');
         expect(signature.params.single.type.isBorrowedResource, isTrue);
         expect(signature.result!.resourceIdentity, same(owner));
+        expect(signature.result!.resourceName, resourceName);
         expect(signature.result!.isBorrowedResource, isFalse);
       });
 
@@ -360,6 +363,189 @@ world command { import api; }
         );
       }
     }
+
+    test(
+      'unrenamed borrowed aliases retain the existing owned resource name',
+      () {
+        final document = WASIComponentWitDocument.parse('''
+interface definitions { resource token; type alias = token; }
+interface api {
+  use definitions.{alias};
+  inspect: func(value: borrow<alias>) -> alias;
+}
+world command { import api; }
+''');
+        final functions = wasiComponentWitWorldFunctions(
+          document,
+          document.worldNamed('command')!,
+        );
+        expect(wasiComponentWitAdapterBindingErrors(functions), isEmpty);
+        final signature = functions.single.signature;
+        final borrowed = signature.params.single.type;
+        final owned = signature.result!;
+        expect(borrowed.text, 'borrow<alias>');
+        expect(borrowed.resourceName, 'token');
+        expect(owned.resourceName, 'token');
+        expect(borrowed.resourceIdentity, same(owned.resourceIdentity));
+      },
+    );
+
+    for (final partial in [false, true]) {
+      test(
+        'shares local and qualified package resource views partial=$partial',
+        () {
+          final document = WASIComponentWitDocument.parse('''
+world command {
+  import acme:store/front@1.0.0;
+  import acme:store/back@1.0.0;
+}
+''');
+          const package = 'package acme:store@1.0.0;';
+          const front = '''
+interface front {
+  use back.{token};
+  via: func(value: borrow<token>) -> token;
+}
+''';
+          const back = '''
+interface back {
+  resource token;
+  direct: func(value: borrow<token>) -> token;
+}
+''';
+          final sources = {
+            'acme:store/front@1.0.0': partial
+                ? '$package interface back { resource token; } $front'
+                : '$package $front $back',
+            'acme:store/back@1.0.0': partial
+                ? '$package $back'
+                : '$package $front $back',
+          };
+          final functions = wasiComponentWitWorldFunctions(
+            document,
+            document.worldNamed('command')!,
+            resolveTarget: (target) => WASIComponentWitResolvedTarget(
+              document: WASIComponentWitDocument.parse(sources[target]!),
+              memberName: target.contains('/front@') ? 'front' : 'back',
+            ),
+          );
+          expect(wasiComponentWitAdapterBindingErrors(functions), isEmpty);
+          final via = functions
+              .singleWhere(
+                (f) => f.qualifiedName == 'acme:store/front@1.0.0.via',
+              )
+              .signature;
+          final direct = functions
+              .singleWhere(
+                (f) => f.qualifiedName == 'acme:store/back@1.0.0.direct',
+              )
+              .signature;
+          final owner = via.params.single.type.resourceIdentity;
+          expect(via.result!.resourceIdentity, same(owner));
+          expect(direct.params.single.type.resourceIdentity, same(owner));
+          expect(direct.result!.resourceIdentity, same(owner));
+        },
+      );
+    }
+
+    test('shares qualified resource identity when the resolver reparses', () {
+      final document = WASIComponentWitDocument.parse('''
+interface api {
+  use acme:relay/types@1.0.0.{token};
+  use acme:origin/types@2.0.0.{token as other-token};
+  pair: func(a: borrow<token>, b: borrow<token>) -> token;
+  next: func(value: borrow<token>) -> token;
+  other: func(value: borrow<other-token>) -> other-token;
+}
+interface consumer {
+  use acme:origin/types@1.0.0.{token};
+  roundtrip: func(value: borrow<token>) -> token;
+}
+world base { import api; }
+world command { include base; import consumer; }
+''');
+      const sources = {
+        'acme:relay/types@1.0.0': '''
+package acme:relay@1.0.0;
+interface types { use acme:origin/types@1.0.0.{token}; }
+''',
+        'acme:origin/types@1.0.0': '''
+package acme:origin@1.0.0;
+interface types { resource token; }
+''',
+        'acme:origin/types@2.0.0': '''
+package acme:origin@2.0.0;
+interface types { resource token; }
+''',
+      };
+      final functions = wasiComponentWitWorldFunctions(
+        document,
+        document.worldNamed('command')!,
+        resolveTarget: (target) => WASIComponentWitResolvedTarget(
+          document: WASIComponentWitDocument.parse(sources[target]!),
+          memberName: 'types',
+        ),
+      );
+      expect(wasiComponentWitAdapterBindingErrors(functions), isEmpty);
+      WASIComponentWitAdapterSignature signature(String name) => functions
+          .singleWhere((function) => function.qualifiedName == name)
+          .signature;
+      final pair = signature('api.pair');
+      final owner = pair.params[0].type.resourceIdentity;
+      expect(owner, isNotNull);
+      expect(pair.params[1].type.resourceIdentity, same(owner));
+      expect(pair.result!.resourceIdentity, same(owner));
+      for (final name in ['api.next', 'consumer.roundtrip']) {
+        final next = signature(name);
+        expect(next.params.single.type.resourceIdentity, same(owner));
+        expect(next.result!.resourceIdentity, same(owner));
+      }
+      final other = signature('api.other');
+      final otherOwner = other.params.single.type.resourceIdentity;
+      expect(otherOwner, isNot(same(owner)));
+      expect(other.result!.resourceIdentity, same(otherOwner));
+    });
+
+    test(
+      'fresh qualified resources stay shared across distinct local copies',
+      () {
+        final document = WASIComponentWitDocument.parse('''
+interface store {
+  resource local;
+  type local-alias = local;
+  use acme:origin/types@1.0.0.{token as shared};
+  roundtrip: func(value: borrow<local-alias>, common: borrow<shared>)
+    -> tuple<local-alias, shared>;
+}
+world command { import one: store; import two: store; }
+''');
+        final functions = wasiComponentWitWorldFunctions(
+          document,
+          document.worldNamed('command')!,
+          resolveTarget: (_) => WASIComponentWitResolvedTarget(
+            document: WASIComponentWitDocument.parse('''
+package acme:origin@1.0.0;
+interface types { resource token; }
+'''),
+            memberName: 'types',
+          ),
+        );
+        expect(wasiComponentWitAdapterBindingErrors(functions), isEmpty);
+        final one = functions[0].signature;
+        final two = functions[1].signature;
+        final local = one.params[0].type.resourceIdentity;
+        final otherLocal = two.params[0].type.resourceIdentity;
+        final shared = one.params[1].type.resourceIdentity;
+        expect(local, isNot(same(otherLocal)));
+        expect(one.result!.elements[0].resourceIdentity, same(local));
+        expect(two.result!.elements[0].resourceIdentity, same(otherLocal));
+        expect(one.result!.elements[1].resourceIdentity, same(shared));
+        expect(two.params[1].type.resourceIdentity, same(shared));
+        expect(two.result!.elements[1].resourceIdentity, same(shared));
+        expect(shared, isNot(same(local)));
+        expect(shared, isNot(same(otherLocal)));
+      },
+    );
 
     test('rejects a qualified cycle when the resolver reparses documents', () {
       final document = WASIComponentWitDocument.parse('''
