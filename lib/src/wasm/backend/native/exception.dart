@@ -12,12 +12,16 @@ class Exception implements wasm.Exception {
     List<Object?> payload, [
     wasm.ExceptionOptions? options,
   ]) {
-    final references = ReferenceValues();
-    final host = _encode(tag as native_tag.Tag, payload, references);
+    final nativeTag = tag as native_tag.Tag;
+    final hasReferences = nativeTag.host.type.paramTypeSignatures.any(
+      (signature) => !const {'7f', '7e', '7d', '7c'}.contains(signature),
+    );
+    final references = hasReferences ? ReferenceValues() : null;
+    final host = _encode(nativeTag, payload, references);
     return _wrappers[host] = Exception._fromRuntime(host, references);
   }
 
-  Exception._fromRuntime(this.host, this.references);
+  Exception._fromRuntime(this.host, this._references);
 
   factory Exception.fromRuntime(
     WasmGuestException host,
@@ -27,7 +31,7 @@ class Exception implements wasm.Exception {
       host,
       references,
     );
-    references.connect(wrapper.references);
+    wrapper.retainIn(references);
     return wrapper;
   }
 
@@ -36,12 +40,20 @@ class Exception implements wasm.Exception {
   // Keep the original carrier so exception references and float bits survive
   // guest -> Dart -> guest propagation. Native does not capture an extra stack.
   final WasmGuestException host;
-  final ReferenceValues references;
+
+  // Known numeric host payloads need no store; opaque guest carriers retain
+  // their instance owner without requiring a publicly supported tag type.
+  final ReferenceValues? _references;
+
+  void retainIn(ReferenceValues references) {
+    final owner = _references;
+    if (owner != null) references.connect(owner);
+  }
 
   static WasmGuestException _encode(
     native_tag.Tag tag,
     List<Object?> payload,
-    ReferenceValues references,
+    ReferenceValues? references,
   ) {
     final binding = tag.host;
     final parameters = binding.type.params;
@@ -59,7 +71,13 @@ class Exception implements wasm.Exception {
         for (var i = 0; i < parameters.length; i++)
           switch (parameters[i]) {
             ir.WasmValueType.i32 => WasmValue.i32(
-              references.encode(tag.parameterSignature(i), payload[i]) as int,
+              (references == null
+                      ? payload[i]
+                      : references.encode(
+                          tag.parameterSignature(i),
+                          payload[i],
+                        ))
+                  as int,
             ),
             ir.WasmValueType.i64 => WasmValue.i64(payload[i] as BigInt),
             ir.WasmValueType.f32 => WasmValue.f32(payload[i] as double),
@@ -85,9 +103,14 @@ class Exception implements wasm.Exception {
     }
     RangeError.checkValidIndex(index, host.values);
     final value = host.values[index];
+    final raw = value.type == ir.WasmValueType.i64
+        ? value.asI64()
+        : value.toExternal();
+    final references = _references;
+    if (references == null) return raw;
     return references.decode(
       (candidate as native_tag.Tag).parameterSignature(index),
-      value.type == ir.WasmValueType.i64 ? value.asI64() : value.toExternal(),
+      raw,
     );
   }
 }

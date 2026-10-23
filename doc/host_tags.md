@@ -105,8 +105,10 @@ BigInt externref; numeric `i64` decoding still returns Dart `BigInt`. The JS
 exception codec explicitly rejects `funcref` and `v128` payload conversion.
 Dart2wasm host exception interoperability remains unqualified. In a separate
 Node probe, a host-thrown numeric exception could be caught inside the guest,
-but an exception escaping the guest terminated execution without entering the
-Dart catch block. That partial success is not host/guest exception parity.
+but an exception escaping a synchronous guest call terminated execution without
+entering the Dart catch block. Typed asynchronous host callback controls did
+preserve catchable escaped wrappers. Those bounded results do not qualify full
+host/guest exception parity or Dart2wasm on other engines.
 Throwing public exceptions from JavaScript host callbacks requires the engine's
 `WebAssembly.JSTag` support.
 

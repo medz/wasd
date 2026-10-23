@@ -261,7 +261,7 @@ class Instance implements wasm.Instance {
                       ? result
                       : referenceValues.target!.encodeResults(type, result);
                 } on native_exception.Exception catch (error, stackTrace) {
-                  referenceValues.target!.connect(error.references);
+                  error.retainIn(referenceValues.target!);
                   Error.throwWithStackTrace(error.host, stackTrace);
                 } catch (error, stack) {
                   if (error is WasmHostControlFlowException) rethrow;
@@ -288,7 +288,7 @@ class Instance implements wasm.Instance {
                     ? result
                     : referenceValues.target!.encodeResults(type, result);
               } on native_exception.Exception catch (error, stackTrace) {
-                referenceValues.target!.connect(error.references);
+                error.retainIn(referenceValues.target!);
                 Error.throwWithStackTrace(error.host, stackTrace);
               } catch (error, stack) {
                 if (error is WasmHostControlFlowException) rethrow;
