@@ -1409,42 +1409,81 @@ _parseWitAdapterUsedValueType(
   return parsed;
 }
 
-({WASIComponentWitAdapterValueType? type, String? error})
-_parseWitAdapterUsedResourceValueType(
-  String text,
+({Object? identity, String? error}) _resolveWitAdapterResourceIdentity(
   String resourceName,
   String context,
-  _WitAdapterTypeContext typeContext, {
-  required bool isBorrowed,
-}) {
-  final used = typeContext.interface.useItemNamed(resourceName);
-  if (used == null) {
-    return (type: null, error: null);
+  _WitAdapterTypeContext typeContext, [
+  Set<(Object, String)>? visiting,
+]) {
+  final resource = typeContext.interface.resourceNamed(resourceName);
+  if (resource != null) {
+    return (identity: typeContext.resourceIdentity(resource), error: null);
   }
-  final resolved = _resolveWitAdapterUsedInterface(typeContext, used.target);
-  if (resolved == null) {
+  final active = visiting ?? <(Object, String)>{};
+  final key = (typeContext.interface, resourceName);
+  if (!active.add(key)) {
     return (
-      type: null,
+      identity: null,
       error:
-          'unknown WIT adapter $context used resource ${used.target.text}.'
-          '${used.name}',
+          'unsupported recursive WIT adapter $context resource $resourceName',
     );
   }
-  if (resolved.interface.resourceNamed(used.name) == null) {
+  try {
+    final alias = typeContext.interface.typeAliasNamed(resourceName);
+    if (alias != null) {
+      // A handle alias (own/borrow<T>) is not a resource declaration. Resolve
+      // alias targets as names, without using the generic value-type parser.
+      return _resolveWitAdapterResourceIdentity(
+        alias.target,
+        context,
+        typeContext,
+        active,
+      );
+    }
+    final used = typeContext.interface.useItemNamed(resourceName);
+    if (used != null) {
+      // A resolver may reparse a qualified interface on every call, so object
+      // identity alone cannot detect a cycle across those resolutions.
+      final qualifiedKey = used.target.isQualified
+          ? (used.target.text, used.name)
+          : null;
+      if (qualifiedKey != null && !active.add(qualifiedKey)) {
+        return (
+          identity: null,
+          error:
+              'unsupported recursive WIT adapter $context resource $resourceName',
+        );
+      }
+      try {
+        final resolved = _resolveWitAdapterUsedInterface(
+          typeContext,
+          used.target,
+        );
+        if (resolved == null) {
+          return (
+            identity: null,
+            error:
+                'unknown WIT adapter $context used resource ${used.target.text}.'
+                '${used.name}',
+          );
+        }
+        return _resolveWitAdapterResourceIdentity(
+          used.name,
+          context,
+          typeContext.withInterface(resolved.document, resolved.interface),
+          active,
+        );
+      } finally {
+        if (qualifiedKey != null) active.remove(qualifiedKey);
+      }
+    }
     return (
-      type: null,
+      identity: null,
       error: 'unknown WIT adapter $context resource type $resourceName',
     );
+  } finally {
+    active.remove(key);
   }
-  return (
-    type: WASIComponentWitAdapterValueType.resource(
-      text: text,
-      resourceName: used.alias,
-      resourceIdentity: resolved.interface.resourceNamed(used.name),
-      isBorrowed: isBorrowed,
-    ),
-    error: null,
-  );
 }
 
 ({WASIComponentWitDocument document, WASIComponentWitInterface interface})?
@@ -1543,28 +1582,19 @@ _parseWitAdapterResourceValueType(
   if (args.length != 1 || args.single.isEmpty) {
     return (type: null, error: 'unsupported WIT adapter $context type $text');
   }
-  final resource = typeContext.interface.resourceNamed(args.single);
-  if (resource == null) {
-    final usedResource = _parseWitAdapterUsedResourceValueType(
-      text,
-      args.single,
-      context,
-      typeContext,
-      isBorrowed: isBorrowed,
-    );
-    if (usedResource.type != null || usedResource.error != null) {
-      return usedResource;
-    }
-    return (
-      type: null,
-      error: 'unknown WIT adapter $context resource type ${args.single}',
-    );
+  final resolved = _resolveWitAdapterResourceIdentity(
+    args.single,
+    context,
+    typeContext,
+  );
+  if (resolved.error != null) {
+    return (type: null, error: resolved.error);
   }
   return (
     type: WASIComponentWitAdapterValueType.resource(
       text: text,
-      resourceName: resource.name,
-      resourceIdentity: typeContext.resourceIdentity(resource),
+      resourceName: args.single,
+      resourceIdentity: resolved.identity,
       isBorrowed: isBorrowed,
     ),
     error: null,

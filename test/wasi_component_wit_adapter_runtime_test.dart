@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/async_values.dart';
+import 'package:wasd/src/wasi/component/standard_wit.dart';
 import 'package:wasd/src/wasi/component/wit_adapter.dart';
 import 'package:wasd/src/wasi/component/wit_document.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
@@ -161,6 +162,310 @@ world command { include base with { cache as one } import two: store; }
         );
       },
     );
+  });
+
+  group('WIT borrowed resource reexports', () {
+    for (final renamed in [false, true]) {
+      test('resolves local two-hop use chains renamed=$renamed', () {
+        final intermediate = renamed ? 'shared-token' : 'token';
+        final selected = renamed ? 'selected-token' : 'token';
+        final bridgeUse = renamed ? 'token as $intermediate' : 'token';
+        final apiUse = renamed ? '$intermediate as $selected' : 'token';
+        final document = WASIComponentWitDocument.parse('''
+interface definitions { resource token; }
+interface bridge { use definitions.{$bridgeUse}; }
+interface api {
+  use bridge.{$apiUse};
+  roundtrip: func(value: borrow<$selected>) -> $selected;
+}
+world command { import api; }
+''');
+        final functions = wasiComponentWitWorldFunctions(
+          document,
+          document.worldNamed('command')!,
+        );
+        expect(wasiComponentWitAdapterBindingErrors(functions), isEmpty);
+        final signature = functions.single.signature;
+        final borrowed = signature.params.single.type;
+        final owned = signature.result!;
+        final owner = document
+            .interfaceNamed('definitions')!
+            .resourceNamed('token');
+        expect(borrowed.resourceIdentity, same(owner));
+        expect(owned.resourceIdentity, same(owner));
+        expect(borrowed.resourceName, selected);
+        expect(borrowed.isBorrowedResource, isTrue);
+        expect(owned.isBorrowedResource, isFalse);
+        var calls = 0;
+        final program = WASIComponentWitAdapterProgram.bind(
+          functions,
+          imports: {
+            'api.roundtrip': (args) {
+              calls++;
+              return args.single;
+            },
+          },
+        );
+        expect(program.invokeImport('api.roundtrip', [17]), 17);
+        expect(calls, 1);
+        expect(
+          () => program.invokeImport('api.roundtrip', [-1]),
+          throwsStateError,
+        );
+        expect(calls, 1);
+      });
+    }
+
+    test('resolves stable io streams error to its declaring resource', () {
+      final document = WASIComponentWitDocument.parse('''
+interface filesystem {
+  use wasi:io/streams@0.2.12.{error as stream-error};
+  inspect: func(value: borrow<stream-error>) -> stream-error;
+}
+world command { import filesystem; }
+''');
+      final functions = wasiComponentWitWorldFunctions(
+        document,
+        document.worldNamed('command')!,
+        resolveTarget: resolveWASIComponentStandardWitTarget,
+      );
+      expect(wasiComponentWitAdapterBindingErrors(functions), isEmpty);
+      final owner = resolveWASIComponentStandardWitTarget(
+        'wasi:io/error@0.2.12',
+      )!.document.interfaceNamed('error')!.resourceNamed('error');
+      final signature = functions.single.signature;
+      final borrowed = signature.params.single.type;
+      expect(borrowed.isBorrowedResource, isTrue);
+      expect(borrowed.resourceName, 'stream-error');
+      expect(borrowed.resourceIdentity, same(owner));
+      expect(signature.result!.resourceIdentity, same(owner));
+      expect(signature.result!.isBorrowedResource, isFalse);
+    });
+
+    test('keeps same-named declaring resources nominally distinct', () {
+      final document = WASIComponentWitDocument.parse('''
+interface left { resource token; }
+interface right { resource token; }
+interface left-bridge { use left.{token}; }
+interface right-bridge { use right.{token}; }
+interface api {
+  use left-bridge.{token as left-token};
+  use right-bridge.{token as right-token};
+  inspect: func(left: borrow<left-token>, right: borrow<right-token>)
+    -> tuple<left-token, right-token>;
+}
+world command { import api; }
+''');
+      final functions = wasiComponentWitWorldFunctions(
+        document,
+        document.worldNamed('command')!,
+      );
+      expect(wasiComponentWitAdapterBindingErrors(functions), isEmpty);
+      final signature = functions.single.signature;
+      final left = signature.params[0].type.resourceIdentity;
+      final right = signature.params[1].type.resourceIdentity;
+      expect(left, same(document.interfaceNamed('left')!.resources.single));
+      expect(right, same(document.interfaceNamed('right')!.resources.single));
+      expect(left, isNot(same(right)));
+      expect(signature.result!.elements[0].resourceIdentity, same(left));
+      expect(signature.result!.elements[1].resourceIdentity, same(right));
+    });
+
+    for (final throughUse in [false, true]) {
+      test('resolves bare resource aliases throughUse=$throughUse', () {
+        const definitions = '''
+  resource token;
+  type first = token;
+  type second = first;
+''';
+        final selected = throughUse ? 'imported-token' : 'second';
+        final document = WASIComponentWitDocument.parse('''
+${throughUse ? 'interface definitions { $definitions }' : ''}
+interface api {
+  ${throughUse ? 'use definitions.{second as imported-token};' : definitions}
+  roundtrip: func(value: borrow<$selected>) -> $selected;
+}
+world command { import api; }
+''');
+        final functions = wasiComponentWitWorldFunctions(
+          document,
+          document.worldNamed('command')!,
+        );
+        expect(wasiComponentWitAdapterBindingErrors(functions), isEmpty);
+        final owner = document
+            .interfaceNamed(throughUse ? 'definitions' : 'api')!
+            .resourceNamed('token');
+        final signature = functions.single.signature;
+        expect(signature.params.single.type.resourceIdentity, same(owner));
+        expect(signature.params.single.type.resourceName, selected);
+        expect(signature.params.single.type.isBorrowedResource, isTrue);
+        expect(signature.result!.resourceIdentity, same(owner));
+        expect(signature.result!.isBorrowedResource, isFalse);
+      });
+
+      for (final handle in ['borrow', 'own']) {
+        test(
+          'rejects borrowing a $handle handle alias throughUse=$throughUse',
+          () {
+            final definitions =
+                '''
+  resource token;
+  type handle = $handle<token>;
+''';
+            final document = WASIComponentWitDocument.parse('''
+${throughUse ? 'interface definitions { $definitions }' : ''}
+interface api {
+  ${throughUse ? 'use definitions.{handle};' : definitions}
+  inspect: func(value: borrow<handle>);
+  ${handle == 'borrow' ? 'plain: func(value: handle);' : ''}
+}
+world command { import api; }
+''');
+            final functions = wasiComponentWitWorldFunctions(
+              document,
+              document.worldNamed('command')!,
+            );
+            final errors = wasiComponentWitAdapterBindingErrors(functions);
+            expect(errors, hasLength(1));
+            expect(errors.single.function.qualifiedName, 'api.inspect');
+            expect(errors.single.reason, isNotEmpty);
+            expect(errors.single.reason.length, lessThan(512));
+            var calls = 0;
+            final program = WASIComponentWitAdapterProgram.bind(
+              functions,
+              imports: {
+                for (final function in functions)
+                  function.qualifiedName: (_) {
+                    calls++;
+                    return null;
+                  },
+              },
+            );
+            expect(
+              () => program.invokeImport('api.inspect', [1]),
+              throwsStateError,
+            );
+            expect(calls, 0);
+            if (handle == 'borrow') {
+              final plain = functions.last.signature;
+              final owner = document
+                  .interfaceNamed(throughUse ? 'definitions' : 'api')!
+                  .resourceNamed('token');
+              expect(plain.params.single.type.isBorrowedResource, isTrue);
+              expect(plain.params.single.type.resourceIdentity, same(owner));
+              expect(program.invokeImport('api.plain', [17]), isNull);
+              expect(calls, 1);
+            }
+          },
+        );
+      }
+    }
+
+    test('rejects a qualified cycle when the resolver reparses documents', () {
+      final document = WASIComponentWitDocument.parse('''
+interface api {
+  use acme:first/bridge@1.0.0.{token};
+  inspect: func(value: borrow<token>);
+}
+world command { import api; }
+''');
+      const sources = {
+        'acme:first/bridge@1.0.0': '''
+package acme:first@1.0.0;
+interface bridge { use acme:second/bridge@1.0.0.{token}; }
+''',
+        'acme:second/bridge@1.0.0': '''
+package acme:second@1.0.0;
+interface bridge { use acme:first/bridge@1.0.0.{token}; }
+''',
+      };
+      var resolutions = 0;
+      final functions = wasiComponentWitWorldFunctions(
+        document,
+        document.worldNamed('command')!,
+        resolveTarget: (target) {
+          if (++resolutions > 4) {
+            throw StateError('Resource cycle did not terminate.');
+          }
+          return WASIComponentWitResolvedTarget(
+            document: WASIComponentWitDocument.parse(sources[target]!),
+            memberName: 'bridge',
+          );
+        },
+      );
+      final errors = wasiComponentWitAdapterBindingErrors(functions);
+      expect(errors, hasLength(1));
+      expect(errors.single.reason, contains('recursive'));
+      expect(errors.single.reason.length, lessThan(512));
+      expect(resolutions, lessThanOrEqualTo(3));
+    });
+
+    for (final entry in <String, (String, String)>{
+      'cycle': (
+        '''
+interface first { use second.{token}; }
+interface second { use first.{token}; }
+interface bridge { use first.{token}; }
+''',
+        'recursive',
+      ),
+      'bare alias cycle': (
+        'interface bridge { type token = other; type other = token; }',
+        'recursive',
+      ),
+      'missing target': (
+        'interface bridge { use missing.{token}; }',
+        'missing',
+      ),
+      'missing member': (
+        '''
+interface definitions { resource present; }
+interface bridge { use definitions.{missing as token}; }
+''',
+        'missing',
+      ),
+      'nonresource': (
+        '''
+interface definitions { type token = u32; }
+interface bridge { use definitions.{token}; }
+''',
+        'resource',
+      ),
+    }.entries) {
+      test('rejects ${entry.key} before invoking a callback', () {
+        final document = WASIComponentWitDocument.parse('''
+${entry.value.$1}
+interface api {
+  use bridge.{token};
+  inspect: func(value: borrow<token>);
+}
+world command { import api; }
+''');
+        final functions = wasiComponentWitWorldFunctions(
+          document,
+          document.worldNamed('command')!,
+        );
+        final errors = wasiComponentWitAdapterBindingErrors(functions);
+        expect(errors, hasLength(1));
+        expect(errors.single.reason, contains(entry.value.$2));
+        expect(errors.single.reason.length, lessThan(512));
+        var calls = 0;
+        final program = WASIComponentWitAdapterProgram.bind(
+          functions,
+          imports: {
+            'api.inspect': (_) {
+              calls++;
+              return null;
+            },
+          },
+        );
+        expect(
+          () => program.invokeImport('api.inspect', [1]),
+          throwsStateError,
+        );
+        expect(calls, 0);
+      });
+    }
   });
 
   group('WIT map adapter runtime', () {
