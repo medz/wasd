@@ -78,7 +78,9 @@ or WASI conformance; see the [standards and acceptance plan](doc/standards.md).
 
 **Unreleased main:** Component callers can continue after `task.return`
 while the callee remains suspended in a synchronous stream copy. The
-complete frozen Component gate covers nine files / `80/80` commands.
+complete frozen Component gate covers twelve files / `352/352` commands,
+including synchronous module/component forwarding, nested instance exports,
+ordered nested starts, resource borrowing and handle-table traps.
 Exported stream/future type aliases and equality-bound type imports retain
 their original type context and runtime resource identity. Released `0.6.1`
 retains the three-file gate and its blocking-copy guard.

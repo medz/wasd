@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:wasd/src/wasi/component/execution.dart';
 import 'package:wasd/src/wasi/component/host.dart';
+import 'package:wasd/src/wasi/component/resource_trap.dart';
 import 'package:wasd/src/wasi/component/unicode_scalar.dart';
 import 'package:wasd/src/wasi/component/value_memory.dart';
 import 'package:wasd/src/wasi/preview2/component_runner.dart';
@@ -19,6 +20,39 @@ const _repository = 'https://github.com/WebAssembly/component-model';
 // Independent source anchor: changing a manifest and its input cannot silently
 // replace the complete upstream file while retaining the frozen revision.
 const _frozenSources = {
+  'test/linking/unit.wast': {
+    'path': 'test/linking/unit.wast',
+    'blob': '1913748ec2b6bf5c38fc0cd4d54fae30f7c9faa4',
+    'sha256':
+        '85857ebf6775c91900eeaa9671be319eae5320feb05f1c8e2935a4abf48d9932',
+    'commands': 238,
+    'instantiations': 58,
+    'definitions': 0,
+    'returns': 180,
+    'traps': 0,
+  },
+  'test/resources/borrows.wast': {
+    'path': 'test/resources/borrows.wast',
+    'blob': 'b68e6369f7bc3ae309b3de80be37cb9c95864e5d',
+    'sha256':
+        'a9cc6feec6c0123eb5151379612f42b5a7f4b061253e36921064a3b072b19a84',
+    'commands': 5,
+    'instantiations': 2,
+    'definitions': 1,
+    'returns': 1,
+    'traps': 1,
+  },
+  'test/resources/handle-table.wast': {
+    'path': 'test/resources/handle-table.wast',
+    'blob': 'ddfb6af5cd9895fe6d78d1fc3a033a7dd1292822',
+    'sha256':
+        'c55cda21386773137431b7b9019989f468e0ae42504aa60f45a707dfc4ad38b5',
+    'commands': 29,
+    'instantiations': 13,
+    'definitions': 2,
+    'returns': 3,
+    'traps': 11,
+  },
   'test/values/strings.wast': {
     'path': 'test/values/strings.wast',
     'blob': 'e96f54e97689a32ba70b05e12226e01b8dea024b',
@@ -139,6 +173,33 @@ bool matchesComponentStringTrap(Object error, String expected) =>
 /// Unknown wrappers, ordinary host errors and cause cycles never match.
 bool matchesComponentCharTrap(Object error) =>
     _componentTrapCause(error) is WASIComponentInvalidCharException;
+
+final _unknownHandleTrap = RegExp(r'^unknown handle index ([0-9]+)$');
+final _wrongResourceTypeTrap = RegExp(
+  r'^handle index ([0-9]+) used with the wrong type, expected guest-defined resource but found a different guest-defined resource$',
+);
+
+bool _isResourceTrap(String expected) =>
+    expected == 'cannot remove owned resource while borrowed' ||
+    _unknownHandleTrap.hasMatch(expected) ||
+    _wrongResourceTypeTrap.hasMatch(expected);
+
+/// Requires a canonical resource fault with the expected kind and guest index.
+bool matchesComponentResourceTrap(Object error, String expected) {
+  final cause = _componentTrapCause(error);
+  if (cause is! WASIComponentResourceTrap) return false;
+  if (expected == 'cannot remove owned resource while borrowed') {
+    return cause.kind == WASIComponentResourceTrapKind.borrowed;
+  }
+  final match = switch (cause.kind) {
+    WASIComponentResourceTrapKind.unknownHandle =>
+      _unknownHandleTrap.firstMatch(expected),
+    WASIComponentResourceTrapKind.wrongType =>
+      _wrongResourceTypeTrap.firstMatch(expected),
+    WASIComponentResourceTrapKind.borrowed => null,
+  };
+  return match != null && int.tryParse(match[1]!) == cause.handle;
+}
 
 /// Matches only ABI-origin list memory faults, including preserved VM causes.
 /// Ordinary host exceptions and unknown wrappers never satisfy these traps.
@@ -397,6 +458,8 @@ Future<Map<String, Object?>> executeComponentSpecScript(
   final host = WASIComponentHost();
   final definitions = <String, WasmComponent>{};
   final failedDefinitions = <String, int>{};
+  final instances = <String, WASIComponentNativeRuntime>{};
+  final failedInstances = <String, int>{};
   final runtimes = <WASIComponentNativeRuntime>[];
   final observedFailures = Map<Map<String, Object?>, Set<Object>>.identity();
   final unownedFailures = Set<Object>.identity();
@@ -437,6 +500,10 @@ Future<Map<String, Object?>> executeComponentSpecScript(
             if (type == 'module') {
               current = null;
               failedCurrent = i;
+              if (raw['name'] case final String name when name.isNotEmpty) {
+                instances.remove(name);
+                failedInstances[name] = i;
+              }
             } else if (raw['name'] case final String name
                 when name.isNotEmpty) {
               definitions.remove(name);
@@ -450,18 +517,13 @@ Future<Map<String, Object?>> executeComponentSpecScript(
               'module_type',
             });
             final encoding = raw['module_type'];
-            if (encoding != null && encoding != 'binary' ||
-                type == 'module' && raw['name'] != null) {
-              throw UnsupportedError(
-                'Only unnamed binary components are supported.',
-              );
+            if (encoding != null && encoding != 'binary') {
+              throw UnsupportedError('Only binary components are supported.');
             }
             final name = raw['name'];
-            if (type == 'module_definition' &&
-                raw.containsKey('name') &&
-                (name is! String || name.isEmpty)) {
+            if (raw.containsKey('name') && (name is! String || name.isEmpty)) {
               throw const FormatException(
-                'Component definition name must be a non-empty string.',
+                'Component name must be a non-empty string.',
               );
             }
             final file = _inputFile(directory, raw['filename']);
@@ -494,6 +556,11 @@ Future<Map<String, Object?>> executeComponentSpecScript(
               );
               current = runtime;
               failedCurrent = null;
+              if (name is String) {
+                instances[name] = runtime;
+                failedInstances.remove(name);
+                record['instance'] = name;
+              }
             }
             break;
           case 'module_instance':
@@ -510,6 +577,8 @@ Future<Map<String, Object?>> executeComponentSpecScript(
                 'Component instance requires definition and instance names.',
               );
             }
+            instances.remove(instance);
+            failedInstances[instance] = i;
             final definitionFailure = failedDefinitions[name];
             if (definitionFailure != null) {
               record['status'] = 'not_executed';
@@ -529,6 +598,8 @@ Future<Map<String, Object?>> executeComponentSpecScript(
             await WASIComponentGuestStore.withOwner(record, runtime.initialize);
             current = runtime;
             failedCurrent = null;
+            instances[instance] = runtime;
+            failedInstances.remove(instance);
             record['definition'] = name;
             record['instance'] = instance;
             break;
@@ -688,17 +759,23 @@ Future<Map<String, Object?>> executeComponentSpecScript(
             final action = raw['action'];
             if (action is! Map ||
                 action['type'] != 'invoke' ||
-                action['module'] != null ||
+                (action['module'] != null &&
+                    (action['module'] is! String ||
+                        (action['module'] as String).isEmpty)) ||
                 action['field'] is! String ||
                 action['args'] is! List) {
-              throw UnsupportedError('Expected an unnamed Component invoke.');
+              throw UnsupportedError('Expected a Component invoke.');
             }
             _checkFields(action, const {'type', 'module', 'field', 'args'});
-            final runtime = current;
+            final instance = action['module'];
+            final runtime = instance == null ? current : instances[instance];
             if (runtime == null) {
               record['status'] = 'not_executed';
-              if (failedCurrent != null) {
-                record['dependency_index'] = failedCurrent;
+              final failure = instance == null
+                  ? failedCurrent
+                  : failedInstances[instance];
+              if (failure != null) {
+                record['dependency_index'] = failure;
               }
               throw StateError('No initialized component.');
             }
@@ -776,7 +853,8 @@ Future<Map<String, Object?>> executeComponentSpecScript(
                   expected != 'wasm trap: list content out-of-bounds' &&
                   expected != 'wasm trap: unaligned pointer' &&
                   expected != 'realloc return: beyond end of memory' &&
-                  expected != 'realloc return: result not aligned') {
+                  expected != 'realloc return: result not aligned' &&
+                  !(expected is String && _isResourceTrap(expected))) {
                 throw UnsupportedError('Unsupported expected trap: $expected');
               }
               // Only the invocation may satisfy a trap; arguments, signature
@@ -803,7 +881,8 @@ Future<Map<String, Object?>> executeComponentSpecScript(
                           invocationError,
                           expected as String,
                         ) ||
-                        matchesComponentMemoryTrap(invocationError, expected);
+                        matchesComponentMemoryTrap(invocationError, expected) ||
+                        matchesComponentResourceTrap(invocationError, expected);
               if (!matches) {
                 throw StateError(
                   'Unexpected invocation error: $invocationError',

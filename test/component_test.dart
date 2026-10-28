@@ -2349,8 +2349,10 @@ void main() {
       ).validate();
       expect(
         mismatchedImportArgument.map((error) => error.message),
-        contains(
-          contains('Unknown Wasm component instantiation argument "other"'),
+        isNot(
+          contains(
+            contains('Unknown Wasm component instantiation argument "other"'),
+          ),
         ),
       );
       expect(

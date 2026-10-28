@@ -12,6 +12,7 @@ import 'async_values.dart';
 import 'context.dart';
 import 'error_context.dart';
 import 'resource_table.dart';
+import 'resource_trap.dart';
 import 'waitable_set.dart';
 
 final _errorCarrierKey = Object();
@@ -74,7 +75,7 @@ final class WASIComponentCanonicalIndexTable<T extends Object> {
 
   T get(int index) {
     if (index <= 0 || index >= _entries.length || _entries[index] == null) {
-      throw StateError('Unknown component handle index: $index.');
+      throw WASIComponentResourceTrap.unknownHandle(index);
     }
     return _entries[index]!;
   }
@@ -473,7 +474,7 @@ final class WASIComponentCanonicalHandles
       throw StateError('Component handle $guest has a different kind.');
     }
     if (!table.contains(entry.host)) {
-      throw StateError('Unknown component handle index: $guest.');
+      throw WASIComponentResourceTrap.unknownHandle(guest);
     }
     return entry.host;
   }
@@ -513,6 +514,8 @@ final class WASIComponentCanonicalHandles
       throw StateError('Unbound runtime resource type: $index.');
     }
     if (!identical(table.canonicalTypeOf(host), expected)) {
+      final guest = _hostToGuest[host];
+      if (guest != null) throw WASIComponentResourceTrap.wrongType(guest);
       throw StateError(
         'WASI component resource handle $host does not contain $expected.',
       );

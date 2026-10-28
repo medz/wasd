@@ -9,6 +9,7 @@ import 'package:test/test.dart';
 import 'package:wasd/src/wasi/preview2/component_runner.dart';
 import 'package:wasd/src/wasi/component/unicode_scalar.dart';
 import 'package:wasd/src/wasi/component/resource_table.dart';
+import 'package:wasd/src/wasi/component/resource_trap.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/execution_error.dart';
 import 'package:wasd/wasi.dart';
 import 'package:wasd/wasm.dart' hide Exception;
@@ -2410,10 +2411,10 @@ void main() {
         await expectLater(
           runtime.invokeExport('return-R1-as-R2', []),
           throwsA(
-            isA<StateError>().having(
-              (error) => error.message,
-              'message',
-              contains('does not contain'),
+            isA<WASIComponentResourceTrap>().having(
+              (error) => error.kind,
+              'kind',
+              WASIComponentResourceTrapKind.wrongType,
             ),
           ),
         );
@@ -3151,8 +3152,8 @@ void main() {
 ''');
         expect(component.validate(), isEmpty);
         final definitions = component.componentTypeIndexDefinitions;
-        // A shared model definition is not proof of fresh instance identity.
-        expect(identical(definitions[0], definitions[1]), isTrue);
+        // Each instantiation has a fresh nominal resource type, even statically.
+        expect(identical(definitions[0], definitions[1]), isFalse);
         final host = WASIComponentHost();
         await expectLater(
           host.table.runScoped(() async {
@@ -3459,6 +3460,366 @@ void main() {
   });
 
   group('nested Component execution', () {
+    for (final (name, source) in [
+      (
+        'outer alias',
+        r'''
+(component
+  (component $target (import "f" (func)))
+  (component
+    (alias outer 1 $target (component $target))
+    (import "f" (func $f (param "x" u32)))
+    (instance (instantiate $target (with "f" (func $f))))))
+''',
+      ),
+      (
+        'instance export',
+        r'''
+(component
+  (component $provider
+    (component $target (import "f" (func)))
+    (export "target" (component $target)))
+  (instance $provider (instantiate $provider))
+  (alias export $provider "target" (component $target))
+  (import "f" (func $f (param "x" u32)))
+  (instance (instantiate $target (with "f" (func $f)))))
+''',
+      ),
+    ]) {
+      test('aliased component arguments retain validation: $name', () async {
+        expect((await _encodeComponent(source)).validate(), isNotEmpty);
+      });
+    }
+
+    test(
+      'validation keeps separately instantiated resource types distinct',
+      () async {
+        final component = await _encodeComponent(r'''
+(component
+  (component $def (type $r (resource (rep i32))) (export "r" (type $r)))
+  (instance $a (instantiate $def))
+  (instance $b (instantiate $def))
+  (alias export $a "r" (type $a-r))
+  (alias export $b "r" (type $b-r))
+  (component $consumer
+    (import "r" (type $r (sub resource)))
+    (import "same-r" (type (eq $r))))
+  (instance (instantiate $consumer
+    (with "r" (type $a-r)) (with "same-r" (type $b-r)))))
+''');
+        expect(component.validate(), isNotEmpty);
+      },
+    );
+
+    for (final supplied in [
+      '(func (param "x" u32))',
+      '(component)',
+      '(func)',
+    ]) {
+      test('checks nested instance argument $supplied', () async {
+        final component = await _encodeComponent('''
+(component
+  (import "api" (instance \$api (export "f" $supplied)))
+  (instance \$wrapped (export "nested" (instance \$api)))
+  (component \$child
+    (import "api" (instance (export "nested" (instance (export "f" (func)))))))
+  (instance (instantiate \$child (with "api" (instance \$wrapped)))))
+''', validate: supplied == '(func)');
+        expect(
+          component.validate(),
+          supplied == '(func)' ? isEmpty : isNotEmpty,
+        );
+      });
+    }
+
+    for (final sameResource in [true, false]) {
+      test(
+        'instantiation checks nominal resources: same=$sameResource',
+        () async {
+          final component = await _encodeComponent('''
+(component
+  (type \$r (resource (rep i32)))
+  (type \$s (resource (rep i32)))
+  (type \$owner (own ${sameResource ? r'$r' : r'$s'}))
+  (core module \$m (func (export "take") (param i32)))
+  (core instance \$m (instantiate \$m))
+  (func \$take (param "value" \$owner) (canon lift (core func \$m "take")))
+  (component \$child
+    (import "r" (type \$r (sub resource)))
+    (type \$owner (own \$r))
+    (import "take" (func (param "value" \$owner))))
+  (instance (instantiate \$child
+    (with "r" (type \$r)) (with "take" (func \$take)))))
+''', validate: sameResource);
+          expect(component.validate(), sameResource ? isEmpty : isNotEmpty);
+        },
+      );
+    }
+
+    for (final (expected, supplied) in [
+      ('(tuple u32 u32)', '(tuple string string)'),
+      ('(record (field "x" u32))', '(record (field "y" u32))'),
+      ('(variant (case "x" u32))', '(variant (case "x"))'),
+      ('(list u32)', '(list string)'),
+      ('(option u32)', '(option string)'),
+      ('(flags "a")', '(flags "b")'),
+    ]) {
+      test(
+        'rejects mismatched equality argument $expected / $supplied',
+        () async {
+          final component = await _encodeComponent('''
+(component
+  (type \$actual $supplied)
+  (component \$child
+    (type \$expected $expected)
+    (import "value-type" (type (eq \$expected))))
+  (instance (instantiate \$child (with "value-type" (type \$actual)))))
+''');
+          expect(component.validate(), isNotEmpty);
+          await expectLater(
+            WASIComponentNativeRuntime.component(
+              component: component,
+              host: WASIComponentHost(),
+            ).initialize(),
+            throwsA(isA<WASIPreview2ComponentExecutionException>()),
+          );
+        },
+      );
+    }
+
+    for (final supplied in [
+      '(param "y" u32)',
+      '(param "x" s32)',
+      '(param "x" u32) (result u32)',
+      '',
+    ]) {
+      test(
+        'rejects mismatched function argument $supplied before start',
+        () async {
+          final component = await _encodeComponent('''
+(component
+  (import "f" (func \$f $supplied))
+  (import "started" (func \$started))
+  (start \$started)
+  (component \$child (import "f" (func (param "x" u32))))
+  (instance (instantiate \$child (with "f" (func \$f)))))
+''');
+          expect(component.validate(), isNotEmpty);
+          var calls = 0;
+          await expectLater(
+            WASIComponentNativeRuntime.component(
+              component: component,
+              host: WASIComponentHost(),
+              imports: {'f': (_) => null, 'started': (_) => calls++},
+            ).initialize(),
+            throwsA(isA<WASIPreview2ComponentExecutionException>()),
+          );
+          expect(calls, 0);
+        },
+      );
+    }
+
+    test('accepts extra checked instantiation arguments', () async {
+      final component = await _encodeComponent(r'''
+(component
+  (type $extra u32)
+  (component $child)
+  (instance (instantiate $child (with "NotKebab-Case" (type $extra)))))
+''', validate: true);
+      expect(component.validate(), isEmpty);
+      final runtime = WASIComponentNativeRuntime.component(
+        component: component,
+        host: WASIComponentHost(),
+      );
+      addTearDown(runtime.dispose);
+      await runtime.initialize();
+    });
+
+    test(
+      'abstract resources cannot cross a concrete component boundary',
+      () async {
+        final component = await _encodeComponent(r'''
+(component
+  (import "r" (type $r (sub resource)))
+  (component (alias outer 1 $r (type))))
+''');
+        expect(
+          component.validate().any(
+            (error) => error.message.contains(
+              'resource-containing types across component boundaries',
+            ),
+          ),
+          isTrue,
+        );
+      },
+    );
+
+    test('instantiates supplied core modules with independent state', () async {
+      final component = await _encodeComponent(r'''
+(component
+  (component $consumer
+    (import "m" (core module $m (export "next" (func (result i32)))))
+    (core instance $one (instantiate $m))
+    (core instance $two (instantiate $m))
+    (func (export "one") (result u32) (canon lift (core func $one "next")))
+    (func (export "two") (result u32) (canon lift (core func $two "next"))))
+  (component $forward
+    (import "m" (core module $m (export "next" (func (result i32)))))
+    (instance $consumer (instantiate $consumer (with "m" (core module $m))))
+    (export "api" (instance $consumer)))
+  (core module $counter
+    (global $count (mut i32) (i32.const 40))
+    (func (export "next") (result i32)
+      global.get $count i32.const 1 i32.add global.set $count global.get $count))
+  (instance $forward (instantiate $forward (with "m" (core module $counter))))
+  (alias export $forward "api" (instance $api))
+  (func (export "one") (alias export $api "one"))
+  (func (export "two") (alias export $api "two")))
+''', validate: true);
+      expect(component.validate(), isEmpty);
+      final runtime = WASIComponentNativeRuntime.component(
+        component: component,
+        host: WASIComponentHost(),
+      );
+      addTearDown(runtime.dispose);
+      expect(await runtime.invokeExport('one', []), 41);
+      expect(await runtime.invokeExport('one', []), 42);
+      expect(await runtime.invokeExport('two', []), 41);
+    });
+
+    test('forwards imported components through instance exports', () async {
+      final component = await _encodeComponent(r'''
+(component
+  (component $counter
+    (core module $m
+      (global $count (mut i32) (i32.const 0))
+      (func (export "next") (result i32)
+        global.get $count i32.const 1 i32.add global.set $count global.get $count))
+    (core instance $m (instantiate $m))
+    (func (export "next") (result u32) (canon lift (core func $m "next"))))
+  (component $provider
+    (import "counter" (component $counter (export "next" (func (result u32)))))
+    (export "counter" (component $counter)))
+  (instance $provider (instantiate $provider (with "counter" (component $counter))))
+  (alias export $provider "counter" (component $supplied))
+  (instance $one (instantiate $supplied))
+  (instance $two (instantiate $supplied))
+  (instance $api (export "one" (instance $one)) (export "two" (instance $two)))
+  (alias export $api "one" (instance $one-again))
+  (func (export "one") (alias export $one-again "next"))
+  (func (export "two") (alias export $two "next")))
+''', validate: true);
+      expect(component.validate(), isEmpty);
+      final runtime = WASIComponentNativeRuntime.component(
+        component: component,
+        host: WASIComponentHost(),
+      );
+      addTearDown(runtime.dispose);
+      expect(await runtime.invokeExport('one', []), 1);
+      expect(await runtime.invokeExport('one', []), 2);
+      expect(await runtime.invokeExport('two', []), 1);
+    });
+
+    test('exported components retain their lexical module arguments', () async {
+      final component = await _encodeComponent(r'''
+(component
+  (component $factory
+    (import "m" (core module $m (export "get" (func (result i32)))))
+    (component $child
+      (core instance $m (instantiate $m))
+      (func (export "get") (result u32) (canon lift (core func $m "get"))))
+    (export "child" (component $child))
+    (export "module" (core module $m)))
+  (core module $one (func (export "get") (result i32) i32.const 41))
+  (core module $two (func (export "get") (result i32) i32.const 42))
+  (instance $one (instantiate $factory (with "m" (core module $one))))
+  (instance $two (instantiate $factory (with "m" (core module $two))))
+  (alias export $one "child" (component $first))
+  (alias export $two "child" (component $second))
+  (alias export $two "module" (core module $module))
+  (core instance $module (instantiate $module))
+  (instance $first (instantiate $first))
+  (instance $second (instantiate $second))
+  (func (export "one") (alias export $first "get"))
+  (func (export "two") (alias export $second "get"))
+  (func (export "module") (result u32) (canon lift (core func $module "get"))))
+''', validate: true);
+      expect(component.validate(), isEmpty);
+      final runtime = WASIComponentNativeRuntime.component(
+        component: component,
+        host: WASIComponentHost(),
+      );
+      addTearDown(runtime.dispose);
+      expect(await runtime.invokeExport('one', []), 41);
+      expect(await runtime.invokeExport('two', []), 42);
+      expect(await runtime.invokeExport('module', []), 42);
+    });
+
+    test('nested instance reexports preserve resource owners', () async {
+      final component = await _encodeComponent(r'''
+(component
+  (component $provider
+    (core module $m
+      (global $drops (mut i32) (i32.const 0))
+      (func (export "drop") (param i32)
+        global.get $drops local.get 0 i32.add global.set $drops)
+      (func (export "drops") (result i32) global.get $drops))
+    (core instance $m (instantiate $m))
+    (type $r (resource (rep i32) (dtor (core func $m "drop"))))
+    (export $r-export "r" (type $r))
+    (core func $new (canon resource.new $r))
+    (core func $drop (canon resource.drop $r))
+    (func (export "make") (param "rep" u32) (result (own $r-export))
+      (canon lift (core func $new)))
+    (func (export "drop") (param "handle" (own $r-export))
+      (canon lift (core func $drop)))
+    (func (export "drops") (result u32) (canon lift (core func $m "drops"))))
+  (component $wrapper
+    (instance $provider (instantiate $provider))
+    (export "api" (instance $provider)))
+  (component $consumer
+    (import "api" (instance $api
+      (export "r" (type $r (sub resource)))
+      (export "make" (func (param "rep" u32) (result (own $r))))
+      (export "drop" (func (param "handle" (own $r))))
+      (export "drops" (func (result u32)))))
+    (core func $make (canon lower (func $api "make")))
+    (core func $drop (canon lower (func $api "drop")))
+    (core func $drops (canon lower (func $api "drops")))
+    (core module $m
+      (import "" "make" (func $make (param i32) (result i32)))
+      (import "" "drop" (func $drop (param i32)))
+      (import "" "drops" (func $drops (result i32)))
+      (func (export "run") (result i32)
+        i32.const 42 call $make call $drop call $drops))
+    (core instance $m (instantiate $m (with "" (instance
+      (export "make" (func $make)) (export "drop" (func $drop))
+      (export "drops" (func $drops))))))
+    (func (export "run") (result u32) (canon lift (core func $m "run"))))
+  (instance $one (instantiate $wrapper))
+  (instance $two (instantiate $wrapper))
+  (alias export $one "api" (instance $one-api))
+  (alias export $two "api" (instance $two-api))
+  (instance $first (instantiate $consumer (with "api" (instance $one-api))))
+  (instance $second (instantiate $consumer (with "api" (instance $two-api))))
+  (func (export "one") (alias export $first "run"))
+  (func (export "two") (alias export $second "run")))
+''', validate: true);
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentHost();
+      final runtime = WASIComponentNativeRuntime.component(
+        component: component,
+        host: host,
+      );
+      addTearDown(runtime.dispose);
+      await host.table.runScoped(() async {
+        expect(await runtime.invokeExport('one', []), 42);
+        expect(await runtime.invokeExport('one', []), 84);
+        expect(await runtime.invokeExport('two', []), 42);
+      });
+      expect(host.table.activeCount, 0);
+    });
+
     test('keeps each child Core instance state independent', () async {
       final component = await _encodeComponent('''
 (component
@@ -3620,7 +3981,7 @@ void main() {
     );
 
     test(
-      'rejects nested Component starts before launching callbacks',
+      'nested Component starts await callbacks once in definition order',
       () async {
         final component = await _encodeComponent(r'''
 (component
@@ -3628,32 +3989,63 @@ void main() {
   (component $child
     (import "source" (func $source))
     (start $source))
-  (instance (instantiate $child (with "source" (func $source)))))
-''');
+  (instance (instantiate $child (with "source" (func $source))))
+  (instance (instantiate $child (with "source" (func $source))))
+  (start $source))
+''', validate: true);
         expect(component.validate(), isEmpty);
-        var calls = 0;
-        await expectLater(
-          WASIComponentNativeRuntime.component(
-            component: component,
-            host: WASIComponentHost(),
-            imports: {
-              'source': (_) {
-                calls++;
-                return Future<void>.value();
-              },
+        final calls = <String>[];
+        final runtime = WASIComponentNativeRuntime.component(
+          component: component,
+          host: WASIComponentHost(),
+          imports: {
+            'source': (_) async {
+              calls.add('begin');
+              await Future<void>.delayed(Duration.zero);
+              calls.add('end');
+              return null;
             },
-          ).initialize(),
-          throwsA(
-            isA<WASIPreview2ComponentExecutionException>().having(
-              (error) => error.message,
-              'message',
-              contains('Nested Component starts are not executable'),
-            ),
-          ),
+          },
         );
-        expect(calls, 0);
+        addTearDown(runtime.dispose);
+        await Future.wait([runtime.initialize(), runtime.initialize()]);
+        await runtime.initialize();
+        expect(calls, ['begin', 'end', 'begin', 'end', 'begin', 'end']);
       },
     );
+
+    test('nested start traps prevent subsequent initialization', () async {
+      final component = await _encodeComponent(r'''
+(component
+  (import "later" (func $later))
+  (component $child
+    (core module $m (func (export "fail") unreachable))
+    (core instance $m (instantiate $m))
+    (func $fail (canon lift (core func $m "fail")))
+    (start $fail))
+  (instance (instantiate $child))
+  (start $later))
+''', validate: true);
+      var calls = 0;
+      final runtime = WASIComponentNativeRuntime.component(
+        component: component,
+        host: WASIComponentHost(),
+        imports: {'later': (_) => calls++},
+      );
+      Object? first;
+      for (var attempt = 0; attempt < 2; attempt++) {
+        try {
+          await runtime.initialize();
+          fail('Expected the nested start to trap.');
+        } catch (error) {
+          expect(error, isA<WasmExecutionErrorContext>());
+          if (first != null) expect(error, same(first));
+          first = error;
+        }
+      }
+      expect(calls, 0);
+      await expectLater(runtime.dispose(), throwsA(same(first)));
+    });
 
     test(
       'concrete local resource aliases keep their runtime identity',

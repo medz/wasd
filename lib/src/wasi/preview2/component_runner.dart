@@ -99,9 +99,8 @@ final class WASIComponentNativeRuntime {
   /// Creates a component executor without a fixed WASI version profile.
   ///
   /// The caller owns the allocation scope for this instance and its calls.
-  /// Export calls and top-level Component starts await [imports]. A core module
-  /// start cannot invoke generic imports. Nested Component starts remain
-  /// unsupported; both are rejected before launching callbacks.
+  /// Export calls and Component starts await [imports], including nested
+  /// instantiation. A core module start cannot invoke generic imports.
   WASIComponentNativeRuntime.component({
     required this.component,
     required WASIComponentHost host,
@@ -109,6 +108,7 @@ final class WASIComponentNativeRuntime {
   }) : _genericHost = host,
        _genericImports = Map.unmodifiable(imports),
        _nestedArguments = null,
+       _outerRuntime = null,
        _parentStore = null,
        _preview2Host = null,
        _preview3Host = null;
@@ -120,6 +120,7 @@ final class WASIComponentNativeRuntime {
   }) : _genericHost = null,
        _genericImports = const {},
        _nestedArguments = null,
+       _outerRuntime = null,
        _parentStore = null,
        _preview2Host = host,
        _preview3Host = null;
@@ -131,6 +132,7 @@ final class WASIComponentNativeRuntime {
   }) : _genericHost = null,
        _genericImports = const {},
        _nestedArguments = null,
+       _outerRuntime = null,
        _parentStore = null,
        _preview2Host = null,
        _preview3Host = host;
@@ -138,16 +140,19 @@ final class WASIComponentNativeRuntime {
   WASIComponentNativeRuntime._nested({
     required this.component,
     required WASIComponentNativeRuntime parent,
+    required WASIComponentNativeRuntime outerRuntime,
     required _NestedComponentArguments arguments,
   }) : _genericHost = parent._genericHost,
        _genericImports = parent._genericImports,
        _preview2Host = parent._preview2Host,
        _preview3Host = parent._preview3Host,
        _nestedArguments = arguments,
+       _outerRuntime = outerRuntime,
        _parentStore = parent._store;
 
   /// Component decoded for this execution.
   final WasmComponent component;
+  final WASIComponentNativeRuntime? _outerRuntime;
   final WASIComponentGuestStore? _parentStore;
   late final WASIComponentGuestStore _store =
       _parentStore ?? WASIComponentGuestStore();
@@ -178,7 +183,7 @@ final class WASIComponentNativeRuntime {
   final List<_CoreInstance> _coreInstances = <_CoreInstance>[];
   final List<_ComponentFunction> _componentFunctions = <_ComponentFunction>[];
   final List<_ComponentInstance> _componentInstances = <_ComponentInstance>[];
-  final List<WasmComponent> _components = <WasmComponent>[];
+  final List<_ComponentDefinition> _components = [];
   final List<WasmComponentTypeDefinition> _visibleTypes =
       <WasmComponentTypeDefinition>[];
   final List<String?> _visibleResourceTypeNames = <String?>[];
@@ -208,6 +213,8 @@ final class WASIComponentNativeRuntime {
       <String, _ComponentFunction>{};
   final Map<String, _ComponentInstance> _exportedInstances =
       <String, _ComponentInstance>{};
+  final Map<String, _ComponentDefinition> _exportedComponents = {};
+  final Map<String, ir_module.WasmModule> _exportedCoreModules = {};
   final Map<String, WasmComponentTypeDefinition> _exportedTypes = {};
   final Map<String, String> _exportedResourceTypeNames = {};
   final Map<ir_memory.WasmMemory, native_memory.Memory> _memoryWrappers =
@@ -423,6 +430,12 @@ final class WASIComponentNativeRuntime {
     for (final event in component.definitionEvents) {
       if (event.kind == WasmComponentDefinitionKind.start) {
         await _startFunction(component.starts[event.index]).invoke(const []);
+      } else if (event.kind == WasmComponentDefinitionKind.instance &&
+          component.instances[event.index].kind ==
+              WasmComponentInstanceKind.instantiate) {
+        final child = _createNestedRuntime(component.instances[event.index]);
+        await child.initialize();
+        _componentInstances.add(child._instanceExports());
       } else {
         _processDefinition(event);
       }
@@ -676,7 +689,12 @@ final class WASIComponentNativeRuntime {
       case WasmComponentDefinitionKind.start:
         _runStart(component.starts[event.index]);
       case WasmComponentDefinitionKind.component:
-        _components.add(component.nestedComponentInContext(event.index));
+        _components.add(
+          _ComponentDefinition(
+            component.nestedComponentInContext(event.index),
+            this,
+          ),
+        );
       case WasmComponentDefinitionKind.coreType:
       case WasmComponentDefinitionKind.type:
       case WasmComponentDefinitionKind.value:
@@ -737,8 +755,20 @@ final class WASIComponentNativeRuntime {
           _visibleResourceTypeNames.add(type.resourceTypeName);
           _addVisibleResourceIdentity(type.resourceIdentity);
         case WasmComponentExternKind.coreModule:
-        case WasmComponentExternKind.value:
+          _coreModules.add(
+            supplied.coreModules[name] ??
+                (throw WASIPreview2ComponentExecutionException(
+                  'Missing nested core module argument `$name`.',
+                )),
+          );
         case WasmComponentExternKind.component:
+          _components.add(
+            supplied.components[name] ??
+                (throw WASIPreview2ComponentExecutionException(
+                  'Missing nested component argument `$name`.',
+                )),
+          );
+        case WasmComponentExternKind.value:
           throw WASIPreview2ComponentExecutionException(
             'Unsupported nested component import `$name` of kind '
             '`${import.descriptor.kind.name}`.',
@@ -1019,12 +1049,25 @@ final class WASIComponentNativeRuntime {
             'Invalid component export alias target.',
           );
         }
-        _addComponentSort(
-          alias.sort.kind,
-          _componentInstances[instanceIndex],
-          name,
-        );
+        _addComponentSort(alias.sort, _componentInstances[instanceIndex], name);
       case WasmComponentAliasTargetKind.outer:
+        var outer = this;
+        for (var depth = 0; depth < alias.target.componentDepth!; depth++) {
+          outer =
+              outer._outerRuntime ??
+              (throw const WASIPreview2ComponentExecutionException(
+                'Outer alias has no enclosing component.',
+              ));
+        }
+        if (alias.sort.kind == WasmComponentSortKind.component) {
+          _components.add(outer._components[alias.target.index!]);
+          return;
+        }
+        if (alias.sort.kind == WasmComponentSortKind.core &&
+            alias.sort.coreKind == WasmComponentCoreSortKind.module) {
+          _coreModules.add(outer._coreModules[alias.target.index!]);
+          return;
+        }
         if (alias.sort.kind == WasmComponentSortKind.componentType) {
           final type = component.componentTypeIndexScope.definitionAt(
             _visibleTypes.length,
@@ -1083,11 +1126,11 @@ final class WASIComponentNativeRuntime {
   }
 
   void _addComponentSort(
-    WasmComponentSortKind kind,
+    WasmComponentSort sort,
     _ComponentInstance instance,
     String name,
   ) {
-    switch (kind) {
+    switch (sort.kind) {
       case WasmComponentSortKind.function:
         final function = instance.functions[name];
         if (function == null) {
@@ -1110,11 +1153,34 @@ final class WASIComponentNativeRuntime {
         _visibleResourceTypeNames.add(instance.resourceTypeNames[name]);
         _addVisibleResourceIdentity(identity);
       case WasmComponentSortKind.instance:
-      case WasmComponentSortKind.value:
+        _componentInstances.add(
+          instance.instances[name] ??
+              (throw WASIPreview2ComponentExecutionException(
+                'Component instance export `$name` not found.',
+              )),
+        );
       case WasmComponentSortKind.component:
+        _components.add(
+          instance.components[name] ??
+              (throw WASIPreview2ComponentExecutionException(
+                'Component export `$name` not found.',
+              )),
+        );
       case WasmComponentSortKind.core:
+        if (sort.coreKind != WasmComponentCoreSortKind.module) {
+          throw const WASIPreview2ComponentExecutionException(
+            'A component instance can only export core modules.',
+          );
+        }
+        _coreModules.add(
+          instance.coreModules[name] ??
+              (throw WASIPreview2ComponentExecutionException(
+                'Core module export `$name` not found.',
+              )),
+        );
+      case WasmComponentSortKind.value:
         throw WASIPreview2ComponentExecutionException(
-          'Unsupported component alias sort `${kind.name}` for `$name`.',
+          'Unsupported component alias sort `${sort.kind.name}` for `$name`.',
         );
     }
   }
@@ -2165,6 +2231,7 @@ final class WASIComponentNativeRuntime {
           ),
           features: WasmFeatureSet.layeredDefaults(
             profile: WasmFeatureProfile.full,
+            additionalEnabled: const {'multi-memory'},
           ),
         );
         return _CoreInstance.fromRuntime(
@@ -2280,6 +2347,22 @@ final class WASIComponentNativeRuntime {
     switch (instance.kind) {
       case WasmComponentInstanceKind.inlineExports:
         return _ComponentInstance(
+          coreModules: Map.unmodifiable({
+            for (final export in instance.exports)
+              if (export.sort.kind == WasmComponentSortKind.core &&
+                  export.sort.coreKind == WasmComponentCoreSortKind.module)
+                export.name: _coreModules[export.sort.index],
+          }),
+          components: Map.unmodifiable({
+            for (final export in instance.exports)
+              if (export.sort.kind == WasmComponentSortKind.component)
+                export.name: _components[export.sort.index],
+          }),
+          instances: Map.unmodifiable({
+            for (final export in instance.exports)
+              if (export.sort.kind == WasmComponentSortKind.instance)
+                export.name: _componentInstances[export.sort.index],
+          }),
           functions: Map.unmodifiable({
             for (final export in instance.exports)
               if (export.sort.kind == WasmComponentSortKind.function)
@@ -2304,34 +2387,31 @@ final class WASIComponentNativeRuntime {
           }),
         );
       case WasmComponentInstanceKind.instantiate:
-        final componentIndex = instance.componentIndex;
-        if (componentIndex == null ||
-            componentIndex < 0 ||
-            componentIndex >= _components.length) {
-          throw const WASIPreview2ComponentExecutionException(
-            'Nested component instance references an unknown component.',
-          );
-        }
-        return _instantiateNestedComponent(
-          _components[componentIndex],
-          instance.arguments,
-        );
+        final child = _createNestedRuntime(instance);
+        child._initialize();
+        return child._instanceExports();
     }
   }
 
-  _ComponentInstance _instantiateNestedComponent(
-    WasmComponent nested,
-    List<WasmComponentInstantiationArgument> arguments,
+  WASIComponentNativeRuntime _createNestedRuntime(
+    WasmComponentInstance instance,
   ) {
-    if (nested.starts.isNotEmpty) {
+    final componentIndex = instance.componentIndex;
+    if (componentIndex == null ||
+        componentIndex < 0 ||
+        componentIndex >= _components.length) {
       throw const WASIPreview2ComponentExecutionException(
-        'Nested Component starts are not executable yet.',
+        'Nested component instance references an unknown component.',
       );
     }
+    final definition = _components[componentIndex];
+    final nested = definition.component;
     final suppliedFunctions = <String, _ComponentFunction>{};
     final suppliedInstances = <String, _ComponentInstance>{};
     final suppliedTypes = <String, _NestedComponentType>{};
-    for (final argument in arguments) {
+    final suppliedCoreModules = <String, ir_module.WasmModule>{};
+    final suppliedComponents = <String, _ComponentDefinition>{};
+    for (final argument in instance.arguments) {
       switch (argument.sort.kind) {
         case WasmComponentSortKind.function:
           suppliedFunctions[argument.name] =
@@ -2346,8 +2426,16 @@ final class WASIComponentNativeRuntime {
             resourceIdentity: _visibleResources[argument.sort.index],
           );
         case WasmComponentSortKind.core:
-        case WasmComponentSortKind.value:
+          if (argument.sort.coreKind != WasmComponentCoreSortKind.module) {
+            throw const WASIPreview2ComponentExecutionException(
+              'A component argument can only supply a core module.',
+            );
+          }
+          suppliedCoreModules[argument.name] =
+              _coreModules[argument.sort.index];
         case WasmComponentSortKind.component:
+          suppliedComponents[argument.name] = _components[argument.sort.index];
+        case WasmComponentSortKind.value:
           throw WASIPreview2ComponentExecutionException(
             'Unsupported nested component argument sort '
             '`${argument.sort.kind.name}` for `${argument.name}`.',
@@ -2355,26 +2443,29 @@ final class WASIComponentNativeRuntime {
       }
     }
 
-    final child = WASIComponentNativeRuntime._nested(
+    return WASIComponentNativeRuntime._nested(
       component: nested,
       parent: this,
+      outerRuntime: definition.outer,
       arguments: _NestedComponentArguments(
+        coreModules: suppliedCoreModules,
+        components: suppliedComponents,
         functions: suppliedFunctions,
         instances: suppliedInstances,
         types: suppliedTypes,
       ),
     );
-    child._initialize();
-    if (child._exportedInstances.isNotEmpty) {
-      throw const WASIPreview2ComponentExecutionException(
-        'Nested component instance exports are not executable yet.',
-      );
-    }
+  }
+
+  _ComponentInstance _instanceExports() {
     return _ComponentInstance(
-      functions: Map.unmodifiable(child._exportedFunctions),
-      types: Map.unmodifiable(child._exportedTypes),
-      resourceTypeNames: Map.unmodifiable(child._exportedResourceTypeNames),
-      resources: Map.unmodifiable(child._exportedResources),
+      coreModules: Map.unmodifiable(_exportedCoreModules),
+      components: Map.unmodifiable(_exportedComponents),
+      instances: Map.unmodifiable(_exportedInstances),
+      functions: Map.unmodifiable(_exportedFunctions),
+      types: Map.unmodifiable(_exportedTypes),
+      resourceTypeNames: Map.unmodifiable(_exportedResourceTypeNames),
+      resources: Map.unmodifiable(_exportedResources),
     );
   }
 
@@ -2403,8 +2494,12 @@ final class WASIComponentNativeRuntime {
         );
         _addVisibleResourceIdentity(runtimeResource);
       case WasmComponentSortKind.component:
+        _exportedComponents[name] = _components[export.sort.index];
         _components.add(_components[export.sort.index]);
       case WasmComponentSortKind.core:
+        if (export.sort.coreKind == WasmComponentCoreSortKind.module) {
+          _exportedCoreModules[name] = _coreModules[export.sort.index];
+        }
         _addCoreExportIndex(export.sort);
       case WasmComponentSortKind.value:
         throw WASIPreview2ComponentExecutionException(
@@ -2754,14 +2849,27 @@ final class _ComponentFunction {
   }
 }
 
+final class _ComponentDefinition {
+  const _ComponentDefinition(this.component, this.outer);
+
+  final WasmComponent component;
+  final WASIComponentNativeRuntime outer;
+}
+
 final class _ComponentInstance {
   const _ComponentInstance({
     required this.functions,
     required this.types,
     required this.resourceTypeNames,
     this.resources = const {},
+    this.coreModules = const {},
+    this.components = const {},
+    this.instances = const {},
   });
 
+  final Map<String, ir_module.WasmModule> coreModules;
+  final Map<String, _ComponentDefinition> components;
+  final Map<String, _ComponentInstance> instances;
   final Map<String, _ComponentFunction> functions;
   final Map<String, WasmComponentTypeDefinition> types;
   final Map<String, String> resourceTypeNames;
@@ -2770,11 +2878,15 @@ final class _ComponentInstance {
 
 final class _NestedComponentArguments {
   const _NestedComponentArguments({
+    required this.coreModules,
+    required this.components,
     required this.functions,
     required this.instances,
     required this.types,
   });
 
+  final Map<String, ir_module.WasmModule> coreModules;
+  final Map<String, _ComponentDefinition> components;
   final Map<String, _ComponentFunction> functions;
   final Map<String, _ComponentInstance> instances;
   final Map<String, _NestedComponentType> types;
