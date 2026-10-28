@@ -888,6 +888,11 @@ final class _WasmComponentMaterializedIndexSpaces {
     required this.valueTypes,
     required this.valueTypeScopes,
     required this.nestedComponents,
+    required this.components,
+    required this.instanceExports,
+    required this.componentSignatures,
+    required this.importedTypes,
+    required this.importedInstances,
   });
 
   final List<WasmComponentTypeDefinition> typeDefinitions;
@@ -897,6 +902,11 @@ final class _WasmComponentMaterializedIndexSpaces {
   final List<WasmComponentValueType?> valueTypes;
   final List<WasmComponentTypeScope?> valueTypeScopes;
   final List<WasmComponent> nestedComponents;
+  final List<WasmComponent?> components;
+  final List<_WasmComponentInstanceExportMap?> instanceExports;
+  final List<_WasmComponentSignature?> componentSignatures;
+  final Map<String, WasmComponentTypeDefinition> importedTypes;
+  final Map<String, _WasmComponentInstanceExportMap?> importedInstances;
 }
 
 final class WasmComponentTypeScope {
@@ -963,6 +973,9 @@ final class _WasmComponentInstanceExportEntry {
     this.valueTypeScope,
     this.typeDefinition,
     this.typeDefinitionContext,
+    this.instanceExports,
+    this.componentSignature,
+    this.component,
   });
 
   final WasmComponentSortIndex sort;
@@ -972,10 +985,18 @@ final class _WasmComponentInstanceExportEntry {
   final WasmComponentTypeScope? valueTypeScope;
   final WasmComponentTypeDefinition? typeDefinition;
   final WasmComponentTypeDefinitionContext? typeDefinitionContext;
+  final _WasmComponentInstanceExportMap? instanceExports;
+  final _WasmComponentSignature? componentSignature;
+  final WasmComponent? component;
 }
 
 typedef _WasmComponentInstanceExportMap =
     Map<String, _WasmComponentInstanceExportEntry>;
+
+typedef _WasmComponentSignature = ({
+  _WasmComponentInstanceExportMap imports,
+  _WasmComponentInstanceExportMap exports,
+});
 
 final class _WasmComponentCoreIndexCounts {
   var functions = 0;
@@ -1028,12 +1049,16 @@ final class _WasmComponentOuterAliasScope {
     required this.typeScope,
     required this.coreModuleCount,
     required this.componentCount,
+    this.components = const [],
+    this.componentSignatures = const [],
   });
 
   final List<WasmComponentTypeDefinition> typeDefinitions;
   final WasmComponentTypeScope typeScope;
   final int coreModuleCount;
   final int componentCount;
+  final List<WasmComponent?> components;
+  final List<_WasmComponentSignature?> componentSignatures;
 
   int? count(WasmComponentSort sort) {
     if (sort.kind == WasmComponentSortKind.componentType) {
@@ -1185,6 +1210,8 @@ final class WasmComponent {
       _indexSpaces.valueTypes;
 
   _WasmComponentMaterializedIndexSpaces _buildComponentIndexSpaces() {
+    final importedTypes = <String, WasmComponentTypeDefinition>{};
+    final importedInstances = <String, _WasmComponentInstanceExportMap?>{};
     final visibleTypeDefinitions = <WasmComponentTypeDefinition>[];
     final visibleTypeDefinitionContexts =
         <WasmComponentTypeDefinitionContext>[];
@@ -1194,6 +1221,7 @@ final class WasmComponent {
     );
     final nestedComponents = <WasmComponent>[];
     final visibleComponentEntries = <WasmComponent?>[];
+    final visibleComponentSignatures = <_WasmComponentSignature?>[];
     final functionTypes = <WasmComponentFunctionType?>[];
     final functionTypeContexts = <WasmComponentFunctionTypeContext?>[];
     final valueTypes = <WasmComponentValueType?>[];
@@ -1278,7 +1306,9 @@ final class WasmComponent {
       switch (event.kind) {
         case _WasmComponentDefinitionEventKind.import:
           final descriptor = imports[event.index].descriptor;
-          if (descriptor.kind == WasmComponentExternKind.function) {
+          if (descriptor.kind == WasmComponentExternKind.coreModule) {
+            coreModuleCount++;
+          } else if (descriptor.kind == WasmComponentExternKind.function) {
             final context = _componentFunctionTypeContextFromDefinitions(
               visibleTypeDefinitions,
               descriptor.typeIndex,
@@ -1305,6 +1335,9 @@ final class WasmComponent {
             );
           } else if (descriptor.kind == WasmComponentExternKind.component) {
             visibleComponentEntries.add(null);
+            visibleComponentSignatures.add(
+              _componentImportSignature(descriptor, visibleTypeScope),
+            );
           } else if (descriptor.kind == WasmComponentExternKind.instance) {
             instanceExportMaps.add(
               _componentImportInstanceExportTypeMap(
@@ -1313,6 +1346,8 @@ final class WasmComponent {
                 visibleTypeScope: visibleTypeScope,
               ),
             );
+            importedInstances[imports[event.index].name] =
+                instanceExportMaps.last;
           } else if (descriptor.kind == WasmComponentExternKind.componentType) {
             final introducedTypeDefinition =
                 _componentTypeImportDefinitionIntroducedBy(
@@ -1320,6 +1355,8 @@ final class WasmComponent {
                   visibleTypeDefinitions,
                 );
             if (introducedTypeDefinition != null) {
+              importedTypes[imports[event.index].name] =
+                  introducedTypeDefinition;
               addVisibleType(
                 introducedTypeDefinition,
                 context:
@@ -1332,7 +1369,10 @@ final class WasmComponent {
           }
         case _WasmComponentDefinitionEventKind.export:
           final export = exports[event.index];
-          if (export.sort.kind == WasmComponentSortKind.function) {
+          if (export.sort.kind == WasmComponentSortKind.core &&
+              export.sort.coreKind == WasmComponentCoreSortKind.module) {
+            coreModuleCount++;
+          } else if (export.sort.kind == WasmComponentSortKind.function) {
             addFunctionType(
               _componentFunctionTypeAt(functionTypes, export.sort.index),
               _componentFunctionTypeDefinitionsAt(
@@ -1354,6 +1394,13 @@ final class WasmComponent {
           } else if (export.sort.kind == WasmComponentSortKind.component) {
             visibleComponentEntries.add(
               _componentAt(visibleComponentEntries, export.sort.index),
+            );
+            visibleComponentSignatures.add(
+              _entryAt(visibleComponentSignatures, export.sort.index),
+            );
+          } else if (export.sort.kind == WasmComponentSortKind.instance) {
+            instanceExportMaps.add(
+              _componentExportMapAt(instanceExportMaps, export.sort.index),
             );
           } else if (export.sort.kind == WasmComponentSortKind.componentType) {
             final exportedTypeDefinition = _componentTypeDefinitionAt(
@@ -1379,11 +1426,16 @@ final class WasmComponent {
               ),
               coreModuleCount: coreModuleCount,
               componentCount: visibleComponentEntries.length,
+              components: List.unmodifiable(visibleComponentEntries),
+              componentSignatures: List.unmodifiable(
+                visibleComponentSignatures,
+              ),
             ),
             ..._outerAliasScopes,
           ]);
           nestedComponents.add(child);
           visibleComponentEntries.add(child);
+          visibleComponentSignatures.add(_componentSignature(child));
         case _WasmComponentDefinitionEventKind.instance:
           instanceExportMaps.add(
             _componentInstanceExportTypeMap(
@@ -1395,6 +1447,8 @@ final class WasmComponent {
               valueTypes,
               valueTypeScopes,
               visibleTypeScope,
+              instanceExportMaps,
+              visibleComponentSignatures,
             ),
           );
         case _WasmComponentDefinitionEventKind.alias:
@@ -1403,7 +1457,10 @@ final class WasmComponent {
             alias,
             instanceExportMaps,
           );
-          if (alias.sort.kind == WasmComponentSortKind.function) {
+          if (alias.sort.kind == WasmComponentSortKind.core &&
+              alias.sort.coreKind == WasmComponentCoreSortKind.module) {
+            coreModuleCount++;
+          } else if (alias.sort.kind == WasmComponentSortKind.function) {
             addFunctionType(
               aliasEntry?.function,
               aliasEntry?.functionContext?.typeDefinitions,
@@ -1425,7 +1482,38 @@ final class WasmComponent {
               addVisibleType(typeDefinition, context: typeDefinitionContext);
             }
           } else if (alias.sort.kind == WasmComponentSortKind.component) {
-            visibleComponentEntries.add(null);
+            final depth = alias.target.componentDepth;
+            final outer =
+                alias.target.kind == WasmComponentAliasTargetKind.outer;
+            final scope =
+                outer &&
+                    depth != null &&
+                    depth > 0 &&
+                    depth <= _outerAliasScopes.length
+                ? _outerAliasScopes[depth - 1]
+                : null;
+            visibleComponentEntries.add(
+              outer
+                  ? _componentAt(
+                      depth == 0
+                          ? visibleComponentEntries
+                          : scope?.components ?? [],
+                      alias.target.index,
+                    )
+                  : aliasEntry?.component,
+            );
+            visibleComponentSignatures.add(
+              outer
+                  ? _entryAt(
+                      depth == 0
+                          ? visibleComponentSignatures
+                          : scope?.componentSignatures ?? [],
+                      alias.target.index,
+                    )
+                  : aliasEntry?.componentSignature,
+            );
+          } else if (alias.sort.kind == WasmComponentSortKind.instance) {
+            instanceExportMaps.add(aliasEntry?.instanceExports);
           }
         case _WasmComponentDefinitionEventKind.canonical:
           final definition = canonicalDefinitions[event.index];
@@ -1472,6 +1560,11 @@ final class WasmComponent {
         valueTypeScopes,
       ),
       nestedComponents: List.unmodifiable(nestedComponents),
+      components: List.unmodifiable(visibleComponentEntries),
+      instanceExports: List.unmodifiable(instanceExportMaps),
+      componentSignatures: List.unmodifiable(visibleComponentSignatures),
+      importedTypes: Map.unmodifiable(importedTypes),
+      importedInstances: Map.unmodifiable(importedInstances),
     );
   }
 
@@ -1799,6 +1892,8 @@ _WasmComponentInstanceExportMap? _componentInstanceExportTypeMap(
   List<WasmComponentValueType?> valueTypes,
   List<WasmComponentTypeScope?> valueTypeScopes,
   WasmComponentTypeScope? visibleTypeScope,
+  List<_WasmComponentInstanceExportMap?> instanceExportMaps,
+  List<_WasmComponentSignature?> componentSignatures,
 ) {
   switch (instance.kind) {
     case WasmComponentInstanceKind.inlineExports:
@@ -1806,6 +1901,16 @@ _WasmComponentInstanceExportMap? _componentInstanceExportTypeMap(
         for (final export in instance.exports)
           export.name: _WasmComponentInstanceExportEntry(
             sort: export.sort,
+            instanceExports: export.sort.kind == WasmComponentSortKind.instance
+                ? _componentExportMapAt(instanceExportMaps, export.sort.index)
+                : null,
+            componentSignature:
+                export.sort.kind == WasmComponentSortKind.component
+                ? _entryAt(componentSignatures, export.sort.index)
+                : null,
+            component: export.sort.kind == WasmComponentSortKind.component
+                ? _componentAt(visibleComponentEntries, export.sort.index)
+                : null,
             function: export.sort.kind == WasmComponentSortKind.function
                 ? _componentFunctionTypeAt(functionTypes, export.sort.index)
                 : null,
@@ -1833,16 +1938,21 @@ _WasmComponentInstanceExportMap? _componentInstanceExportTypeMap(
           ),
       };
     case WasmComponentInstanceKind.instantiate:
-      final component = _componentAt(
-        visibleComponentEntries,
-        instance.componentIndex,
+      final signature = _entryAt(componentSignatures, instance.componentIndex);
+      if (signature == null) return null;
+      return _componentInstantiatedExportTypeMap(
+        signature,
+        instance,
+        visibleTypeDefinitions,
+        instanceExportMaps,
       );
-      if (component == null) {
-        return null;
-      }
-      return _componentExportTypeMap(component);
   }
 }
+
+_WasmComponentInstanceExportMap? _componentExportMapAt(
+  List<_WasmComponentInstanceExportMap?> maps,
+  int? index,
+) => index != null && index >= 0 && index < maps.length ? maps[index] : null;
 
 WasmComponent? _componentAt(
   List<WasmComponent?> components,
@@ -1856,6 +1966,42 @@ WasmComponent? _componentAt(
   return components[componentIndex];
 }
 
+_WasmComponentSignature _componentSignature(WasmComponent component) {
+  final scope = component.componentTypeIndexScope;
+  return (
+    imports: {
+      for (final import in component.imports)
+        import.name: _WasmComponentInstanceExportEntry(
+          sort: _componentSortIndexForExternDescriptor(import.descriptor),
+          typeDefinition: component._indexSpaces.importedTypes[import.name],
+          typeDefinitionContext:
+              import.descriptor.kind == WasmComponentExternKind.componentType &&
+                  import.descriptor.boundKind ==
+                      WasmComponentExternBoundKind.equality
+              ? scope.definitionContextAt(import.descriptor.typeIndex)
+              : null,
+          functionContext:
+              import.descriptor.kind == WasmComponentExternKind.function
+              ? _componentFunctionTypeContextFromDefinitions(
+                  scope.definitions,
+                  import.descriptor.typeIndex,
+                  typeScope: scope,
+                )
+              : null,
+          instanceExports:
+              component._indexSpaces.importedInstances[import.name],
+          componentSignature:
+              import.descriptor.kind == WasmComponentExternKind.component
+              ? _componentImportSignature(import.descriptor, scope)
+              : null,
+          value: import.descriptor.valueType,
+          valueTypeScope: scope,
+        ),
+    },
+    exports: _componentExportTypeMap(component),
+  );
+}
+
 _WasmComponentInstanceExportMap _componentExportTypeMap(
   WasmComponent component,
 ) {
@@ -1863,6 +2009,21 @@ _WasmComponentInstanceExportMap _componentExportTypeMap(
     for (final export in component.exports)
       export.name: _WasmComponentInstanceExportEntry(
         sort: export.sort,
+        component: export.sort.kind == WasmComponentSortKind.component
+            ? _componentAt(component._indexSpaces.components, export.sort.index)
+            : null,
+        instanceExports: export.sort.kind == WasmComponentSortKind.instance
+            ? _componentExportMapAt(
+                component._indexSpaces.instanceExports,
+                export.sort.index,
+              )
+            : null,
+        componentSignature: export.sort.kind == WasmComponentSortKind.component
+            ? _entryAt(
+                component._indexSpaces.componentSignatures,
+                export.sort.index,
+              )
+            : null,
         function: export.sort.kind == WasmComponentSortKind.function
             ? _componentFunctionTypeAt(
                 component.componentFunctionIndexTypes,
@@ -1899,6 +2060,163 @@ _WasmComponentInstanceExportMap _componentExportTypeMap(
             ),
       ),
   };
+}
+
+_WasmComponentInstanceExportMap _componentInstantiatedExportTypeMap(
+  _WasmComponentSignature signature,
+  WasmComponentInstance instance,
+  List<WasmComponentTypeDefinition> visibleTypes,
+  List<_WasmComponentInstanceExportMap?> visibleInstances,
+) {
+  final bindings = <WasmComponentTypeDefinition, WasmComponentTypeDefinition>{};
+  void bindInstance(
+    _WasmComponentInstanceExportMap? expected,
+    _WasmComponentInstanceExportMap? actual,
+  ) {
+    if (expected == null || actual == null) return;
+    for (final entry in expected.entries) {
+      final supplied = actual[entry.key];
+      final type = entry.value.typeDefinition;
+      if (type?.resource != null &&
+          supplied?.typeDefinition?.resource != null) {
+        bindings[type!] = supplied!.typeDefinition!;
+      }
+      bindInstance(entry.value.instanceExports, supplied?.instanceExports);
+    }
+  }
+
+  for (final argument in instance.arguments) {
+    if (argument.sort.kind == WasmComponentSortKind.componentType) {
+      final expected = signature.imports[argument.name]?.typeDefinition;
+      final actual = _componentTypeDefinitionAt(
+        visibleTypes,
+        argument.sort.index,
+      );
+      if (expected?.resource != null && actual?.resource != null) {
+        bindings[expected!] = actual!;
+      }
+    } else if (argument.sort.kind == WasmComponentSortKind.instance) {
+      bindInstance(
+        signature.imports[argument.name]?.instanceExports,
+        _componentExportMapAt(visibleInstances, argument.sort.index),
+      );
+    }
+  }
+  void freshenExportedResources(_WasmComponentInstanceExportMap exports) {
+    for (final entry in exports.values) {
+      final type = entry.typeDefinition;
+      if (type?.resource?.isAbstract ?? false) {
+        bindings.putIfAbsent(type!, _newAbstractResourceTypeDefinition);
+      }
+      final nested = entry.instanceExports;
+      if (nested != null) freshenExportedResources(nested);
+    }
+  }
+
+  freshenExportedResources(signature.exports);
+  return _WasmComponentTypeSubstitution(bindings).exports(signature.exports);
+}
+
+/// One instantiation substitutes imported resources and freshens defined ones.
+final class _WasmComponentTypeSubstitution {
+  _WasmComponentTypeSubstitution(this.resources) {
+    for (final actual in resources.values.toList()) {
+      resources[actual] = actual;
+    }
+  }
+
+  final Map<WasmComponentTypeDefinition, WasmComponentTypeDefinition> resources;
+  final _scopes = <WasmComponentTypeScope, WasmComponentTypeScope>{};
+
+  WasmComponentTypeDefinition definition(WasmComponentTypeDefinition original) {
+    if (original.resource == null) return original;
+    return resources.putIfAbsent(
+      original,
+      () => original.resource!.isAbstract
+          ? original
+          : WasmComponentTypeDefinition(
+              kind: original.kind,
+              resource: original.resource,
+            ),
+    );
+  }
+
+  WasmComponentTypeScope scope(WasmComponentTypeScope original) {
+    final cached = _scopes[original];
+    if (cached != null) return cached;
+    final definitions = <WasmComponentTypeDefinitionContext>[];
+    final outerScopes = <WasmComponentTypeScope>[];
+    final result = WasmComponentTypeScope._(definitions, outerScopes);
+    _scopes[original] = result;
+    definitions.addAll(original._definitions.map(context));
+    outerScopes.addAll(original._outerScopes.map(scope));
+    return result;
+  }
+
+  WasmComponentTypeDefinitionContext context(
+    WasmComponentTypeDefinitionContext original,
+  ) => WasmComponentTypeDefinitionContext(
+    definition: definition(original.definition),
+    typeScope: scope(original.typeScope),
+  );
+
+  WasmComponentFunctionTypeContext? function(
+    WasmComponentFunctionTypeContext? original,
+  ) {
+    if (original == null || original.typeScope == null) return original;
+    final substituted = scope(original.typeScope!);
+    return WasmComponentFunctionTypeContext(
+      functionType: original.functionType,
+      typeDefinitions: substituted.definitions,
+      typeScope: substituted,
+    );
+  }
+
+  _WasmComponentInstanceExportMap exports(
+    _WasmComponentInstanceExportMap original,
+  ) => {
+    for (final entry in original.entries)
+      entry.key: _WasmComponentInstanceExportEntry(
+        sort: entry.value.sort,
+        function: entry.value.function,
+        functionContext: function(entry.value.functionContext),
+        value: entry.value.value,
+        valueTypeScope: entry.value.valueTypeScope == null
+            ? null
+            : scope(entry.value.valueTypeScope!),
+        typeDefinition: entry.value.typeDefinition == null
+            ? null
+            : definition(entry.value.typeDefinition!),
+        typeDefinitionContext: entry.value.typeDefinitionContext == null
+            ? null
+            : context(entry.value.typeDefinitionContext!),
+        instanceExports: entry.value.instanceExports == null
+            ? null
+            : exports(entry.value.instanceExports!),
+        componentSignature: entry.value.componentSignature == null
+            ? null
+            : (
+                imports: exports(entry.value.componentSignature!.imports),
+                exports: exports(entry.value.componentSignature!.exports),
+              ),
+        component: entry.value.component,
+      ),
+  };
+}
+
+_WasmComponentSignature? _componentImportSignature(
+  WasmComponentExternDescriptor descriptor,
+  WasmComponentTypeScope scope,
+) {
+  final context = scope.definitionContextAt(descriptor.typeIndex);
+  final type = context?.definition.component;
+  if (type == null) return null;
+  final signature = _componentInstanceTypeContext(
+    WasmComponentInstanceType(declarations: type.declarations),
+    context!.typeScope.definitions,
+    outerTypeScope: context.typeScope,
+  );
+  return (imports: signature.imports, exports: signature.exports);
 }
 
 _WasmComponentInstanceExportMap? _componentImportInstanceExportTypeMap(
@@ -1940,7 +2258,11 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
   outerTypeScope: outerTypeScope,
 ).exports;
 
-({_WasmComponentInstanceExportMap exports, WasmComponentTypeScope typeScope})
+({
+  _WasmComponentInstanceExportMap imports,
+  _WasmComponentInstanceExportMap exports,
+  WasmComponentTypeScope typeScope,
+})
 _componentInstanceTypeContext(
   WasmComponentInstanceType instance,
   List<WasmComponentTypeDefinition> outerTypeDefinitions, {
@@ -1966,6 +2288,7 @@ _componentInstanceTypeContext(
     }
   }
   final localFunctionTypeContexts = <WasmComponentFunctionTypeContext?>[];
+  final imports = <String, _WasmComponentInstanceExportEntry>{};
   final exports = <String, _WasmComponentInstanceExportEntry>{};
   final typeScopes = <_WasmComponentTypeAliasScope>[
     _WasmComponentTypeAliasScope(
@@ -2042,35 +2365,16 @@ _componentInstanceTypeContext(
           );
         }
       case WasmComponentTypeDeclarationKind.import:
-        final descriptor = declaration.import?.descriptor;
-        final introduced = descriptor == null
-            ? null
-            : _componentTypeImportDefinitionIntroducedBy(
-                descriptor,
-                localTypeDefinitions,
-              );
-        if (introduced != null) {
-          addLocalType(
-            introduced,
-            functionContext:
-                descriptor?.kind == WasmComponentExternKind.componentType
-                ? _componentFunctionTypeContextAt(
-                    localFunctionTypeContexts,
-                    descriptor?.typeIndex,
-                  )
-                : null,
-            definitionContext:
-                descriptor?.kind == WasmComponentExternKind.componentType &&
-                    descriptor?.boundKind ==
-                        WasmComponentExternBoundKind.equality
-                ? localTypeScope.definitionContextAt(descriptor?.typeIndex)
-                : null,
-          );
-        }
       case WasmComponentTypeDeclarationKind.export:
-        final export = declaration.export;
-        final descriptor = export?.descriptor;
-        if (export != null && descriptor != null) {
+        final isImport =
+            declaration.kind == WasmComponentTypeDeclarationKind.import;
+        final name = isImport
+            ? declaration.import?.name
+            : declaration.export?.name;
+        final descriptor = isImport
+            ? declaration.import?.descriptor
+            : declaration.export?.descriptor;
+        if (name != null && descriptor != null) {
           final sort = _componentSortIndexForExternDescriptor(descriptor);
           final introduced = _componentTypeDefinitionIntroducedByTypeExport(
             descriptor,
@@ -2086,8 +2390,21 @@ _componentInstanceTypeContext(
                   definition: introduced,
                   typeScope: localTypeScope,
                 );
-          exports[export.name] = _WasmComponentInstanceExportEntry(
+          (isImport
+              ? imports
+              : exports)[name] = _WasmComponentInstanceExportEntry(
             sort: sort,
+            instanceExports: descriptor.kind == WasmComponentExternKind.instance
+                ? _componentImportInstanceExportTypeMap(
+                    descriptor,
+                    localTypeDefinitions,
+                    visibleTypeScope: localTypeScope,
+                  )
+                : null,
+            componentSignature:
+                descriptor.kind == WasmComponentExternKind.component
+                ? _componentImportSignature(descriptor, localTypeScope)
+                : null,
             function: descriptor.kind == WasmComponentExternKind.function
                 ? _componentFunctionTypeFromDefinitions(
                     localTypeDefinitions,
@@ -2133,6 +2450,9 @@ _componentInstanceTypeContext(
   }
 
   return (
+    imports: Map<String, _WasmComponentInstanceExportEntry>.unmodifiable(
+      imports,
+    ),
     exports: Map<String, _WasmComponentInstanceExportEntry>.unmodifiable(
       exports,
     ),
@@ -3199,7 +3519,7 @@ final class _WasmComponentValidationContext {
     switch (definition.kind) {
       case WasmComponentTypeKind.resource:
         final resource = definition.resource;
-        return resource != null && !resource.isAbstract;
+        return resource != null;
       case WasmComponentTypeKind.definedValue:
         final definedValue = definition.definedValue;
         return definedValue != null &&
@@ -5048,6 +5368,7 @@ final class _WasmComponentValidationContext {
     final valueEntries = <_WasmComponentValueIndexEntry>[];
     final instanceExportMaps = <_WasmComponentInstanceExportMap?>[];
     final componentIndexEntries = <WasmComponent?>[];
+    final componentSignatures = <_WasmComponentSignature?>[];
     _WasmComponentExternNameSet? importNames;
     _WasmComponentExternNameSet? exportNames;
     final visibleTypeDefinitions = <WasmComponentTypeDefinition>[];
@@ -5173,6 +5494,9 @@ final class _WasmComponentValidationContext {
             coreCounts.add(WasmComponentCoreSortKind.module);
           } else if (descriptor.kind == WasmComponentExternKind.component) {
             componentIndexEntries.add(null);
+            componentSignatures.add(
+              _componentImportSignature(descriptor, visibleTypeScope),
+            );
             componentCount++;
           } else if (descriptor.kind == WasmComponentExternKind.instance) {
             instanceExportMaps.add(
@@ -5226,9 +5550,14 @@ final class _WasmComponentValidationContext {
             componentIndexEntries.add(
               _componentAt(componentIndexEntries, export.sort.index),
             );
+            componentSignatures.add(
+              _entryAt(componentSignatures, export.sort.index),
+            );
             componentCount++;
           } else if (export.sort.kind == WasmComponentSortKind.instance) {
-            instanceExportMaps.add(null);
+            instanceExportMaps.add(
+              _componentExportMapAt(instanceExportMaps, export.sort.index),
+            );
             instanceCount++;
           } else if (export.sort.kind == WasmComponentSortKind.core &&
               export.sort.coreKind != null) {
@@ -5347,6 +5676,8 @@ final class _WasmComponentValidationContext {
                 WasmComponentCoreSortKind.module,
               ),
               componentCount: componentCount,
+              components: List.unmodifiable(componentIndexEntries),
+              componentSignatures: List.unmodifiable(componentSignatures),
             ),
             ...outerAliasScopes,
           ];
@@ -5362,6 +5693,7 @@ final class _WasmComponentValidationContext {
             );
           }
           componentIndexEntries.add(child);
+          componentSignatures.add(_componentSignature(child));
           componentCount++;
         case _WasmComponentDefinitionEventKind.instance:
           final instance = instances[event.index];
@@ -5369,10 +5701,14 @@ final class _WasmComponentValidationContext {
             instance,
             'instance[${event.index}]',
             functionTypes: functionTypes,
+            functionTypeContexts: functionTypeContexts,
+            visibleTypeScope: visibleTypeScope,
+            instanceExportMaps: instanceExportMaps,
             valueEntries: valueEntries,
             visibleTypeDefinitions: visibleTypeDefinitions,
             coreCounts: coreCounts,
             componentIndexEntries: componentIndexEntries,
+            componentSignatures: componentSignatures,
             componentCount: componentCount,
             instanceCount: instanceCount,
           );
@@ -5380,11 +5716,13 @@ final class _WasmComponentValidationContext {
             componentInstanceExportMap(
               instance,
               componentIndexEntries: componentIndexEntries,
+              componentSignatures: componentSignatures,
               functionTypes: functionTypes,
               functionTypeContexts: functionTypeContexts,
               valueEntries: valueEntries,
               visibleTypeDefinitions: visibleTypeDefinitions,
               visibleTypeScope: visibleTypeScope,
+              instanceExportMaps: instanceExportMaps,
             ),
           );
           instanceCount++;
@@ -5460,10 +5798,34 @@ final class _WasmComponentValidationContext {
               ),
             );
           } else if (sort.kind == WasmComponentSortKind.component) {
-            componentIndexEntries.add(null);
+            final depth = alias.target.componentDepth;
+            final outerComponents =
+                alias.target.kind != WasmComponentAliasTargetKind.outer
+                ? const <WasmComponent?>[]
+                : depth == 0
+                ? componentIndexEntries
+                : depth != null && depth > 0 && depth <= outerAliasScopes.length
+                ? outerAliasScopes[depth - 1].components
+                : const <WasmComponent?>[];
+            componentIndexEntries.add(
+              knownAliasEntry?.component ??
+                  _componentAt(outerComponents, alias.target.index),
+            );
+            final outerSignatures =
+                alias.target.kind != WasmComponentAliasTargetKind.outer
+                ? const <_WasmComponentSignature?>[]
+                : depth == 0
+                ? componentSignatures
+                : depth != null && depth > 0 && depth <= outerAliasScopes.length
+                ? outerAliasScopes[depth - 1].componentSignatures
+                : const <_WasmComponentSignature?>[];
+            componentSignatures.add(
+              knownAliasEntry?.componentSignature ??
+                  _entryAt(outerSignatures, alias.target.index),
+            );
             componentCount++;
           } else if (sort.kind == WasmComponentSortKind.instance) {
-            instanceExportMaps.add(null);
+            instanceExportMaps.add(knownAliasEntry?.instanceExports);
             instanceCount++;
           }
           final outerAliasContext = outerAliasTypeDefinitionContext(
@@ -5882,10 +6244,14 @@ final class _WasmComponentValidationContext {
     WasmComponentInstance instance,
     String path, {
     required List<WasmComponentFunctionType?> functionTypes,
+    required List<WasmComponentFunctionTypeContext?> functionTypeContexts,
+    required WasmComponentTypeScope visibleTypeScope,
+    required List<_WasmComponentInstanceExportMap?> instanceExportMaps,
     required List<_WasmComponentValueIndexEntry> valueEntries,
     required List<WasmComponentTypeDefinition> visibleTypeDefinitions,
     required _WasmComponentCoreIndexCounts coreCounts,
     required List<WasmComponent?> componentIndexEntries,
+    required List<_WasmComponentSignature?> componentSignatures,
     required int componentCount,
     required int instanceCount,
   }) {
@@ -5919,7 +6285,15 @@ final class _WasmComponentValidationContext {
           instance.componentIndex,
         );
         if (component != null) {
-          validateInstantiationArguments(instance, component, path);
+          validateInstantiationArguments(
+            instance,
+            component,
+            path,
+            functionTypeContexts: functionTypeContexts,
+            visibleTypeScope: visibleTypeScope,
+            instanceExportMaps: instanceExportMaps,
+            componentSignatures: componentSignatures,
+          );
         }
       case WasmComponentInstanceKind.inlineExports:
         _validateUniqueComponentExternNames(
@@ -5959,28 +6333,41 @@ final class _WasmComponentValidationContext {
   void validateInstantiationArguments(
     WasmComponentInstance instance,
     WasmComponent component,
-    String path,
-  ) {
+    String path, {
+    required List<WasmComponentFunctionTypeContext?> functionTypeContexts,
+    required WasmComponentTypeScope visibleTypeScope,
+    required List<_WasmComponentInstanceExportMap?> instanceExportMaps,
+    required List<_WasmComponentSignature?> componentSignatures,
+  }) {
     final importsByName = <String, WasmComponentImport>{};
     for (final import in component.imports) {
       importsByName.putIfAbsent(import.name, () => import);
     }
+    final expectedScope = component.componentTypeIndexScope;
+    final resourceBindings =
+        <WasmComponentTypeDefinition, WasmComponentTypeDefinition>{};
+    for (final argument in instance.arguments) {
+      final descriptor = importsByName[argument.name]?.descriptor;
+      if (argument.sort.kind == WasmComponentSortKind.componentType &&
+          descriptor?.boundKind ==
+              WasmComponentExternBoundKind.subtypeResource) {
+        final expected = component._indexSpaces.importedTypes[argument.name];
+        final actual = visibleTypeScope.definitionAt(argument.sort.index);
+        if (expected != null && actual?.resource != null) {
+          resourceBindings[expected] = actual!;
+        }
+      }
+    }
 
     final providedNames = <String>{};
-    for (var i = 0; i < instance.arguments.length; i++) {
+    final argumentIndexes = {
+      for (var i = 0; i < instance.arguments.length; i++)
+        instance.arguments[i].name: i,
+    };
+    for (final import in component.imports) {
+      final i = argumentIndexes[import.name];
+      if (i == null) continue;
       final argument = instance.arguments[i];
-      final import = importsByName[argument.name];
-      if (import == null) {
-        errors.add(
-          WasmComponentValidationError(
-            path: '$path.arguments[$i].name',
-            message:
-                'Unknown Wasm component instantiation argument '
-                '"${argument.name}".',
-          ),
-        );
-        continue;
-      }
 
       providedNames.add(argument.name);
       if (!componentSortMatchesExternDescriptor(
@@ -5995,6 +6382,71 @@ final class _WasmComponentValidationContext {
                 'has sort ${componentSortDescription(argument.sort.kind, argument.sort.coreKind)} '
                 'but import expects '
                 '${externDescriptorSortDescription(import.descriptor)}.',
+          ),
+        );
+        continue;
+      }
+      final descriptor = import.descriptor;
+      var matches = true;
+      if (descriptor.kind == WasmComponentExternKind.componentType) {
+        final actual = visibleTypeScope.definitionAt(argument.sort.index);
+        if (descriptor.boundKind ==
+            WasmComponentExternBoundKind.subtypeResource) {
+          matches = actual?.resource != null;
+        } else if (descriptor.boundKind ==
+            WasmComponentExternBoundKind.equality) {
+          final expected = expectedScope.definitionAt(descriptor.typeIndex);
+          if (expected?.resource != null) {
+            matches = identical(resourceBindings[expected] ?? expected, actual);
+          } else if (expected?.definedValue != null) {
+            matches = componentValueTypesMatch(
+              WasmComponentValueType.typeIndex(descriptor.typeIndex!),
+              WasmComponentValueType.typeIndex(argument.sort.index),
+              expectedScope,
+              visibleTypeScope,
+              null,
+              resourceBindings,
+            );
+          }
+        }
+      } else if (descriptor.kind == WasmComponentExternKind.function) {
+        final expected = expectedScope.definitionContextAt(
+          descriptor.typeIndex,
+        );
+        final actual = _componentFunctionTypeContextAt(
+          functionTypeContexts,
+          argument.sort.index,
+        );
+        if (expected?.definition.function != null &&
+            actual?.typeScope != null) {
+          matches = componentFunctionTypesMatch(
+            expected!.definition.function!,
+            actual!.functionType,
+            expected.typeScope,
+            actual.typeScope!,
+            resourceBindings,
+          );
+        }
+      } else if (descriptor.kind == WasmComponentExternKind.instance) {
+        matches = componentInstanceTypesMatch(
+          component._indexSpaces.importedInstances[argument.name],
+          _componentExportMapAt(instanceExportMaps, argument.sort.index),
+          resourceBindings,
+        );
+      } else if (descriptor.kind == WasmComponentExternKind.component) {
+        matches = componentTypesMatch(
+          _componentImportSignature(descriptor, expectedScope),
+          _entryAt(componentSignatures, argument.sort.index),
+          resourceBindings,
+        );
+      }
+      if (!matches) {
+        errors.add(
+          WasmComponentValidationError(
+            path: '$path.arguments[$i].type',
+            message:
+                'Wasm component instantiation argument "${argument.name}" '
+                'does not match the imported ${externDescriptorSortDescription(descriptor)} type.',
           ),
         );
       }
@@ -6014,6 +6466,143 @@ final class _WasmComponentValidationContext {
         ),
       );
     }
+  }
+
+  bool componentFunctionTypesMatch(
+    WasmComponentFunctionType expected,
+    WasmComponentFunctionType actual,
+    WasmComponentTypeScope expectedScope,
+    WasmComponentTypeScope actualScope,
+    Map<WasmComponentTypeDefinition, WasmComponentTypeDefinition>
+    resourceBindings,
+  ) {
+    if (expected.isAsync != actual.isAsync ||
+        expected.params.length != actual.params.length ||
+        (expected.result == null) != (actual.result == null)) {
+      return false;
+    }
+    bool matches(WasmComponentValueType left, WasmComponentValueType right) =>
+        componentValueTypesMatch(
+          left,
+          right,
+          expectedScope,
+          actualScope,
+          null,
+          resourceBindings,
+        );
+    for (var i = 0; i < expected.params.length; i++) {
+      final left = expected.params[i];
+      final right = actual.params[i];
+      if (left.label != right.label || !matches(left.type, right.type)) {
+        return false;
+      }
+    }
+    return expected.result == null || matches(expected.result!, actual.result!);
+  }
+
+  bool componentTypesMatch(
+    _WasmComponentSignature? expected,
+    _WasmComponentSignature? actual,
+    Map<WasmComponentTypeDefinition, WasmComponentTypeDefinition>
+    resourceBindings,
+  ) {
+    if (expected == null || actual == null) return true;
+    // Imports are contravariant. Normalize supplied exports to the expected
+    // resources: multiple supplied imports may bind to one expected resource.
+    final imports = {
+      for (final binding in resourceBindings.entries)
+        binding.value: binding.key,
+    };
+    if (!componentInstanceTypesMatch(
+      actual.imports,
+      expected.imports,
+      imports,
+    )) {
+      return false;
+    }
+    return componentInstanceTypesMatch(
+      expected.exports,
+      _WasmComponentTypeSubstitution(imports).exports(actual.exports),
+      {for (final resource in imports.values) resource: resource},
+    );
+  }
+
+  bool componentInstanceTypesMatch(
+    _WasmComponentInstanceExportMap? expected,
+    _WasmComponentInstanceExportMap? actual,
+    Map<WasmComponentTypeDefinition, WasmComponentTypeDefinition>
+    resourceBindings,
+  ) {
+    // Index checks are separate; only materialized signatures are comparable.
+    if (expected == null || actual == null) return true;
+    for (final entry in expected.entries) {
+      final left = entry.value;
+      final right = actual[entry.key];
+      if (right == null ||
+          left.sort.kind != right.sort.kind ||
+          left.sort.coreKind != right.sort.coreKind) {
+        return false;
+      }
+      final expectedType = left.typeDefinition;
+      final actualType = right.typeDefinition;
+      if (expectedType?.resource != null) {
+        if (actualType?.resource == null) return false;
+        if (expectedType!.resource!.isAbstract &&
+            !resourceBindings.containsKey(expectedType)) {
+          resourceBindings[expectedType] = actualType!;
+        } else if (!identical(
+          resourceBindings[expectedType] ?? expectedType,
+          actualType,
+        )) {
+          return false;
+        }
+      } else if (expectedType?.definedValue != null) {
+        final leftContext = left.typeDefinitionContext;
+        final rightContext = right.typeDefinitionContext;
+        if (leftContext != null &&
+            rightContext != null &&
+            !componentValueTypesMatch(
+              const WasmComponentValueType.typeIndex(0),
+              const WasmComponentValueType.typeIndex(0),
+              WasmComponentTypeScope._([leftContext]),
+              WasmComponentTypeScope._([rightContext]),
+              null,
+              resourceBindings,
+            )) {
+          return false;
+        }
+      } else if (left.sort.kind == WasmComponentSortKind.instance &&
+          !componentInstanceTypesMatch(
+            left.instanceExports,
+            right.instanceExports,
+            resourceBindings,
+          )) {
+        return false;
+      } else if (left.sort.kind == WasmComponentSortKind.component &&
+          !componentTypesMatch(
+            left.componentSignature,
+            right.componentSignature,
+            resourceBindings,
+          )) {
+        return false;
+      }
+    }
+    for (final entry in expected.entries) {
+      final left = entry.value.functionContext;
+      final right = actual[entry.key]?.functionContext;
+      if (left?.typeScope != null &&
+          right?.typeScope != null &&
+          !componentFunctionTypesMatch(
+            left!.functionType,
+            right!.functionType,
+            left.typeScope!,
+            right.typeScope!,
+            resourceBindings,
+          )) {
+        return false;
+      }
+    }
+    return true;
   }
 
   bool componentSortMatchesExternDescriptor(
@@ -6072,27 +6661,43 @@ final class _WasmComponentValidationContext {
   _WasmComponentInstanceExportMap? componentInstanceExportMap(
     WasmComponentInstance instance, {
     required List<WasmComponent?> componentIndexEntries,
+    required List<_WasmComponentSignature?> componentSignatures,
     required List<WasmComponentFunctionType?> functionTypes,
     required List<WasmComponentFunctionTypeContext?> functionTypeContexts,
     required List<_WasmComponentValueIndexEntry> valueEntries,
     required List<WasmComponentTypeDefinition> visibleTypeDefinitions,
     required WasmComponentTypeScope visibleTypeScope,
+    required List<_WasmComponentInstanceExportMap?> instanceExportMaps,
   }) {
     switch (instance.kind) {
       case WasmComponentInstanceKind.instantiate:
-        final component = _componentAt(
-          componentIndexEntries,
+        final signature = _entryAt(
+          componentSignatures,
           instance.componentIndex,
         );
-        if (component == null) {
-          return null;
-        }
-        return _componentExportTypeMap(component);
+        if (signature == null) return null;
+        return _componentInstantiatedExportTypeMap(
+          signature,
+          instance,
+          visibleTypeDefinitions,
+          instanceExportMaps,
+        );
       case WasmComponentInstanceKind.inlineExports:
         return <String, _WasmComponentInstanceExportEntry>{
           for (final export in instance.exports)
             export.name: _WasmComponentInstanceExportEntry(
               sort: export.sort,
+              instanceExports:
+                  export.sort.kind == WasmComponentSortKind.instance
+                  ? _componentExportMapAt(instanceExportMaps, export.sort.index)
+                  : null,
+              componentSignature:
+                  export.sort.kind == WasmComponentSortKind.component
+                  ? _entryAt(componentSignatures, export.sort.index)
+                  : null,
+              component: export.sort.kind == WasmComponentSortKind.component
+                  ? _componentAt(componentIndexEntries, export.sort.index)
+                  : null,
               function: export.sort.kind == WasmComponentSortKind.function
                   ? componentFunctionTypeAt(functionTypes, export.sort.index)
                   : null,
@@ -7186,6 +7791,9 @@ final class _WasmComponentValidationContext {
       (WasmComponentTypeDefinitionContext, WasmComponentTypeDefinitionContext)
     >?
     visiting,
+    Map<WasmComponentTypeDefinition, WasmComponentTypeDefinition>
+        resourceBindings =
+        const {},
   ]) {
     if (identical(expectedScope, actualScope) &&
         expected.kind == actual.kind &&
@@ -7217,8 +7825,11 @@ final class _WasmComponentValidationContext {
     }
     if (expectedDefinition.kind == WasmComponentDefinedValueTypeKind.own ||
         expectedDefinition.kind == WasmComponentDefinedValueTypeKind.borrow) {
+      final expectedResource = expectedContext!.typeScope.definitionAt(
+        expectedDefinition.typeIndex,
+      );
       return identical(
-        expectedContext!.typeScope.definitionAt(expectedDefinition.typeIndex),
+        resourceBindings[expectedResource] ?? expectedResource,
         actualContext!.typeScope.definitionAt(actualDefinition.typeIndex),
       );
     }
@@ -7243,6 +7854,7 @@ final class _WasmComponentValidationContext {
             expectedContext.typeScope,
             actualContext.typeScope,
             active,
+            resourceBindings,
           );
     try {
       if (!matches(

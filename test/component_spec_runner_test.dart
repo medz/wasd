@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:test/test.dart';
+import 'package:wasd/src/wasi/component/resource_trap.dart';
 import 'package:wasd/src/wasi/component/unicode_scalar.dart';
 import 'package:wasd/src/wasi/component/value_memory.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
@@ -38,6 +39,97 @@ Future<Map<String, Object?>> _run(Map<String, dynamic> script) =>
     runner.executeComponentSpecScript(script, directory: Directory(_fixture));
 
 void main() {
+  test('resource traps require a typed cause, category and matching index', () {
+    final cases = [
+      (WASIComponentResourceTrap.unknownHandle(5), 'unknown handle index 5'),
+      (
+        WASIComponentResourceTrap.wrongType(1),
+        'handle index 1 used with the wrong type, expected guest-defined resource but found a different guest-defined resource',
+      ),
+      (
+        WASIComponentResourceTrap.borrowed(7),
+        'cannot remove owned resource while borrowed',
+      ),
+    ];
+    for (final (trap, expected) in cases) {
+      expect(runner.matchesComponentResourceTrap(trap, expected), isTrue);
+      expect(
+        runner.matchesComponentResourceTrap(
+          _ExecutionError(_ExecutionError(trap)),
+          expected,
+        ),
+        isTrue,
+      );
+      final cycle = _ExecutionError(trap);
+      cycle.cause = cycle;
+      for (final error in [
+        StateError(expected),
+        _ExecutionError(StateError(expected)),
+        _UnknownCause(trap),
+        cycle,
+        for (final (other, _) in cases)
+          if (!identical(other, trap)) other,
+      ]) {
+        expect(runner.matchesComponentResourceTrap(error, expected), isFalse);
+      }
+    }
+    expect(
+      runner.matchesComponentResourceTrap(
+        cases[0].$1,
+        'unknown handle index 1',
+      ),
+      isFalse,
+    );
+    expect(
+      runner.matchesComponentResourceTrap(
+        cases[1].$1,
+        cases[1].$2.replaceFirst('index 1', 'index 5'),
+      ),
+      isFalse,
+    );
+    expect(
+      runner.matchesComponentResourceTrap(cases[0].$1, 'any error'),
+      isFalse,
+    );
+  });
+
+  for (final (name, commands) in [
+    ('linking_unit/unit', 238),
+    ('borrows/borrows', 5),
+    ('handle_table/handle-table', 29),
+  ]) {
+    test('complete frozen synchronous $name script', () async {
+      final source = File('test/fixtures/component_spec/$name.wast');
+      final directory = await Directory.systemTemp.createTemp(
+        'wasd-linking-unit-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final output = File('${directory.path}/script.json');
+      final conversion = await Process.run(
+        File('.toolchains/bin/wasm-tools').absolute.path,
+        ['json-from-wast', source.absolute.path, '-o', output.path],
+        workingDirectory: directory.path,
+      );
+      expect(conversion.exitCode, 0, reason: '${conversion.stderr}');
+      final report = await runner.executeComponentSpecScript(
+        jsonDecode(output.readAsStringSync()) as Map<String, dynamic>,
+        directory: directory,
+      );
+      expect(
+        report['status'],
+        'passed',
+        reason: jsonEncode([
+          for (final record in report['commands'] as List)
+            if (record['passed'] != true) record,
+        ]),
+      );
+      final totals = report['totals'] as Map;
+      expect(totals['commands_seen'], commands);
+      expect(totals['commands_passed'], commands);
+      expect(totals['commands_skipped'], 0);
+    });
+  }
+
   test('official sync-streams returns 42 after caller continuation', () async {
     final directory = Directory('test/fixtures/component_spec/sync_streams');
     final binary = File('${directory.path}/script.0.wasm').readAsBytesSync();
@@ -707,25 +799,25 @@ void main() {
     expect(totals['traps_passed'], 5);
   });
 
-  test('nine complete frozen files execute all 80 commands', () async {
+  test('twelve complete frozen files execute all 352 commands', () async {
     final report = await runner.runComponentSpecManifest(
       File('test/fixtures/component_spec/manifest.json'),
       usePreparedInputs: true,
     );
     expect(report['status'], 'passed');
     final totals = report['totals'] as Map;
-    expect(totals['files_total'], 9);
-    expect(totals['files_passed'], 9);
-    expect(totals['commands_seen'], 80);
-    expect(totals['commands_passed'], 80);
+    expect(totals['files_total'], 12);
+    expect(totals['files_passed'], 12);
+    expect(totals['commands_seen'], 352);
+    expect(totals['commands_passed'], 352);
     expect(totals['commands_failed'], 0);
     expect(totals['commands_unsupported'], 0);
     expect(totals['commands_not_executed'], 0);
     expect(totals['commands_skipped'], 0);
-    expect(totals['instantiations_passed'], 33);
-    expect(totals['definitions_passed'], 6);
-    expect(totals['returns_passed'], 28);
-    expect(totals['traps_passed'], 12);
+    expect(totals['instantiations_passed'], 106);
+    expect(totals['definitions_passed'], 9);
+    expect(totals['returns_passed'], 212);
+    expect(totals['traps_passed'], 24);
     expect(totals['actions_passed'], 1);
   });
 
@@ -1052,6 +1144,48 @@ void main() {
               : 'Frozen Component source identity mismatch',
         ),
       );
+    });
+  }
+
+  for (final failedReplacement in [false, true]) {
+    test('named instances retain state and reject failed replacements '
+        '$failedReplacement', () async {
+      Map<String, Object?> next(String value, [String? module]) => {
+        'type': 'assert_return',
+        'action': {
+          'type': 'invoke',
+          'module': ?module,
+          'field': 'next',
+          'args': <Object>[],
+        },
+        'expected': [
+          {'type': 'string', 'value': value},
+        ],
+      };
+      final report = await runner.executeComponentSpecScript({
+        'commands': [
+          {'type': 'module', 'name': 'one', 'filename': 'stateful_string.wasm'},
+          next('a', 'one'),
+          {'type': 'module', 'filename': 'stateful_string.wasm'},
+          next('a'),
+          next('b', 'one'),
+          if (failedReplacement)
+            {'type': 'module', 'name': 'one', 'filename': 'unlinked.wasm'},
+          next('c', 'one'),
+        ],
+      }, directory: Directory('test/fixtures/component_spec/regression'));
+      final commands = report['commands'] as List;
+      expect(
+        commands.take(5).every((record) => record['passed'] == true),
+        isTrue,
+      );
+      if (failedReplacement) {
+        expect(commands[5]['status'], 'failed');
+        expect(commands[6]['status'], 'not_executed');
+        expect(commands[6]['dependency_index'], 5);
+      } else {
+        expect(report['status'], 'passed');
+      }
     });
   }
 
@@ -1507,10 +1641,7 @@ void main() {
         final commands = report['commands'] as List;
         expect(report['status'], 'failed');
         expect(commands[0]['passed'], false);
-        expect(
-          commands[0]['error'],
-          contains('Only unnamed binary components'),
-        );
+        expect(commands[0]['error'], contains('Only binary components'));
         final totals = report['totals'] as Map;
         expect(totals['commands_seen'], 17);
         expect(totals['instantiations_seen'], 8);

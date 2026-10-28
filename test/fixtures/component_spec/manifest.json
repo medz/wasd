@@ -291,6 +291,320 @@
           "sha256": "5c31f0125a81d406d35922172bc10621db0fad0d7f4b1493b04d37d7e42fa73e"
         }
       ]
+    },
+    {
+      "path": "test/linking/unit.wast",
+      "source": "linking_unit/unit.wast",
+      "blob": "1913748ec2b6bf5c38fc0cd4d54fae30f7c9faa4",
+      "sha256": "85857ebf6775c91900eeaa9671be319eae5320feb05f1c8e2935a4abf48d9932",
+      "prepared": "linking_unit/script.json",
+      "commands": 238,
+      "instantiations": 58,
+      "definitions": 0,
+      "returns": 180,
+      "traps": 0,
+      "inputs": [
+        {
+          "path": "linking_unit/script.0.wasm",
+          "sha256": "b6b68f42140bf084d30b025e35007524c37e38ebe5a4b26daaecfcd4f1839f28"
+        },
+        {
+          "path": "linking_unit/script.1.wasm",
+          "sha256": "6a6d3f82f6062f066421135944a1e37fd10a6293e02d1e57c7189cea4f52633a"
+        },
+        {
+          "path": "linking_unit/script.10.wasm",
+          "sha256": "9c9bc2ec12816adc8bddd51fc2c39d086481ebe6af362e3dde624b6cf9c8f8c9"
+        },
+        {
+          "path": "linking_unit/script.11.wasm",
+          "sha256": "6340f41c54a69661d213a1dba715f6b55f75cc1374367354a5a4588b6d4dec4f"
+        },
+        {
+          "path": "linking_unit/script.12.wasm",
+          "sha256": "e9563b26929ad5472cfe8b21bc5a71adf5bf9758205f3b92d99917ab2f12f5d4"
+        },
+        {
+          "path": "linking_unit/script.13.wasm",
+          "sha256": "1ad1e114d54a07afe533f57d92a378eadef881f001bbe02d4fd68b5efe069416"
+        },
+        {
+          "path": "linking_unit/script.14.wasm",
+          "sha256": "fd4088cf94452f739dbe67d2a9ea86c1d5878fac7336c36f2883dc6cbb5646f0"
+        },
+        {
+          "path": "linking_unit/script.15.wasm",
+          "sha256": "772e4d1126010911b9ae43aad44eee2d8f09ffc6f117475ecea6b8eb5849a69d"
+        },
+        {
+          "path": "linking_unit/script.16.wasm",
+          "sha256": "9273b77ed03778322818fa9dd8f7d952ac93a65f5780d7755c2989d5517646f2"
+        },
+        {
+          "path": "linking_unit/script.17.wasm",
+          "sha256": "8974a24bb7708d5bea098d7c00f1b71c1766f289837a186c57d1cf92fe09fdc0"
+        },
+        {
+          "path": "linking_unit/script.18.wasm",
+          "sha256": "1cffc3b73ea154380c8e8376d768fed083447c527f70cd54905c215c8f2e11ba"
+        },
+        {
+          "path": "linking_unit/script.19.wasm",
+          "sha256": "dc87a6df3b8d7fea81a750b102711b1ee426b823e33d40404e0958a0a3cd68ee"
+        },
+        {
+          "path": "linking_unit/script.2.wasm",
+          "sha256": "c85b9ca5621100e734dfb89e8c049a50cd0619c1e8f74154476d76686c2ac5c9"
+        },
+        {
+          "path": "linking_unit/script.20.wasm",
+          "sha256": "59ad60a86f55599385dd11c54a20bdcfe0a9a31b0a293ee23b6b4188cb0f33c5"
+        },
+        {
+          "path": "linking_unit/script.21.wasm",
+          "sha256": "110bd94b3802b0374802f954f6373f6971ad23e116650d18efb0f53fbffaaf9e"
+        },
+        {
+          "path": "linking_unit/script.22.wasm",
+          "sha256": "7078507aa749fce73a1d82da49adca8986efa0b93f0bfb6a85a04e9bacc01045"
+        },
+        {
+          "path": "linking_unit/script.23.wasm",
+          "sha256": "88dd39198f84ec62bab59276a679808602f9d254340081bfff0107c7554aec9c"
+        },
+        {
+          "path": "linking_unit/script.24.wasm",
+          "sha256": "9d06f8e70789d77b259b85aa0752bc5b37df16730d85f81c1b25242e52a0e023"
+        },
+        {
+          "path": "linking_unit/script.25.wasm",
+          "sha256": "257060e2080ed6b57f418eccf7de4b318775a358ed5b4f61ddd494a3908695a9"
+        },
+        {
+          "path": "linking_unit/script.26.wasm",
+          "sha256": "0454556497e45f4d3e025f12495063b11b429c735ecb424b2db903528f1aafdd"
+        },
+        {
+          "path": "linking_unit/script.27.wasm",
+          "sha256": "3e82bb428b22aa14cfb26ab76f86f9b2c9f0e978b9e1af712a1d31f970fb7268"
+        },
+        {
+          "path": "linking_unit/script.28.wasm",
+          "sha256": "516aa27cbb0f44dbe1d80aa8c84e3f6cab85561ab40adbb1a035e4ef97cfc312"
+        },
+        {
+          "path": "linking_unit/script.29.wasm",
+          "sha256": "badba03b9cf8ec12eebbe533a0dc5d18a18884202ef94f4eb21b00398baa7154"
+        },
+        {
+          "path": "linking_unit/script.3.wasm",
+          "sha256": "8c5f81d044046c91c8fe19b99e0ebf8289405eff1b893f4363bca463f4c511c9"
+        },
+        {
+          "path": "linking_unit/script.30.wasm",
+          "sha256": "1d7adc48e756d26387f4823e40a1d491e55bd701d82df0a28c036808dee47f27"
+        },
+        {
+          "path": "linking_unit/script.31.wasm",
+          "sha256": "66eadf8480171b23c4fc2387d576bf81ca80b264858e5b677585c987bc315c6f"
+        },
+        {
+          "path": "linking_unit/script.32.wasm",
+          "sha256": "9c95a937b939cc43e16d42daa45dfdc1bc3c24eb00f9259a34bdac7b84aec3bd"
+        },
+        {
+          "path": "linking_unit/script.33.wasm",
+          "sha256": "307b525719c22de5fa97554506ae528d8caeca55735d9c37a83fe7de101b1a9f"
+        },
+        {
+          "path": "linking_unit/script.34.wasm",
+          "sha256": "91d0e3cbd345b95db60c9acd8bfee31a809e33f2485876b143a8f99772ec6df4"
+        },
+        {
+          "path": "linking_unit/script.35.wasm",
+          "sha256": "7ca257904b1d8f40911b6421a09a415daab52f1f65f6855dc591c7f1711f710c"
+        },
+        {
+          "path": "linking_unit/script.36.wasm",
+          "sha256": "1ecbdbe3dd4ee17cbaa3daab1115c15f11345eb1adc294c449b0daad0bb02a5d"
+        },
+        {
+          "path": "linking_unit/script.37.wasm",
+          "sha256": "3839d050013dff856f7753770c666f15d59ff152660829c3314035f4d08d52b0"
+        },
+        {
+          "path": "linking_unit/script.38.wasm",
+          "sha256": "cafadec83bf05d604cc74edcb88d7393c42c48bc17c0c5e3d24314af00d7061b"
+        },
+        {
+          "path": "linking_unit/script.39.wasm",
+          "sha256": "e458c02b9020c4d519f02e0d24c7cc38ebb9302c97d88892c123a98ec9d8001c"
+        },
+        {
+          "path": "linking_unit/script.4.wasm",
+          "sha256": "6ba899e7f084b3235ef8c8d81b4f30f5687637f699f11e7a754c639b3ff0114b"
+        },
+        {
+          "path": "linking_unit/script.40.wasm",
+          "sha256": "d351a9b22b0c37de99ffc5c9188414c83dcbf557c88b5a37dd25768a121af52f"
+        },
+        {
+          "path": "linking_unit/script.41.wasm",
+          "sha256": "759b9aefb678ed5d00fb1e7d26e6a4749e2e0d9b4e5043b0b9679a2912481bfb"
+        },
+        {
+          "path": "linking_unit/script.42.wasm",
+          "sha256": "cb49654b9477b230d9fe3eb09e85e00eda6179d5e0ec1d95147e98e0a0bc2f9f"
+        },
+        {
+          "path": "linking_unit/script.43.wasm",
+          "sha256": "9ac56c79acebc0ce520e258b3bdd9cc6ccc35de3c0880c1d7b678ede4b227d9c"
+        },
+        {
+          "path": "linking_unit/script.44.wasm",
+          "sha256": "6d5d01d6241458ccdea4628e1a3514292bc0ba31eb62535c3d8cd39190ecf06c"
+        },
+        {
+          "path": "linking_unit/script.45.wasm",
+          "sha256": "19ca5a91610380d3dd86ecf16749c98ddb40cef3db951c42904f846679af823d"
+        },
+        {
+          "path": "linking_unit/script.46.wasm",
+          "sha256": "009dcc45bd74c377fb84da1fbe5dbda5ba28c1e74a1e7125c7bc42b63cfae924"
+        },
+        {
+          "path": "linking_unit/script.47.wasm",
+          "sha256": "885e2383c35f39441255f61abc4a275eecf148589c25566fd3ccf5919987e7ce"
+        },
+        {
+          "path": "linking_unit/script.48.wasm",
+          "sha256": "a43a7dd239f94c1c8a027423333005371eb754db16d8d845b687331be0a12da3"
+        },
+        {
+          "path": "linking_unit/script.49.wasm",
+          "sha256": "1bb06b2677656575a47d050a7b3cc856b6c2c52eb5af86811f25d58b77317cad"
+        },
+        {
+          "path": "linking_unit/script.5.wasm",
+          "sha256": "1f6e633cb4b24a2e46f9f32afa48ff333fd21c111967c02a629f87a4dfd407eb"
+        },
+        {
+          "path": "linking_unit/script.50.wasm",
+          "sha256": "a0478a7ef1888ff205c3dcaffd469a84c7935440db5a60dcdfda6b143e811e7d"
+        },
+        {
+          "path": "linking_unit/script.51.wasm",
+          "sha256": "8cff2b5dfcf9e2449ec2507d40c43db8b107aaecf96e59e779d6af0f4cd76fc7"
+        },
+        {
+          "path": "linking_unit/script.52.wasm",
+          "sha256": "310047278b4dfe1d43d76353726bbcafc8f89151aa249ff621aff6183d399250"
+        },
+        {
+          "path": "linking_unit/script.53.wasm",
+          "sha256": "a2a03fdd10a869854f767c4ce1c8a78bbce73c054a5bd8bb839e9b1a3ce305b2"
+        },
+        {
+          "path": "linking_unit/script.54.wasm",
+          "sha256": "05857d1a1b3d5227a19ddc03f4532693f1f4468a3e45a7a48eb544478f6da45b"
+        },
+        {
+          "path": "linking_unit/script.55.wasm",
+          "sha256": "8260bd0da076d6cb13f6f8bd15739a1fde947d8f00a2f224014c20c15c5ca9a0"
+        },
+        {
+          "path": "linking_unit/script.56.wasm",
+          "sha256": "2a2caf4cf87127413cdf5cbb47203f90210b973f7bda47cd39860a8e042bad6a"
+        },
+        {
+          "path": "linking_unit/script.57.wasm",
+          "sha256": "2117cbc6d7cc760524f2945b0dd832e10ea1fbc17b555d67c2527b7ab91dbbaf"
+        },
+        {
+          "path": "linking_unit/script.6.wasm",
+          "sha256": "fc34435a9c41480236246ab68d240ca96b9c6c578c706f69551631a172aefbd9"
+        },
+        {
+          "path": "linking_unit/script.7.wasm",
+          "sha256": "dc9005a777526a56b797e2fe613dc22b9bd648abbe609203e1d6d793ec84d67f"
+        },
+        {
+          "path": "linking_unit/script.8.wasm",
+          "sha256": "d95e61a5d5803ecd19f14ae4eb9a256496c3030268e09047f2c0050dbbeb0ae6"
+        },
+        {
+          "path": "linking_unit/script.9.wasm",
+          "sha256": "1adf7ac2af189539e7b76b4a29d7819355cf566441ae398838c2c73601a3e879"
+        },
+        {
+          "path": "linking_unit/script.json",
+          "sha256": "fd1e8f52bfae029aa6a98c7908167c870f9d8273292fd1dfaf4e76dd82b3787a"
+        }
+      ]
+    },
+    {
+      "path": "test/resources/borrows.wast",
+      "source": "borrows/borrows.wast",
+      "blob": "b68e6369f7bc3ae309b3de80be37cb9c95864e5d",
+      "sha256": "a9cc6feec6c0123eb5151379612f42b5a7f4b061253e36921064a3b072b19a84",
+      "prepared": "borrows/script.json",
+      "commands": 5,
+      "instantiations": 2,
+      "definitions": 1,
+      "returns": 1,
+      "traps": 1,
+      "inputs": [
+        {
+          "path": "borrows/script.0.wasm",
+          "sha256": "99b23a776c0d8c114f76980d72878d13bac32f6380fd176d59b601b0f23b155f"
+        },
+        {
+          "path": "borrows/script.json",
+          "sha256": "5faa4a1c01d5eb43e403107e983e428017403322b2c694792ac2e7f5e02092dd"
+        }
+      ]
+    },
+    {
+      "path": "test/resources/handle-table.wast",
+      "source": "handle_table/handle-table.wast",
+      "blob": "ddfb6af5cd9895fe6d78d1fc3a033a7dd1292822",
+      "sha256": "c55cda21386773137431b7b9019989f468e0ae42504aa60f45a707dfc4ad38b5",
+      "prepared": "handle_table/script.json",
+      "commands": 29,
+      "instantiations": 13,
+      "definitions": 2,
+      "returns": 3,
+      "traps": 11,
+      "inputs": [
+        {
+          "path": "handle_table/script.0.wasm",
+          "sha256": "a717371ec9bd90d455c2b070bb4d46b9e4b6c34607955894277a85f9a7a456d3"
+        },
+        {
+          "path": "handle_table/script.1.wasm",
+          "sha256": "e9f6d7d05c19dbc8643a66f981f6a7fcce05407b02908a12c4b289c8148f3ae3"
+        },
+        {
+          "path": "handle_table/script.2.wasm",
+          "sha256": "8a3cc81ea5869eb278e81b9ca70d8b0fd01ffa41bdd071585903bb8873b2ba0e"
+        },
+        {
+          "path": "handle_table/script.3.wasm",
+          "sha256": "e00f9d5fb95b2044fa9d7c3e6510569694a1221d4c08db5cfa51823ea9eb9b93"
+        },
+        {
+          "path": "handle_table/script.4.wasm",
+          "sha256": "5bf131e3f80299bf271f2c24a54c4f45dc0c786c63865211709d91d54935459a"
+        },
+        {
+          "path": "handle_table/script.5.wasm",
+          "sha256": "2643897319b236cd5f50f799348aecb072220da21ff0688cf560559c204ba39a"
+        },
+        {
+          "path": "handle_table/script.json",
+          "sha256": "17cbdf713644ea394844b7db1ff2d5800e9bc75cac16961f7263d48f032173ce"
+        }
+      ]
     }
   ]
 }

@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'resource_trap.dart';
+
 /// Keeps one component resource allocation scope alive after its owner returns.
 final class WASIComponentResourceScopeLease {
   WASIComponentResourceScopeLease._(this._scope);
@@ -859,7 +861,7 @@ extension WASIComponentCanonicalResourceAccess on WASIComponentResourceTable {
     _validateScopeAccess(handle, entry);
     _requireOwnedHandle(handle, entry);
     if (entry.borrowCount != 0) {
-      throw StateError('Cannot release lent WASI component resource: $handle.');
+      throw WASIComponentResourceTrap.borrowed(handle);
     }
     // Moving G keeps the same H entry and child dependencies alive. Only
     // deleting that entry must wait for its children to be released.
@@ -873,7 +875,7 @@ extension WASIComponentCanonicalResourceAccess on WASIComponentResourceTable {
     }
     _validateScopeAccess(handle, entry);
     if (entry.borrowCount != 0) {
-      throw StateError('Cannot release lent WASI component resource: $handle.');
+      throw WASIComponentResourceTrap.borrowed(handle);
     }
     if (entry.childHandles.isNotEmpty) {
       throw StateError(

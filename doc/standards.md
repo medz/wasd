@@ -127,7 +127,7 @@ Linux/macOS gate still uses `0.3.0` guests; it is compatibility evidence for
 that version, not an official `0.3.1` suite. General Component/async assertion
 execution and full package/world/platform acceptance remain open.
 
-The unreleased main WASD Component execution gate covers nine complete official
+The unreleased main WASD Component execution gate covers twelve complete official
 files at source `0220da84209397d9067c19cac83dae969aa85a7b`:
 
 | File | Frozen Git blob | Commands |
@@ -141,10 +141,13 @@ files at source `0220da84209397d9067c19cac83dae969aa85a7b`:
 | `test/async/cross-task-future.wast` | `97849635de950d11443d1034a29b8983e2dd2bc5` | 2 |
 | `test/resources/multiple-resources.wast` | `4a7bff17114135adbceca7104fb25c3bd6378a91` | 2 |
 | `test/values/transcode.wast` | `0ec72e09f7805a81dbc977d079ae8185f30251de` | 10 |
+| `test/linking/unit.wast` | `1913748ec2b6bf5c38fc0cd4d54fae30f7c9faa4` | 238 |
+| `test/resources/borrows.wast` | `b68e6369f7bc3ae309b3de80be37cb9c95864e5d` | 5 |
+| `test/resources/handle-table.wast` | `ddfb6af5cd9895fe6d78d1fc3a033a7dd1292822` | 29 |
 
-The combined gate executes `80/80` commands: 33 actual component
-initializations, six definition registrations, 28 exact return assertions,
-12 invocation trap assertions and one action. `test/async/sync-streams.wast`
+The combined gate executes `352/352` commands: 106 actual component
+initializations, nine definition registrations, 212 exact return assertions,
+24 invocation trap assertions and one action. `test/async/sync-streams.wast`
 returns `u32 42` after its unchanged read/write rendezvous and subtask
 assertions. Released `0.6.1`
 retains the first three files / `59/59` commands. The earlier
@@ -171,11 +174,21 @@ Core CI runs these selected complete files on both Dart SDKs. This remains
 separate from the historical decode, external validation and reference-runtime
 results. General Component composition, additional value codecs, full async
 assertion execution and a portable public instance API remain open requirements.
-Nested Component starts remain unsupported. Resource aliases within the
-same component (`alias outer 0`) and supported interface type scopes preserve
-instantiated identity. Resource aliases crossing a nested Component boundary
-remain rejected. Imported resource identities and the numeric file's lexical
-type aliases remain supported.
+Synchronous composition supports module/component imports and forwarding,
+nested instance exports and lexical outer aliases. Nested Component starts run
+once in definition order, await host callbacks and stop on failure. Focused
+validation rejects mismatched equality-bound types, function signatures and
+nested instance exports before initialization. Resource imports are substituted
+while each concrete instantiation receives fresh nominal resource types.
+Resources reexported through nested instances retain their original identity
+and destructor. Resource aliases crossing a real Component boundary are
+invalid, including abstract imported resources; `alias outer 0` and supported
+interface type scopes retain their identity. Core module subtyping, additional
+validation cases and general async execution still need complete acceptance.
+The resource gates verify borrow lifetimes, reserved/invalid/dropped handles,
+per-instance handle isolation and wrong resource types. Only typed canonical
+faults with matching categories and guest indexes satisfy resource trap
+assertions; ordinary host errors do not.
 
 The `0.6.1` handle slice keeps canonical indexes local to each instance while
 sharing host backing. Typed own/borrow conversion, async accepted-prefix
@@ -201,10 +214,9 @@ see [#163](https://github.com/medz/wasd/issues/163).
 Shared canonical-memory regressions also run on Node and Chrome. This does not
 establish JavaScript u64 memory access or general Component execution there.
 
-The frozen Component source contains 74 WAST files. The nine complete files
-above leave 65 without equivalent complete WASD acceptance: 41 async,
-13 validation, four linking, two resource, four other value and one binary
-file. Existing implementation and focused tests do not replace those gates.
+The frozen Component source contains 74 WAST files. The twelve complete files
+above leave 62 without equivalent complete WASD acceptance: 41 async,
+13 validation, three linking, four other value and one binary file. Existing implementation and focused tests do not replace those gates.
 These are file coverage counts, not a percentage of feature completion.
 
 The [full-goal tracker](https://github.com/medz/wasd/issues/108) retains nine
