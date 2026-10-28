@@ -6,6 +6,80 @@ import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/features.dart';
 
 void main() {
+  for (final imported in [false, true]) {
+    for (final matching in [false, true]) {
+      test(
+        'component argument signature imported=$imported matching=$matching',
+        () {
+          final functionType = <int>[
+            0x40,
+            if (matching)
+              0x00
+            else ...[
+              0x01,
+              ..._componentNameBytes('x'),
+              0x79,
+            ],
+            0x01,
+            0x00,
+          ];
+          List<int> signature(List<int> function) => [
+            0x41,
+            0x02,
+            0x01,
+            ...function,
+            0x03,
+            ..._componentFunctionImport('f'),
+          ];
+          final consumer = _componentBytes([
+            _componentSection(0x07, [
+              0x01,
+              ...signature([0x40, 0x00, 0x01, 0x00]),
+            ]),
+            _componentSection(0x0a, [
+              0x01,
+              ..._componentExternNameBytes('factory', null),
+              0x04,
+              0x00,
+            ]),
+          ]);
+          final bytes = _componentBytes([
+            if (imported) ...[
+              _componentSection(0x07, [0x01, ...signature(functionType)]),
+              _componentSection(0x0a, [
+                0x01,
+                ..._componentExternNameBytes('supplied', null),
+                0x04,
+                0x00,
+              ]),
+            ] else
+              _componentSection(
+                0x04,
+                _componentBytes([
+                  _componentSection(0x07, [0x01, ...functionType]),
+                  _componentSingleFunctionImportSection('f'),
+                ]),
+              ),
+            _componentSection(0x04, consumer),
+            _componentSection(0x05, [
+              0x01,
+              0x00,
+              0x01,
+              0x01,
+              ..._componentNameBytes('factory'),
+              0x04,
+              0x00,
+            ]),
+          ]);
+          expect(
+            WasmComponent.decode(bytes).validate(),
+            matching ? isEmpty : isNotEmpty,
+          );
+        },
+      );
+    }
+  }
+
   group('resource destructor validation', () {
     test('uses core function indexes without component functions', () {
       expect(

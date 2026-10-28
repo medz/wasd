@@ -3460,6 +3460,170 @@ void main() {
   });
 
   group('nested Component execution', () {
+    for (final sameResource in [true, false]) {
+      test(
+        'component argument keeps exported resource equality: $sameResource',
+        () async {
+          final component = await _encodeComponent('''
+(component
+  (component \$supplied
+    (import "r" (type \$r (sub resource)))
+    (type \$s (resource (rep i32)))
+    (export "r" (type ${sameResource ? r'$r' : r'$s'})))
+  (component \$consumer
+    (import "factory" (component
+      (import "r" (type \$r (sub resource)))
+      (export "r" (type (eq \$r))))))
+  (instance (instantiate \$consumer (with "factory" (component \$supplied)))))
+''', validate: sameResource);
+          expect(component.validate(), sameResource ? isEmpty : isNotEmpty);
+        },
+      );
+    }
+
+    test('component argument permits equal resource imports', () async {
+      final component = await _encodeComponent(r'''
+(component
+  (component $supplied
+    (import "r" (type $r (sub resource)))
+    (import "s" (type (sub resource)))
+    (import "f" (func $f (param "value" (own $r))))
+    (export "run" (func $f)))
+  (component $consumer
+    (import "factory" (component
+      (import "r" (type $r (sub resource)))
+      (import "s" (type (eq $r)))
+      (import "f" (func (param "value" (own $r))))
+      (export "run" (func (param "value" (own $r)))))))
+  (instance (instantiate $consumer (with "factory" (component $supplied)))))
+''', validate: true);
+      expect(component.validate(), isEmpty);
+    });
+
+    for (final forwarded in [false, true]) {
+      test(
+        'imported component argument retains signature: $forwarded',
+        () async {
+          final component = await _encodeComponent('''
+(component
+  (import "factory" (component \$factory (import "f" (func))))
+  ${forwarded ? r'(instance $api (export "factory" (component $factory))) (alias export $api "factory" (component $supplied))' : r'(alias outer 0 $factory (component $supplied))'}
+  (component \$consumer
+    (import "factory" (component (import "f" (func (param "x" u32))))))
+  (instance (instantiate \$consumer (with "factory" (component \$supplied)))))
+''');
+          expect(component.validate(), isNotEmpty);
+        },
+      );
+    }
+
+    for (final sameResource in [true, false]) {
+      test(
+        'component argument retains resource equality: $sameResource',
+        () async {
+          final resource = sameResource ? r'$r' : r'$s';
+          final component = await _encodeComponent('''
+(component
+  (component \$supplied
+    (import "r" (type \$r (sub resource)))
+    (import "s" (type \$s (sub resource)))
+    (import "f" (func \$f (param "value" (own $resource))))
+    (export "run" (func \$f)))
+  (component \$consumer
+    (import "factory" (component
+      (import "r" (type \$r (sub resource)))
+      (import "s" (type \$s (sub resource)))
+      (import "f" (func (param "value" (own $resource))))
+      (export "run" (func (param "value" (own \$r)))))))
+  (instance (instantiate \$consumer (with "factory" (component \$supplied)))))
+''', validate: sameResource);
+          expect(component.validate(), sameResource ? isEmpty : isNotEmpty);
+        },
+      );
+    }
+
+    for (final (name, supplied, expected, valid) in [
+      (
+        'import signature',
+        '(import "f" (func))',
+        '(import "f" (func (param "x" u32)))',
+        false,
+      ),
+      ('additional import', '(import "extra" (func))', '', false),
+      ('missing export', '', '(export "run" (func))', false),
+      (
+        'export signature',
+        r'(import "f" (func $f (param "x" u32))) (export "run" (func $f))',
+        '(import "f" (func (param "x" u32))) (export "run" (func))',
+        false,
+      ),
+      (
+        'nested component export',
+        r'(component $child (import "f" (func))) (export "child" (component $child))',
+        '(export "child" (component (import "f" (func (param "x" u32)))))',
+        false,
+      ),
+      (
+        'nested instance component export',
+        r'(component $child (import "f" (func))) (instance $api (export "child" (component $child))) (export "api" (instance $api))',
+        '(export "api" (instance (export "child" (component (import "f" (func (param "x" u32)))))))',
+        false,
+      ),
+      ('fewer imports', '', '(import "unused" (func))', true),
+      (
+        'extra exports',
+        r'(core module $m (func (export "run"))) (core instance $m (instantiate $m)) (func (export "run") (canon lift (core func $m "run")))',
+        '',
+        true,
+      ),
+      (
+        'contravariant instance import',
+        '(import "api" (instance (export "a" (func))))',
+        '(import "api" (instance (export "a" (func)) (export "b" (func))))',
+        true,
+      ),
+      (
+        'missing instance import member',
+        '(import "api" (instance (export "a" (func)) (export "b" (func))))',
+        '(import "api" (instance (export "a" (func))))',
+        false,
+      ),
+    ]) {
+      test('component argument signature $name', () async {
+        final component = await _encodeComponent('''
+(component
+  (import "started" (func \$started))
+  (start \$started)
+  (component \$supplied $supplied)
+  (component \$consumer (import "factory" (component $expected)))
+  (instance (instantiate \$consumer (with "factory" (component \$supplied)))))
+''', validate: valid);
+        expect(component.validate(), valid ? isEmpty : isNotEmpty);
+        var calls = 0;
+        final runtime = WASIComponentNativeRuntime.component(
+          component: component,
+          host: WASIComponentHost(),
+          imports: {
+            'started': (_) {
+              calls++;
+              return null;
+            },
+          },
+        );
+        if (valid) {
+          addTearDown(runtime.dispose);
+          await runtime.initialize();
+          expect(calls, 1);
+        } else {
+          await expectLater(
+            runtime.initialize(),
+            throwsA(isA<WASIPreview2ComponentExecutionException>()),
+          );
+          expect(calls, 0);
+        }
+      });
+    }
+
     for (final (name, source) in [
       (
         'outer alias',

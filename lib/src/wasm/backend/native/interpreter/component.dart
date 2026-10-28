@@ -890,7 +890,7 @@ final class _WasmComponentMaterializedIndexSpaces {
     required this.nestedComponents,
     required this.components,
     required this.instanceExports,
-    required this.componentExports,
+    required this.componentSignatures,
     required this.importedTypes,
     required this.importedInstances,
   });
@@ -904,7 +904,7 @@ final class _WasmComponentMaterializedIndexSpaces {
   final List<WasmComponent> nestedComponents;
   final List<WasmComponent?> components;
   final List<_WasmComponentInstanceExportMap?> instanceExports;
-  final List<_WasmComponentInstanceExportMap?> componentExports;
+  final List<_WasmComponentSignature?> componentSignatures;
   final Map<String, WasmComponentTypeDefinition> importedTypes;
   final Map<String, _WasmComponentInstanceExportMap?> importedInstances;
 }
@@ -974,7 +974,7 @@ final class _WasmComponentInstanceExportEntry {
     this.typeDefinition,
     this.typeDefinitionContext,
     this.instanceExports,
-    this.componentExports,
+    this.componentSignature,
     this.component,
   });
 
@@ -986,12 +986,17 @@ final class _WasmComponentInstanceExportEntry {
   final WasmComponentTypeDefinition? typeDefinition;
   final WasmComponentTypeDefinitionContext? typeDefinitionContext;
   final _WasmComponentInstanceExportMap? instanceExports;
-  final _WasmComponentInstanceExportMap? componentExports;
+  final _WasmComponentSignature? componentSignature;
   final WasmComponent? component;
 }
 
 typedef _WasmComponentInstanceExportMap =
     Map<String, _WasmComponentInstanceExportEntry>;
+
+typedef _WasmComponentSignature = ({
+  _WasmComponentInstanceExportMap imports,
+  _WasmComponentInstanceExportMap exports,
+});
 
 final class _WasmComponentCoreIndexCounts {
   var functions = 0;
@@ -1045,7 +1050,7 @@ final class _WasmComponentOuterAliasScope {
     required this.coreModuleCount,
     required this.componentCount,
     this.components = const [],
-    this.componentExports = const [],
+    this.componentSignatures = const [],
   });
 
   final List<WasmComponentTypeDefinition> typeDefinitions;
@@ -1053,7 +1058,7 @@ final class _WasmComponentOuterAliasScope {
   final int coreModuleCount;
   final int componentCount;
   final List<WasmComponent?> components;
-  final List<_WasmComponentInstanceExportMap?> componentExports;
+  final List<_WasmComponentSignature?> componentSignatures;
 
   int? count(WasmComponentSort sort) {
     if (sort.kind == WasmComponentSortKind.componentType) {
@@ -1216,7 +1221,7 @@ final class WasmComponent {
     );
     final nestedComponents = <WasmComponent>[];
     final visibleComponentEntries = <WasmComponent?>[];
-    final visibleComponentExports = <_WasmComponentInstanceExportMap?>[];
+    final visibleComponentSignatures = <_WasmComponentSignature?>[];
     final functionTypes = <WasmComponentFunctionType?>[];
     final functionTypeContexts = <WasmComponentFunctionTypeContext?>[];
     final valueTypes = <WasmComponentValueType?>[];
@@ -1330,11 +1335,8 @@ final class WasmComponent {
             );
           } else if (descriptor.kind == WasmComponentExternKind.component) {
             visibleComponentEntries.add(null);
-            visibleComponentExports.add(
-              _componentImportComponentExportTypeMap(
-                descriptor,
-                visibleTypeScope,
-              ),
+            visibleComponentSignatures.add(
+              _componentImportSignature(descriptor, visibleTypeScope),
             );
           } else if (descriptor.kind == WasmComponentExternKind.instance) {
             instanceExportMaps.add(
@@ -1393,8 +1395,8 @@ final class WasmComponent {
             visibleComponentEntries.add(
               _componentAt(visibleComponentEntries, export.sort.index),
             );
-            visibleComponentExports.add(
-              _componentExportMapAt(visibleComponentExports, export.sort.index),
+            visibleComponentSignatures.add(
+              _entryAt(visibleComponentSignatures, export.sort.index),
             );
           } else if (export.sort.kind == WasmComponentSortKind.instance) {
             instanceExportMaps.add(
@@ -1425,13 +1427,15 @@ final class WasmComponent {
               coreModuleCount: coreModuleCount,
               componentCount: visibleComponentEntries.length,
               components: List.unmodifiable(visibleComponentEntries),
-              componentExports: List.unmodifiable(visibleComponentExports),
+              componentSignatures: List.unmodifiable(
+                visibleComponentSignatures,
+              ),
             ),
             ..._outerAliasScopes,
           ]);
           nestedComponents.add(child);
           visibleComponentEntries.add(child);
-          visibleComponentExports.add(_componentExportTypeMap(child));
+          visibleComponentSignatures.add(_componentSignature(child));
         case _WasmComponentDefinitionEventKind.instance:
           instanceExportMaps.add(
             _componentInstanceExportTypeMap(
@@ -1444,7 +1448,7 @@ final class WasmComponent {
               valueTypeScopes,
               visibleTypeScope,
               instanceExportMaps,
-              visibleComponentExports,
+              visibleComponentSignatures,
             ),
           );
         case _WasmComponentDefinitionEventKind.alias:
@@ -1498,15 +1502,15 @@ final class WasmComponent {
                     )
                   : aliasEntry?.component,
             );
-            visibleComponentExports.add(
+            visibleComponentSignatures.add(
               outer
-                  ? _componentExportMapAt(
+                  ? _entryAt(
                       depth == 0
-                          ? visibleComponentExports
-                          : scope?.componentExports ?? [],
+                          ? visibleComponentSignatures
+                          : scope?.componentSignatures ?? [],
                       alias.target.index,
                     )
-                  : aliasEntry?.componentExports,
+                  : aliasEntry?.componentSignature,
             );
           } else if (alias.sort.kind == WasmComponentSortKind.instance) {
             instanceExportMaps.add(aliasEntry?.instanceExports);
@@ -1558,7 +1562,7 @@ final class WasmComponent {
       nestedComponents: List.unmodifiable(nestedComponents),
       components: List.unmodifiable(visibleComponentEntries),
       instanceExports: List.unmodifiable(instanceExportMaps),
-      componentExports: List.unmodifiable(visibleComponentExports),
+      componentSignatures: List.unmodifiable(visibleComponentSignatures),
       importedTypes: Map.unmodifiable(importedTypes),
       importedInstances: Map.unmodifiable(importedInstances),
     );
@@ -1889,7 +1893,7 @@ _WasmComponentInstanceExportMap? _componentInstanceExportTypeMap(
   List<WasmComponentTypeScope?> valueTypeScopes,
   WasmComponentTypeScope? visibleTypeScope,
   List<_WasmComponentInstanceExportMap?> instanceExportMaps,
-  List<_WasmComponentInstanceExportMap?> componentExportMaps,
+  List<_WasmComponentSignature?> componentSignatures,
 ) {
   switch (instance.kind) {
     case WasmComponentInstanceKind.inlineExports:
@@ -1900,9 +1904,9 @@ _WasmComponentInstanceExportMap? _componentInstanceExportTypeMap(
             instanceExports: export.sort.kind == WasmComponentSortKind.instance
                 ? _componentExportMapAt(instanceExportMaps, export.sort.index)
                 : null,
-            componentExports:
+            componentSignature:
                 export.sort.kind == WasmComponentSortKind.component
-                ? _componentExportMapAt(componentExportMaps, export.sort.index)
+                ? _entryAt(componentSignatures, export.sort.index)
                 : null,
             component: export.sort.kind == WasmComponentSortKind.component
                 ? _componentAt(visibleComponentEntries, export.sort.index)
@@ -1939,10 +1943,7 @@ _WasmComponentInstanceExportMap? _componentInstanceExportTypeMap(
         instance.componentIndex,
       );
       if (component == null) {
-        return _componentExportMapAt(
-          componentExportMaps,
-          instance.componentIndex,
-        );
+        return _entryAt(componentSignatures, instance.componentIndex)?.exports;
       }
       return _componentInstantiatedExportTypeMap(
         component,
@@ -1970,6 +1971,42 @@ WasmComponent? _componentAt(
   return components[componentIndex];
 }
 
+_WasmComponentSignature _componentSignature(WasmComponent component) {
+  final scope = component.componentTypeIndexScope;
+  return (
+    imports: {
+      for (final import in component.imports)
+        import.name: _WasmComponentInstanceExportEntry(
+          sort: _componentSortIndexForExternDescriptor(import.descriptor),
+          typeDefinition: component._indexSpaces.importedTypes[import.name],
+          typeDefinitionContext:
+              import.descriptor.kind == WasmComponentExternKind.componentType &&
+                  import.descriptor.boundKind ==
+                      WasmComponentExternBoundKind.equality
+              ? scope.definitionContextAt(import.descriptor.typeIndex)
+              : null,
+          functionContext:
+              import.descriptor.kind == WasmComponentExternKind.function
+              ? _componentFunctionTypeContextFromDefinitions(
+                  scope.definitions,
+                  import.descriptor.typeIndex,
+                  typeScope: scope,
+                )
+              : null,
+          instanceExports:
+              component._indexSpaces.importedInstances[import.name],
+          componentSignature:
+              import.descriptor.kind == WasmComponentExternKind.component
+              ? _componentImportSignature(import.descriptor, scope)
+              : null,
+          value: import.descriptor.valueType,
+          valueTypeScope: scope,
+        ),
+    },
+    exports: _componentExportTypeMap(component),
+  );
+}
+
 _WasmComponentInstanceExportMap _componentExportTypeMap(
   WasmComponent component,
 ) {
@@ -1986,9 +2023,9 @@ _WasmComponentInstanceExportMap _componentExportTypeMap(
                 export.sort.index,
               )
             : null,
-        componentExports: export.sort.kind == WasmComponentSortKind.component
-            ? _componentExportMapAt(
-                component._indexSpaces.componentExports,
+        componentSignature: export.sort.kind == WasmComponentSortKind.component
+            ? _entryAt(
+                component._indexSpaces.componentSignatures,
                 export.sort.index,
               )
             : null,
@@ -2151,24 +2188,30 @@ final class _WasmComponentTypeSubstitution {
         instanceExports: entry.value.instanceExports == null
             ? null
             : exports(entry.value.instanceExports!),
-        componentExports: entry.value.componentExports,
+        componentSignature: entry.value.componentSignature == null
+            ? null
+            : (
+                imports: exports(entry.value.componentSignature!.imports),
+                exports: exports(entry.value.componentSignature!.exports),
+              ),
         component: entry.value.component,
       ),
   };
 }
 
-_WasmComponentInstanceExportMap? _componentImportComponentExportTypeMap(
+_WasmComponentSignature? _componentImportSignature(
   WasmComponentExternDescriptor descriptor,
   WasmComponentTypeScope scope,
 ) {
   final context = scope.definitionContextAt(descriptor.typeIndex);
   final type = context?.definition.component;
   if (type == null) return null;
-  return _componentInstanceTypeExportTypeMap(
+  final signature = _componentInstanceTypeContext(
     WasmComponentInstanceType(declarations: type.declarations),
     context!.typeScope.definitions,
     outerTypeScope: context.typeScope,
   );
+  return (imports: signature.imports, exports: signature.exports);
 }
 
 _WasmComponentInstanceExportMap? _componentImportInstanceExportTypeMap(
@@ -2210,7 +2253,11 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
   outerTypeScope: outerTypeScope,
 ).exports;
 
-({_WasmComponentInstanceExportMap exports, WasmComponentTypeScope typeScope})
+({
+  _WasmComponentInstanceExportMap imports,
+  _WasmComponentInstanceExportMap exports,
+  WasmComponentTypeScope typeScope,
+})
 _componentInstanceTypeContext(
   WasmComponentInstanceType instance,
   List<WasmComponentTypeDefinition> outerTypeDefinitions, {
@@ -2236,6 +2283,7 @@ _componentInstanceTypeContext(
     }
   }
   final localFunctionTypeContexts = <WasmComponentFunctionTypeContext?>[];
+  final imports = <String, _WasmComponentInstanceExportEntry>{};
   final exports = <String, _WasmComponentInstanceExportEntry>{};
   final typeScopes = <_WasmComponentTypeAliasScope>[
     _WasmComponentTypeAliasScope(
@@ -2312,35 +2360,16 @@ _componentInstanceTypeContext(
           );
         }
       case WasmComponentTypeDeclarationKind.import:
-        final descriptor = declaration.import?.descriptor;
-        final introduced = descriptor == null
-            ? null
-            : _componentTypeImportDefinitionIntroducedBy(
-                descriptor,
-                localTypeDefinitions,
-              );
-        if (introduced != null) {
-          addLocalType(
-            introduced,
-            functionContext:
-                descriptor?.kind == WasmComponentExternKind.componentType
-                ? _componentFunctionTypeContextAt(
-                    localFunctionTypeContexts,
-                    descriptor?.typeIndex,
-                  )
-                : null,
-            definitionContext:
-                descriptor?.kind == WasmComponentExternKind.componentType &&
-                    descriptor?.boundKind ==
-                        WasmComponentExternBoundKind.equality
-                ? localTypeScope.definitionContextAt(descriptor?.typeIndex)
-                : null,
-          );
-        }
       case WasmComponentTypeDeclarationKind.export:
-        final export = declaration.export;
-        final descriptor = export?.descriptor;
-        if (export != null && descriptor != null) {
+        final isImport =
+            declaration.kind == WasmComponentTypeDeclarationKind.import;
+        final name = isImport
+            ? declaration.import?.name
+            : declaration.export?.name;
+        final descriptor = isImport
+            ? declaration.import?.descriptor
+            : declaration.export?.descriptor;
+        if (name != null && descriptor != null) {
           final sort = _componentSortIndexForExternDescriptor(descriptor);
           final introduced = _componentTypeDefinitionIntroducedByTypeExport(
             descriptor,
@@ -2356,7 +2385,9 @@ _componentInstanceTypeContext(
                   definition: introduced,
                   typeScope: localTypeScope,
                 );
-          exports[export.name] = _WasmComponentInstanceExportEntry(
+          (isImport
+              ? imports
+              : exports)[name] = _WasmComponentInstanceExportEntry(
             sort: sort,
             instanceExports: descriptor.kind == WasmComponentExternKind.instance
                 ? _componentImportInstanceExportTypeMap(
@@ -2365,12 +2396,9 @@ _componentInstanceTypeContext(
                     visibleTypeScope: localTypeScope,
                   )
                 : null,
-            componentExports:
+            componentSignature:
                 descriptor.kind == WasmComponentExternKind.component
-                ? _componentImportComponentExportTypeMap(
-                    descriptor,
-                    localTypeScope,
-                  )
+                ? _componentImportSignature(descriptor, localTypeScope)
                 : null,
             function: descriptor.kind == WasmComponentExternKind.function
                 ? _componentFunctionTypeFromDefinitions(
@@ -2417,6 +2445,9 @@ _componentInstanceTypeContext(
   }
 
   return (
+    imports: Map<String, _WasmComponentInstanceExportEntry>.unmodifiable(
+      imports,
+    ),
     exports: Map<String, _WasmComponentInstanceExportEntry>.unmodifiable(
       exports,
     ),
@@ -5332,6 +5363,7 @@ final class _WasmComponentValidationContext {
     final valueEntries = <_WasmComponentValueIndexEntry>[];
     final instanceExportMaps = <_WasmComponentInstanceExportMap?>[];
     final componentIndexEntries = <WasmComponent?>[];
+    final componentSignatures = <_WasmComponentSignature?>[];
     _WasmComponentExternNameSet? importNames;
     _WasmComponentExternNameSet? exportNames;
     final visibleTypeDefinitions = <WasmComponentTypeDefinition>[];
@@ -5457,6 +5489,9 @@ final class _WasmComponentValidationContext {
             coreCounts.add(WasmComponentCoreSortKind.module);
           } else if (descriptor.kind == WasmComponentExternKind.component) {
             componentIndexEntries.add(null);
+            componentSignatures.add(
+              _componentImportSignature(descriptor, visibleTypeScope),
+            );
             componentCount++;
           } else if (descriptor.kind == WasmComponentExternKind.instance) {
             instanceExportMaps.add(
@@ -5509,6 +5544,9 @@ final class _WasmComponentValidationContext {
           if (export.sort.kind == WasmComponentSortKind.component) {
             componentIndexEntries.add(
               _componentAt(componentIndexEntries, export.sort.index),
+            );
+            componentSignatures.add(
+              _entryAt(componentSignatures, export.sort.index),
             );
             componentCount++;
           } else if (export.sort.kind == WasmComponentSortKind.instance) {
@@ -5634,6 +5672,7 @@ final class _WasmComponentValidationContext {
               ),
               componentCount: componentCount,
               components: List.unmodifiable(componentIndexEntries),
+              componentSignatures: List.unmodifiable(componentSignatures),
             ),
             ...outerAliasScopes,
           ];
@@ -5649,6 +5688,7 @@ final class _WasmComponentValidationContext {
             );
           }
           componentIndexEntries.add(child);
+          componentSignatures.add(_componentSignature(child));
           componentCount++;
         case _WasmComponentDefinitionEventKind.instance:
           final instance = instances[event.index];
@@ -5663,6 +5703,7 @@ final class _WasmComponentValidationContext {
             visibleTypeDefinitions: visibleTypeDefinitions,
             coreCounts: coreCounts,
             componentIndexEntries: componentIndexEntries,
+            componentSignatures: componentSignatures,
             componentCount: componentCount,
             instanceCount: instanceCount,
           );
@@ -5670,6 +5711,7 @@ final class _WasmComponentValidationContext {
             componentInstanceExportMap(
               instance,
               componentIndexEntries: componentIndexEntries,
+              componentSignatures: componentSignatures,
               functionTypes: functionTypes,
               functionTypeContexts: functionTypeContexts,
               valueEntries: valueEntries,
@@ -5763,6 +5805,18 @@ final class _WasmComponentValidationContext {
             componentIndexEntries.add(
               knownAliasEntry?.component ??
                   _componentAt(outerComponents, alias.target.index),
+            );
+            final outerSignatures =
+                alias.target.kind != WasmComponentAliasTargetKind.outer
+                ? const <_WasmComponentSignature?>[]
+                : depth == 0
+                ? componentSignatures
+                : depth != null && depth > 0 && depth <= outerAliasScopes.length
+                ? outerAliasScopes[depth - 1].componentSignatures
+                : const <_WasmComponentSignature?>[];
+            componentSignatures.add(
+              knownAliasEntry?.componentSignature ??
+                  _entryAt(outerSignatures, alias.target.index),
             );
             componentCount++;
           } else if (sort.kind == WasmComponentSortKind.instance) {
@@ -6192,6 +6246,7 @@ final class _WasmComponentValidationContext {
     required List<WasmComponentTypeDefinition> visibleTypeDefinitions,
     required _WasmComponentCoreIndexCounts coreCounts,
     required List<WasmComponent?> componentIndexEntries,
+    required List<_WasmComponentSignature?> componentSignatures,
     required int componentCount,
     required int instanceCount,
   }) {
@@ -6232,6 +6287,7 @@ final class _WasmComponentValidationContext {
             functionTypeContexts: functionTypeContexts,
             visibleTypeScope: visibleTypeScope,
             instanceExportMaps: instanceExportMaps,
+            componentSignatures: componentSignatures,
           );
         }
       case WasmComponentInstanceKind.inlineExports:
@@ -6276,6 +6332,7 @@ final class _WasmComponentValidationContext {
     required List<WasmComponentFunctionTypeContext?> functionTypeContexts,
     required WasmComponentTypeScope visibleTypeScope,
     required List<_WasmComponentInstanceExportMap?> instanceExportMaps,
+    required List<_WasmComponentSignature?> componentSignatures,
   }) {
     final importsByName = <String, WasmComponentImport>{};
     for (final import in component.imports) {
@@ -6371,6 +6428,12 @@ final class _WasmComponentValidationContext {
           _componentExportMapAt(instanceExportMaps, argument.sort.index),
           resourceBindings,
         );
+      } else if (descriptor.kind == WasmComponentExternKind.component) {
+        matches = componentTypesMatch(
+          _componentImportSignature(descriptor, expectedScope),
+          _entryAt(componentSignatures, argument.sort.index),
+          resourceBindings,
+        );
       }
       if (!matches) {
         errors.add(
@@ -6432,6 +6495,33 @@ final class _WasmComponentValidationContext {
     return expected.result == null || matches(expected.result!, actual.result!);
   }
 
+  bool componentTypesMatch(
+    _WasmComponentSignature? expected,
+    _WasmComponentSignature? actual,
+    Map<WasmComponentTypeDefinition, WasmComponentTypeDefinition>
+    resourceBindings,
+  ) {
+    if (expected == null || actual == null) return true;
+    // Imports are contravariant. Normalize supplied exports to the expected
+    // resources: multiple supplied imports may bind to one expected resource.
+    final imports = {
+      for (final binding in resourceBindings.entries)
+        binding.value: binding.key,
+    };
+    if (!componentInstanceTypesMatch(
+      actual.imports,
+      expected.imports,
+      imports,
+    )) {
+      return false;
+    }
+    return componentInstanceTypesMatch(
+      expected.exports,
+      _WasmComponentTypeSubstitution(imports).exports(actual.exports),
+      {for (final resource in imports.values) resource: resource},
+    );
+  }
+
   bool componentInstanceTypesMatch(
     _WasmComponentInstanceExportMap? expected,
     _WasmComponentInstanceExportMap? actual,
@@ -6480,6 +6570,13 @@ final class _WasmComponentValidationContext {
           !componentInstanceTypesMatch(
             left.instanceExports,
             right.instanceExports,
+            resourceBindings,
+          )) {
+        return false;
+      } else if (left.sort.kind == WasmComponentSortKind.component &&
+          !componentTypesMatch(
+            left.componentSignature,
+            right.componentSignature,
             resourceBindings,
           )) {
         return false;
@@ -6559,6 +6656,7 @@ final class _WasmComponentValidationContext {
   _WasmComponentInstanceExportMap? componentInstanceExportMap(
     WasmComponentInstance instance, {
     required List<WasmComponent?> componentIndexEntries,
+    required List<_WasmComponentSignature?> componentSignatures,
     required List<WasmComponentFunctionType?> functionTypes,
     required List<WasmComponentFunctionTypeContext?> functionTypeContexts,
     required List<_WasmComponentValueIndexEntry> valueEntries,
@@ -6573,7 +6671,10 @@ final class _WasmComponentValidationContext {
           instance.componentIndex,
         );
         if (component == null) {
-          return null;
+          return _entryAt(
+            componentSignatures,
+            instance.componentIndex,
+          )?.exports;
         }
         return _componentInstantiatedExportTypeMap(
           component,
@@ -6589,6 +6690,10 @@ final class _WasmComponentValidationContext {
               instanceExports:
                   export.sort.kind == WasmComponentSortKind.instance
                   ? _componentExportMapAt(instanceExportMaps, export.sort.index)
+                  : null,
+              componentSignature:
+                  export.sort.kind == WasmComponentSortKind.component
+                  ? _entryAt(componentSignatures, export.sort.index)
                   : null,
               component: export.sort.kind == WasmComponentSortKind.component
                   ? _componentAt(componentIndexEntries, export.sort.index)
