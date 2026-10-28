@@ -6,6 +6,75 @@ import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/features.dart';
 
 void main() {
+  for (final freshResource in [false, true]) {
+    test(
+      'imported component instantiation resource identity: fresh=$freshResource',
+      () {
+        final resourceName = _componentExternNameBytes('r', null);
+        final signature = <int>[
+          0x41,
+          freshResource ? 0x01 : 0x02,
+          if (!freshResource) ...[0x03, ...resourceName, 0x03, 0x01],
+          0x04,
+          ...resourceName,
+          0x03,
+          if (freshResource) 0x01 else ...[0x00, 0x00],
+        ];
+        final component = WasmComponent.decode(
+          _componentBytes([
+            _componentSection(0x07, [
+              0x03,
+              ...signature,
+              0x3f,
+              0x7f,
+              0x00,
+              0x3f,
+              0x7f,
+              0x00,
+            ]),
+            _componentSection(0x0a, [
+              0x01,
+              ..._componentExternNameBytes('factory', null),
+              0x04,
+              0x00,
+            ]),
+            _componentSection(0x05, [
+              0x02,
+              for (final resource in [0x01, 0x02]) ...[
+                0x00,
+                0x00,
+                if (freshResource)
+                  0x00
+                else ...[
+                  0x01,
+                  ..._componentNameBytes('r'),
+                  0x03,
+                  resource,
+                ],
+              ],
+            ]),
+            _componentSection(0x06, [
+              0x02,
+              for (final instance in [0x00, 0x01]) ...[
+                0x03,
+                0x00,
+                instance,
+                ..._componentNameBytes('r'),
+              ],
+            ]),
+          ]),
+        );
+        expect(component.validate(), isEmpty);
+        final types = component.componentTypeIndexDefinitions;
+        expect(types[3], isNot(same(types[4])));
+        if (!freshResource) {
+          expect(types[3], same(types[1]));
+          expect(types[4], same(types[2]));
+        }
+      },
+    );
+  }
+
   for (final imported in [false, true]) {
     for (final matching in [false, true]) {
       test(

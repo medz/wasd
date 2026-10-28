@@ -1938,15 +1938,10 @@ _WasmComponentInstanceExportMap? _componentInstanceExportTypeMap(
           ),
       };
     case WasmComponentInstanceKind.instantiate:
-      final component = _componentAt(
-        visibleComponentEntries,
-        instance.componentIndex,
-      );
-      if (component == null) {
-        return _entryAt(componentSignatures, instance.componentIndex)?.exports;
-      }
+      final signature = _entryAt(componentSignatures, instance.componentIndex);
+      if (signature == null) return null;
       return _componentInstantiatedExportTypeMap(
-        component,
+        signature,
         instance,
         visibleTypeDefinitions,
         instanceExportMaps,
@@ -2068,7 +2063,7 @@ _WasmComponentInstanceExportMap _componentExportTypeMap(
 }
 
 _WasmComponentInstanceExportMap _componentInstantiatedExportTypeMap(
-  WasmComponent component,
+  _WasmComponentSignature signature,
   WasmComponentInstance instance,
   List<WasmComponentTypeDefinition> visibleTypes,
   List<_WasmComponentInstanceExportMap?> visibleInstances,
@@ -2092,7 +2087,7 @@ _WasmComponentInstanceExportMap _componentInstantiatedExportTypeMap(
 
   for (final argument in instance.arguments) {
     if (argument.sort.kind == WasmComponentSortKind.componentType) {
-      final expected = component._indexSpaces.importedTypes[argument.name];
+      final expected = signature.imports[argument.name]?.typeDefinition;
       final actual = _componentTypeDefinitionAt(
         visibleTypes,
         argument.sort.index,
@@ -2102,14 +2097,24 @@ _WasmComponentInstanceExportMap _componentInstantiatedExportTypeMap(
       }
     } else if (argument.sort.kind == WasmComponentSortKind.instance) {
       bindInstance(
-        component._indexSpaces.importedInstances[argument.name],
+        signature.imports[argument.name]?.instanceExports,
         _componentExportMapAt(visibleInstances, argument.sort.index),
       );
     }
   }
-  return _WasmComponentTypeSubstitution(
-    bindings,
-  ).exports(_componentExportTypeMap(component));
+  void freshenExportedResources(_WasmComponentInstanceExportMap exports) {
+    for (final entry in exports.values) {
+      final type = entry.typeDefinition;
+      if (type?.resource?.isAbstract ?? false) {
+        bindings.putIfAbsent(type!, _newAbstractResourceTypeDefinition);
+      }
+      final nested = entry.instanceExports;
+      if (nested != null) freshenExportedResources(nested);
+    }
+  }
+
+  freshenExportedResources(signature.exports);
+  return _WasmComponentTypeSubstitution(bindings).exports(signature.exports);
 }
 
 /// One instantiation substitutes imported resources and freshens defined ones.
@@ -6666,18 +6671,13 @@ final class _WasmComponentValidationContext {
   }) {
     switch (instance.kind) {
       case WasmComponentInstanceKind.instantiate:
-        final component = _componentAt(
-          componentIndexEntries,
+        final signature = _entryAt(
+          componentSignatures,
           instance.componentIndex,
         );
-        if (component == null) {
-          return _entryAt(
-            componentSignatures,
-            instance.componentIndex,
-          )?.exports;
-        }
+        if (signature == null) return null;
         return _componentInstantiatedExportTypeMap(
-          component,
+          signature,
           instance,
           visibleTypeDefinitions,
           instanceExportMaps,

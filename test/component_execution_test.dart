@@ -3460,6 +3460,87 @@ void main() {
   });
 
   group('nested Component execution', () {
+    test(
+      'imported component creates fresh exported resources per instance',
+      () async {
+        final component = await _encodeComponent(r'''
+(component
+  (import "factory" (component $factory (export "r" (type (sub resource)))))
+  (instance $first (instantiate $factory))
+  (instance $second (instantiate $factory))
+  (alias export $first "r" (type $first-r))
+  (alias export $second "r" (type $second-r))
+  (component $consumer
+    (import "r" (type $r (sub resource)))
+    (import "same" (type (eq $r))))
+  (instance (instantiate $consumer
+    (with "r" (type $first-r)) (with "same" (type $second-r)))))
+''');
+        expect(component.validate(), isNotEmpty);
+        final definitions = component.componentTypeIndexDefinitions;
+        expect(definitions[1], isNot(same(definitions[2])));
+      },
+    );
+
+    for (final nested in [false, true]) {
+      test(
+        'imported component substitutes resource arguments: nested=$nested',
+        () async {
+          final component = await _encodeComponent('''
+(component
+  (import "factory" (component \$factory
+    (import "r" (type \$r (sub resource)))
+    ${nested ? r'(export "api" (instance (export "r" (type (eq $r)))))' : r'(export "r" (type (eq $r)))'}))
+  (type \$resource (resource (rep i32)))
+  (instance \$created (instantiate \$factory (with "r" (type \$resource))))
+  ${nested ? r'(alias export $created "api" (instance $api)) (alias export $api "r" (type $alias))' : r'(alias export $created "r" (type $alias))'}
+  (component \$consumer
+    (import "r" (type \$r (sub resource)))
+    (import "same" (type (eq \$r))))
+  (instance (instantiate \$consumer
+    (with "r" (type \$resource)) (with "same" (type \$alias))))
+  (export "resource" (type \$resource))
+  (export "alias" (type \$alias)))
+''', validate: true);
+          expect(component.validate(), isEmpty);
+          final definitions = component.componentTypeIndexDefinitions;
+          expect(
+            definitions[component.exports[1].sort.index],
+            same(definitions[component.exports[0].sort.index]),
+          );
+        },
+      );
+    }
+
+    test(
+      'imported component resource substitutions are instance-local',
+      () async {
+        final component = await _encodeComponent(r'''
+(component
+  (import "factory" (component $factory
+    (import "r" (type $r (sub resource)))
+    (export "r" (type (eq $r)))))
+  (type $a (resource (rep i32)))
+  (type $b (resource (rep i32)))
+  (instance $first (instantiate $factory (with "r" (type $a))))
+  (instance $second (instantiate $factory (with "r" (type $b))))
+  (alias export $first "r" (type $first-r))
+  (alias export $second "r" (type $second-r))
+  (export "a" (type $a))
+  (export "b" (type $b))
+  (export "first" (type $first-r))
+  (export "second" (type $second-r)))
+''', validate: true);
+        expect(component.validate(), isEmpty);
+        final definitions = component.componentTypeIndexDefinitions;
+        WasmComponentTypeDefinition exported(int index) =>
+            definitions[component.exports[index].sort.index];
+        expect(exported(2), same(exported(0)));
+        expect(exported(3), same(exported(1)));
+        expect(exported(2), isNot(same(exported(3))));
+      },
+    );
+
     for (final sameResource in [true, false]) {
       test(
         'component argument keeps exported resource equality: $sameResource',
