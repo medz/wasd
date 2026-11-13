@@ -40,19 +40,21 @@ Or add manually in `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  wasd: ^0.6.1
+  wasd: ^0.6.2
 ```
 
-This release is `0.6.1`.
+This release is `0.6.2`.
 
 To select this version explicitly:
 
 ```bash
-dart pub add wasd:^0.6.1
+dart pub add wasd:^0.6.2
 ```
 
-Version `0.6.1` adds instance-local Component handles, typed ownership
-transfer and resource destructors. JavaScript backends support typed
+Version `0.6.2` fixes Dart 3.14 analysis and adds native reference bindings,
+Component composition and continuation improvements, and corrected stable
+WASI 0.2.12 contracts. It retains instance-local Component handles, typed
+ownership transfer and resource destructors. JavaScript backends support typed
 asynchronous host imports through JSPI. Original host errors and stacks are
 preserved on supported VM, Node and browser paths. It retains Dart VM
 [multi-memory opt-in](doc/core_features.md), [numeric host globals](doc/host_globals.md),
@@ -63,9 +65,9 @@ native modules require `CoreFeature.exceptionHandling`.
 
 It also includes [synchronous Component map adapters](doc/component_maps.md),
 Component name attributes and named WIT interfaces. The WASD execution gate
-runs three complete frozen Component value files: strings, numerics and
-realloc, with `59/59` commands. The frozen Core 3.0 gate checks all `261`
-official source files and `65,336` commands. These are distinct internal
+runs twelve complete frozen Component files with `352/352` commands, covering
+selected values, async behavior, linking and resources. The Core 3.0 gate checks
+all `261` official source files and `65,336` commands. These are distinct internal
 execution gates; public API and other runtime coverage remain separate.
 
 WASI `0.3.1` contract/linking support retains `0.3.0`, with versioned host calls
@@ -76,14 +78,11 @@ Native Linux/macOS results and Node/browser regressions remain separate
 acceptance profiles. These gates do not establish full Core, Component Model
 or WASI conformance; see the [standards and acceptance plan](doc/standards.md).
 
-**Unreleased main:** Component callers can continue after `task.return`
-while the callee remains suspended in a synchronous stream copy. The
-complete frozen Component gate covers twelve files / `352/352` commands,
-including synchronous module/component forwarding, nested instance exports,
-ordered nested starts, resource borrowing and handle-table traps.
+Component callers can continue after `task.return` while the callee remains
+suspended in a synchronous stream copy. Synchronous composition supports
+module/component forwarding, nested instance exports and ordered nested starts.
 Exported stream/future type aliases and equality-bound type imports retain
-their original type context and runtime resource identity. Released `0.6.1`
-retains the three-file gate and its blocking-copy guard.
+their original type context and runtime resource identity.
 
 The Dart VM also supports [nullable reference globals](doc/host_globals.md):
 `externref` preserves Dart value identity, and `funcref` accepts genuine guest
@@ -299,9 +298,8 @@ Future<void> main() async {
 
 `WASIPreview3ServiceRunner` executes stable `wasi:http/service` components.
 Each request is passed directly to the component handler; integrating it with
-an HTTP server remains an application concern. The service example below
-targets unreleased main, which adds `settle()` and `dispose()`. For the
-released API, use the [0.6.1 README](https://github.com/medz/wasd/blob/v0.6.1/README.md).
+an HTTP server remains an application concern. Use `settle()` and `dispose()`
+to observe and finish work that continues after response delivery.
 
 ```dart
 final serviceComponent = WasmComponent.decode(
@@ -346,8 +344,8 @@ try {
 Each successful service response retains its component resource scope while
 its body and trailers are in flight. Call `completeTransmission` after the
 client observes the response, or `cancel` when abandoning it, so that scope is
-released deterministically. On unreleased main, `settle()` observes guest
-continuation failures after transmission, and `dispose()` finishes
+released deterministically. `settle()` observes guest continuation failures
+after transmission, and `dispose()` finishes
 retained work before the host closes.
 
 The frozen Preview3 contract covers the six stable `random`, `clocks`,

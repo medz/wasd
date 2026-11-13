@@ -1,48 +1,32 @@
-## Unreleased
+## 0.6.2
 
-- Write the `TableKind` enum constants with `ValueKind.funcref` and
-  `ValueKind.externref` instead of the `.funcref` / `.externref` dot
-  shorthands. The Dart 3.14 analyzer fails with `UnimplementedError:
-  UnknownInferredType` while summarizing them, which breaks `dart analyze` and
-  the IDE for every package that depends on `wasd`.
-- Continue Component callers at actual guest suspension or exit after
-  `task.return`, snapshot typed results immediately, and keep callee
-  threads, TLS, handles and scopes alive until their body exits. Preserve
-  synchronous stream-copy completion/drop order and real callee start.
-- Propagate fatal Component-store failures to the invocation owner and
-  retain opaque host callback borrows until settlement. Reject invalid
-  host API arguments before entering the guest without poisoning the store.
-- Run guest destructors during clean disposal, preserve late WASI exit
-  status, and publish actual subtask states for async functions with a
-  synchronous lift ABI. Attribute delayed specification failures to
-  their originating command.
-- Add `settle()` and `dispose()` to the Preview3 service runner so callers
-  can observe and finish work after response delivery. Preview2 proxy
-  calls automatically dispose their completed synchronous runtime.
-- Resolve exported stream/future aliases and equality-bound type imports
-  in their original scopes, retaining runtime resource identity and destructor
-  ownership. Reject foreign endpoint arguments before guest entry.
-- Validate canonical memory/realloc requirements in the referenced type's
-  scope, including records whose local indexes shadow outer types.
-- Extend the complete frozen Component execution gate to nine files /
-  80 commands, keeping every official source and binary input unchanged.
-- Bind nullable `externref` and `funcref` globals on the Dart VM using the
-  existing public wrappers. Preserve host value and guest function identity,
-  shared mutable storage and cross-instance function targets; retain indirect
-  signature checks and asynchronous calls. Reject unsupported typed,
-  nonnullable and GC global boundaries before guest initialization. Connected
-  store owners retain historical external values for their shared lifetime.
-- Preserve the underlying JavaScript global when re-importing an exported
-  binding. Existing JS external-reference and function-reference limits remain.
-- Bind native public nullable `externref` and `funcref` tables to the actual
-  interpreter storage. Preserve shared mutation/growth, aliases, cross-instance
-  function identity, indirect-call checks and asynchronous reference origins.
-  Validate import limits before committing the host binding, and preserve
-  standalone table behavior after a failed link. Reject unsupported public
-  reference types and table64 before guest initialization.
-- Preserve exported JS tables when re-importing them; decode primitive values
-  consistently, including BigInt, and explicitly reject object/function reads
-  that cannot preserve the supported embedding contract.
+- Fix the Dart 3.14 analyzer crash caused by generic `TableKind` enum dot
+  shorthands, including analysis of packages that depend on WASD.
+- Bind native nullable `externref` and `funcref` globals, tables and exception
+  payloads. Preserve shared storage, value/function identity, indirect-call
+  signature checks and asynchronous targets across instances. Validate imports
+  before committing table bindings; numeric host exceptions retain no stores.
+- Preserve exported JavaScript globals and tables when re-importing them.
+  Keep primitive externref conversion consistent, including `BigInt`, while
+  retaining explicit object/function conversion limits.
+- Continue Component callers after `task.return` when the callee suspends or
+  exits. Retain callee state until completion, propagate late failures and WASI
+  exit status, and run guest destructors during clean disposal. Add Preview3
+  service `settle()` and `dispose()`; dispose completed Preview2 proxy runtimes.
+- Preserve Component alias scopes, imported resource identities and destructor
+  ownership. Support synchronous module/component forwarding, nested instance
+  exports and ordered nested starts, with stronger signature, resource and
+  Canonical ABI validation.
+- Align the stable WASI 0.2.12 WIT contract with complete world dependencies,
+  escaped identifiers and borrowed resource reexports. Keep historical callback
+  compatibility and make informational HTTP responses an explicit opt-in.
+- Extend the frozen Component execution gate to twelve complete files and
+  `352/352` commands, including linking, borrowing and resource-handle checks.
+- Remove `dart:mirrors` from native regression tests so they can run with AOT.
+
+Typed, nonnullable and GC public reference boundaries and table64 remain
+unsupported. Preview2/3 component execution remains scoped to Dart VM;
+the selected suites do not establish full standards conformance.
 
 ## 0.6.1
 

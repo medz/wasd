@@ -1,8 +1,8 @@
 # Host globals
 
 Version `0.6.0` includes numeric host-global bindings, first published in
-`0.6.0-dev.1`. Released `0.6.1` retains that numeric support. Unreleased main
-also binds nullable `externref` and `funcref` globals on the Dart VM through the
+`0.6.0-dev.1`. Version `0.6.2` also binds nullable `externref` and `funcref`
+globals on the Dart VM through the
 existing `GlobalImportExportValue` wrapper, without a new public type or
 import-map format.
 
@@ -24,7 +24,7 @@ matching value kinds and mutability: an `f32` global cannot satisfy an `i32`
 import, and a mutable global cannot satisfy an immutable declaration or vice
 versa. Mismatches throw `LinkError` before active data initialization and the
 start function. Missing globals, foreign implementations with no checkable
-descriptor, and unsupported global kinds also fail explicitly. Unreleased VM
+descriptor, and unsupported global kinds also fail explicitly. VM
 reference bindings accept only the abstract nullable `externref` and `funcref`
 types, including their equivalent explicit `(ref null extern)` and
 `(ref null func)` encodings. Typed, nonnullable, GC and vector global boundaries
@@ -37,8 +37,8 @@ silently omitted from exports.
 | `ValueKind.i64` | `BigInt` | Signed 64-bit wrapping; the host property stays `BigInt` |
 | `ValueKind.f32` | `double` | Rounded to binary32 |
 | `ValueKind.f64` | `double` | Binary64 |
-| `ValueKind.externref` | `Object?` | Unreleased VM: retain the original host value, including `null` |
-| `ValueKind.funcref` | `Function?` | Unreleased VM: a genuine function from this backend, or `null` |
+| `ValueKind.externref` | `Object?` | VM: retain the original host value, including `null` |
+| `ValueKind.funcref` | `Function?` | VM: a genuine function from this backend, or `null` |
 
 Existing standalone VM globals retain their value-box behavior. On first use
 as a Wasm import, the value is converted into one typed runtime binding;
@@ -100,7 +100,7 @@ Wasm GC guarantee.
 The existing JS adapter accepts typed numeric host globals and its supported
 `externref` primitives: `null`, `int`, `double`, `bool`, `String` and `BigInt`.
 Arbitrary Dart objects and Functions as external references remain unsupported,
-as do public JS `funcref` values. The unreleased re-import path retains the
+as do public JS `funcref` values. The re-import path retains the
 underlying JavaScript global instead of copying its value. Node and Chrome
 regressions cover these adapter bindings separately from VM reference support;
 they do not execute the pure Dart interpreter.
