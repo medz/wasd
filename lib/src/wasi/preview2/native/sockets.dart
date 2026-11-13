@@ -69,7 +69,7 @@ final class _NativeSocketsBackend
           backlog: _backlog(backlog),
         ).then(
           (server) => WASIPreview2SocketResult<WASIPreview2TcpListener>.ok(
-            _NativeTcpListener(server),
+            NativeTcpListener(server),
           ),
           onError: (Object error) =>
               WASIPreview2SocketResult<WASIPreview2TcpListener>.error(
@@ -118,8 +118,10 @@ final class _NativeSocketsBackend
   }
 }
 
-final class _NativeTcpListener implements WASIPreview2TcpListener {
-  _NativeTcpListener(this._server)
+/// Native listener shared by the sockets backend and its regression tests.
+final class NativeTcpListener implements WASIPreview2TcpListener {
+  /// Wraps a bound server socket.
+  NativeTcpListener(this._server)
     : localAddress = _socketAddress(_server.address, _server.port) {
     _subscription = _server.listen(
       (socket) {
@@ -137,6 +139,9 @@ final class _NativeTcpListener implements WASIPreview2TcpListener {
   final List<WASIPreview2TcpConnection> _queue = [];
   final List<Completer<void>> _waiters = [];
   bool _closed = false;
+
+  /// Whether the listener has terminated, possibly with queued connections.
+  bool get isClosed => _closed;
 
   @override
   final WASIPreview2IpSocketAddress localAddress;
@@ -465,13 +470,14 @@ Future<Iterable<WASIPreview2IpAddress>> _resolveNativeAddresses(
     ];
   } on Object catch (error, stackTrace) {
     Error.throwWithStackTrace(
-      WASIPreview2AddressResolverError(_resolverErrorCode(error)),
+      WASIPreview2AddressResolverError(resolverErrorCode(error)),
       stackTrace,
     );
   }
 }
 
-String _resolverErrorCode(Object error) {
+/// Maps a Dart resolver failure to its WASI error code.
+String resolverErrorCode(Object error) {
   final message = error.toString().toLowerCase();
   if (message.contains('temporary failure') ||
       message.contains('try again') ||

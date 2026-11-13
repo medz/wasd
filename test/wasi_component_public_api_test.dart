@@ -18,6 +18,11 @@ void main() {
       expect(wasiPreview3HttpErrorCodeCases, isEmpty);
     });
 
+    test('keeps native Preview2 socket helpers internal', () {
+      expect(const NativeTcpListener(), isNotNull);
+      expect(resolverErrorCode, isEmpty);
+    });
+
     test('decodes components and prepares fixed Preview2/Preview3 hosts', () {
       final component = WasmComponent.decode(_emptyComponentBytes());
       final preview2 = WASIPreview2ComponentHost();

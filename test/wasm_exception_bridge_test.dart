@@ -2,29 +2,15 @@
 library;
 
 import 'dart:io';
-import 'dart:mirrors';
 
 import 'package:test/test.dart';
+import 'package:wasd/src/wasm/backend/native/instance.dart' as native;
 import 'package:wasd/src/wasm/backend/native/interpreter/features.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/imports.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/instance.dart';
 import 'package:wasd/wasm.dart' as wasm;
 
 import 'support/host_tag_fixtures.dart';
-
-int _referencePeerCount(wasm.Instance instance) {
-  final mirror = reflect(instance);
-  final library = mirror.type.owner as LibraryMirror;
-  final references = mirror.getField(
-    MirrorSystem.getSymbol('_references', library),
-  );
-  final referenceLibrary = references.type.owner as LibraryMirror;
-  return (references
-              .getField(MirrorSystem.getSymbol('_peers', referenceLibrary))
-              .reflectee
-          as Set)
-      .length;
-}
 
 void main() {
   for (final captureAsync in [false, true]) {
@@ -104,7 +90,7 @@ void main() {
           final run =
               (instance.exports['catch']! as wasm.FunctionImportExportValue)
                   .ref;
-          final before = _referencePeerCount(instance);
+          final before = (instance as native.Instance).referencePeerCount;
           for (var i = 0; i < 128; i++) {
             if (caughtInGuest) {
               expect(await Future<Object?>.sync(() => run([0])), 42);
@@ -124,7 +110,7 @@ void main() {
           }
           // Numeric payloads need no store transfer, whether the guest catches
           // them or they pass through the public exception conversion path.
-          expect(_referencePeerCount(instance), before);
+          expect(instance.referencePeerCount, before);
         },
       );
     }

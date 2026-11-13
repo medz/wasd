@@ -4,10 +4,10 @@ library;
 import 'dart:async';
 import 'dart:io' as io;
 import 'dart:math' as math;
-import 'dart:mirrors' as mirrors;
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:wasd/src/wasi/preview2/native/sockets.dart' as native;
 import 'package:wasd/wasi.dart';
 import 'package:wasd/wasm.dart';
 
@@ -686,7 +686,7 @@ world test {
 
     test('native DNS classifies Dart resolver failures', () {
       expect(
-        _nativeResolverErrorCode(
+        native.resolverErrorCode(
           const io.SocketException(
             'Temporary failure in name resolution',
             osError: io.OSError('EAI_AGAIN', -3),
@@ -695,7 +695,7 @@ world test {
         'temporary-resolver-failure',
       );
       expect(
-        _nativeResolverErrorCode(
+        native.resolverErrorCode(
           const io.SocketException(
             'Non-recoverable resolver failure',
             osError: io.OSError('EAI_FAIL', -4),
@@ -704,13 +704,13 @@ world test {
         'permanent-resolver-failure',
       );
       expect(
-        _nativeResolverErrorCode(
+        native.resolverErrorCode(
           const io.SocketException('No address associated with hostname'),
         ),
         'name-unresolvable',
       );
       expect(
-        _nativeResolverErrorCode(StateError('unclassified resolver failure')),
+        native.resolverErrorCode(StateError('unclassified resolver failure')),
         'name-unresolvable',
       );
     });
@@ -1855,21 +1855,14 @@ world test {
     });
 
     test('native listener termination preserves queued connections', () async {
-      final backend = _nativeSocketsBackend();
-      final operation = backend.startTcpListen(
-        localAddress: WASIPreview2IpSocketAddress.ipv4(
-          port: 0,
-          a: 127,
-          b: 0,
-          c: 0,
-          d: 1,
-        ),
-        backlog: BigInt.one,
+      final server = await io.ServerSocket.bind(
+        io.InternetAddress.loopbackIPv4,
+        0,
+        backlog: 1,
       );
-      await operation.waitReady();
-      final result = operation.resultOrNull!;
-      expect(result.isOk, isTrue, reason: result.errorCode);
-      final listener = result.value!;
+      addTearDown(server.close);
+      final listener = native.NativeTcpListener(server);
+      addTearDown(listener.close);
       final client = await io.Socket.connect(
         io.InternetAddress.loopbackIPv4,
         listener.localAddress.port,
@@ -1888,8 +1881,8 @@ world test {
       await listener.waitAccept();
       expect(listener.canAccept, isTrue);
 
-      await _nativeListenerServer(listener).close();
-      await _waitUntil(() => _nativeListenerClosed(listener));
+      await server.close();
+      await _waitUntil(() => listener.isClosed);
 
       final accept = listener.accept();
       expect(accept.isOk, isTrue, reason: accept.errorCode);
@@ -2723,53 +2716,6 @@ Future<WasmComponentValueData> _finishUdpBind(
         <Object?>[socket],
       )!
       as WasmComponentValueData;
-}
-
-WASIPreview2SocketsBackend _nativeSocketsBackend() {
-  final library = _nativeSocketsLibrary();
-  final type =
-      library.declarations[mirrors.MirrorSystem.getSymbol(
-            '_NativeSocketsBackend',
-            library,
-          )]!
-          as mirrors.ClassMirror;
-  return type.newInstance(const Symbol(''), const <Object>[]).reflectee
-      as WASIPreview2SocketsBackend;
-}
-
-io.ServerSocket _nativeListenerServer(WASIPreview2TcpListener listener) {
-  final library = _nativeSocketsLibrary();
-  return mirrors
-          .reflect(listener)
-          .getField(mirrors.MirrorSystem.getSymbol('_server', library))
-          .reflectee
-      as io.ServerSocket;
-}
-
-bool _nativeListenerClosed(WASIPreview2TcpListener listener) {
-  final library = _nativeSocketsLibrary();
-  return mirrors
-          .reflect(listener)
-          .getField(mirrors.MirrorSystem.getSymbol('_closed', library))
-          .reflectee
-      as bool;
-}
-
-String _nativeResolverErrorCode(Object error) {
-  final library = _nativeSocketsLibrary();
-  return library.invoke(
-        mirrors.MirrorSystem.getSymbol('_resolverErrorCode', library),
-        <Object>[error],
-      ).reflectee
-      as String;
-}
-
-mirrors.LibraryMirror _nativeSocketsLibrary() {
-  return mirrors.currentMirrorSystem().libraries.values.singleWhere(
-    (library) => library.uri.toString().endsWith(
-      '/src/wasi/preview2/native/sockets.dart',
-    ),
-  );
 }
 
 Future<void> _waitUntil(bool Function() condition) async {

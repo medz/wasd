@@ -89,6 +89,8 @@ class Instance implements wasm.Instance {
   @override
   wasm.Exports get exports => _exports;
 
+  int get referencePeerCount => _references.peerCount;
+
   ir_imports.WasmImports _buildImports(
     wasm.Module module,
     wasm.Imports imports,

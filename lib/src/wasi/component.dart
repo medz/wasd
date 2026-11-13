@@ -67,7 +67,8 @@ export 'preview2/native/filesystem_stub.dart'
 export 'preview2/native/http_stub.dart'
     if (dart.library.io) 'preview2/native/http.dart';
 export 'preview2/native/sockets_stub.dart'
-    if (dart.library.io) 'preview2/native/sockets.dart';
+    if (dart.library.io) 'preview2/native/sockets.dart'
+    show WASIPreview2NativeSocketsHost;
 export 'preview2/poll.dart' hide WASIPreview2PollResourceTypes;
 export 'preview2/random.dart';
 export 'preview2/sockets.dart' hide WASIPreview2SocketsResourceTypes;
