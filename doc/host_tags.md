@@ -3,8 +3,7 @@
 Version `0.6.0` includes numeric public `Tag`/`Exception` bindings and the
 native `CoreFeature.exceptionHandling` opt-in, first published in
 `0.6.0-dev.2`. Earlier `0.6.0-dev.1` does not provide these additions.
-Unreleased main also supports native nullable `externref` and `funcref` tag
-payloads; these additions are not included in published `0.6.1`.
+Version `0.6.2` adds native nullable `externref` and `funcref` tag payloads.
 The JavaScript adapter uses its platform engine and does not accept explicit
 feature options. The native Dart VM requires the option below.
 
@@ -24,7 +23,7 @@ final parameters = exported.type().parameters;
 
 The module must declare the matching `host.error` import and `error` export.
 Empty payloads and ordered `i32`, `i64`, `f32`, `f64`, nullable `externref` and
-nullable `funcref` payloads are supported on native main. Equivalent explicit
+nullable `funcref` payloads are supported on Dart VM. Equivalent explicit
 nullable reference encodings are accepted.
 Bindings use simple final function types; non-final types, supertypes and
 multi-type recursive groups remain unsupported and fail before guest start.

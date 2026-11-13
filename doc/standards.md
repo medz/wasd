@@ -2,12 +2,11 @@
 
 This implementation and acceptance plan retains the historical `0.5.0`
 (`528b2b828f979d08ba1798f7e8e955e892ab052d`) baseline checked on 2026-10-01.
-Current main retains the released `0.6.1` changes and adds Component
+Version `0.6.2` retains the `0.6.1` changes and adds Component
 caller-continuation scheduling and nullable VM reference globals, tables and
-exception tag payloads. These changes
-and its nine-file execution gate are unreleased;
-`0.6.1` retains its three-file gate. Historical results keep their original
-versions and scope.
+exception tag payloads. Its Component execution gate covers twelve complete
+files and 352 commands; `0.6.1` retains its three-file gate.
+Historical results keep their original versions and scope.
 A target in this document is not a support claim. Release support must be backed
 by WASD execution, validation, and host tests at the exact release commit.
 
@@ -62,7 +61,7 @@ public API, its feature selection, or other runtimes. The historical Component
 Model async gate retains its recorded `wasm-tools` `1.254.0` validator; the
 newer Core converter rejects the frozen draft's removed `cancellable` option.
 
-Unreleased public VM host globals now cover numeric kinds and abstract nullable
+Public VM host globals in `0.6.2` cover numeric kinds and abstract nullable
 `externref` / `funcref`, including equivalent explicit nullable encodings.
 They preserve shared storage, external-value identity and genuine guest function
 targets across instances while retaining indirect-call signature checks. Typed,
@@ -74,7 +73,7 @@ The JS adapter retains its numeric and primitive-`externref` limits; public JS
 internal Core gate and do not complete general reference embedding or cross-platform
 interpreter acceptance. See [host globals](host_globals.md).
 
-Unreleased native public tables share the actual interpreter backing for basic
+Native public tables in `0.6.2` share the actual interpreter backing for basic
 nullable `externref` / `funcref` imports and exports. Host and guest mutation,
 growth and reexports preserve reference identity and limits. Genuine guest
 functions retain indirect-call type checks and asynchronous dependencies after
@@ -86,7 +85,7 @@ including the multi-table restriction, remain unchanged. JS tables preserve
 their host backing on reimport and support primitive externref conversion;
 object and function values remain outside that conversion contract.
 
-Unreleased native public tags support numeric and abstract nullable `externref`
+Native public tags in `0.6.2` support numeric and abstract nullable `externref`
 and `funcref` payloads, including equivalent explicit nullable encodings. Nominal
 tag identity, reference ownership and the original exception carrier survive
 host/guest propagation, including asynchronous function payloads introduced by
@@ -127,7 +126,7 @@ Linux/macOS gate still uses `0.3.0` guests; it is compatibility evidence for
 that version, not an official `0.3.1` suite. General Component/async assertion
 execution and full package/world/platform acceptance remain open.
 
-The unreleased main WASD Component execution gate covers twelve complete official
+The `0.6.2` WASD Component execution gate covers twelve complete official
 files at source `0220da84209397d9067c19cac83dae969aa85a7b`:
 
 | File | Frozen Git blob | Commands |
@@ -197,7 +196,7 @@ borrowed-resource, error-context and nested stream/future payload codecs remain
 unsupported. Exported stream/future aliases retain their original type scopes and nominal
 resource identities across child instances. Foreign endpoint arguments are
 rejected before guest entry, preserving matching-instance calls and cleanup;
-see [#162](https://github.com/medz/wasd/issues/162). Unreleased main permits
+see [#162](https://github.com/medz/wasd/issues/162). Version `0.6.2` permits
 a synchronous stream copy after `task.return` to suspend while the caller
 continues. Typed results are captured at return; callee thread state and
 scopes survive until body exit. Real guest blocking, yield and exit control
