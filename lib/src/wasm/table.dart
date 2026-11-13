@@ -6,10 +6,10 @@ import 'backend/native/table.dart'
 /// Element kind marker for WebAssembly tables.
 enum TableKind<T extends Value<T, V>, V extends Object?> {
   /// Function reference table.
-  funcref(.funcref, 'anyfunc'),
+  funcref(ValueKind.funcref, 'anyfunc'),
 
   /// External reference table.
-  externref(.externref);
+  externref(ValueKind.externref);
 
   /// Creates a table kind from a value kind and optional alias.
   const TableKind(this.value, [this.alias]);

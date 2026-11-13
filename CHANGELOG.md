@@ -1,5 +1,10 @@
 ## Unreleased
 
+- Write the `TableKind` enum constants with `ValueKind.funcref` and
+  `ValueKind.externref` instead of the `.funcref` / `.externref` dot
+  shorthands. The Dart 3.14 analyzer fails with `UnimplementedError:
+  UnknownInferredType` while summarizing them, which breaks `dart analyze` and
+  the IDE for every package that depends on `wasd`.
 - Continue Component callers at actual guest suspension or exit after
   `task.return`, snapshot typed results immediately, and keep callee
   threads, TLS, handles and scopes alive until their body exits. Preserve
