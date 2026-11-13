@@ -79,6 +79,8 @@ final class ReferenceValues {
   final _records = HashMap<Object, _ExternalReference>.identity();
   final _peers = <ReferenceValues>{};
 
+  int get peerCount => _peers.length;
+
   void connect(ReferenceValues other) {
     if (identical(this, other)) return;
     _peers.add(other);
